@@ -387,6 +387,79 @@ PCB kannattaa tilata sitten, kun tiedetään:
 Nämä kolme ovat juuri ne, jotka pakottaisivat toisen levykierroksen. Yksi ajokerta protolevyllä
 maksaa muutaman euron; turha PCB-kierros maksaa viikkoja.
 
+### 6.6 Protolevyn johdotus
+
+Päätetty 9.8.2026: **vaihe 1 rakennetaan reikälevylle.** Tässä täydellinen kytkentä.
+
+#### Virransyöttö
+
+| mistä | mihin | huomio |
+|-----|-----|-----|
+| 12 V + (vene) | sulakepitimen napa A | **1 A hidas** |
+| sulakepitimen napa B | P-MOSFET / Schottky | käänteisnapaisuussuoja |
+| suojan lähtö | TVS `SMBJ16A` katodi **ja** buckin `IN+` | TVS anodi → GND |
+| 12 V − (vene) | GND-kisko | |
+| buck `OUT+` | 5 V -kisko | **säädä buck 5,0 V:iin ennen kytkentää** |
+| 5 V -kisko | ESP32 `VIN` (tai `5V`) | ei `3V3`-pinniin |
+| 5 V -kisko | LDO `IN` (MCP1700 pin 1) | 1 µF IN→GND jalan viereen |
+| LDO `OUT` (pin 3) | **3V3_SENS**-kisko | 1 µF OUT→GND jalan viereen (MCP1700 vaatii) |
+| LDO `GND` (pin 2) | GND-kisko | |
+
+⚠ **3V3_SENS on eri kisko kuin ESP32:n `3V3`.** Älä yhdistä niitä — koko R6:n pointti on, että
+anturit eivät jaa kiskoa radion kanssa. Maat sen sijaan yhdistetään (yksi yhteinen GND).
+
+#### Anturit (×3, identtisesti)
+
+XGZP6847A -pinnijärjestys: **1 = N/C, 2 = VDD, 3 = GND, 4 = VDD, 5 = OUT, 6 = GND**
+
+| anturin pinni | mihin |
+|-----|-----|
+| 1 | **ei mihinkään** — älä kytke edes maahan |
+| 2 ja 4 (VDD) | 3V3_SENS-kisko |
+| 3 ja 6 (GND) | GND-kisko |
+| 5 (OUT) | 10 kΩ:n vastuksen kautta ESP32:n ADC-pinniin |
+
+Ja jokaisen ADC-pinnin ja GND:n väliin **100 nF**, fyysisesti ESP32:n pinnin vieressä:
+
+```
+  anturi CH1  pin 5 ──[ 10 kΩ ]──┬── GPIO34
+                                 │
+                              100 nF
+                                 │
+                                GND
+
+  anturi CH2  pin 5 ──[ 10 kΩ ]──┬── GPIO35      (sama kuvio)
+  anturi CH3  pin 5 ──[ 10 kΩ ]──┬── GPIO36      (sama kuvio)
+```
+
+#### Kiskomonitori (R6, toinen puolisko)
+
+| mistä | mihin |
+|-----|-----|
+| 3V3_SENS | 10 kΩ → solmu |
+| solmu | **GPIO39** |
+| solmu | 10 kΩ → GND |
+
+Jakosuhde 1:2, eli GPIO39 lukee 1,65 V kun kisko on 3,30 V. Firmware normalisoi anturilukemat
+tähän.
+
+#### Tarkistuslista ennen ensimmäistä virrankytkentää
+
+1. **Mittaa buckin lähtö ilman kuormaa** ja säädä 5,00 V. Moduulit tulevat tehtaalta
+   mielivaltaisella asetuksella, ja 12 V suoraan ESP32:n VIN:iin tappaa kortin.
+2. **Mittaa LDO:n lähtö** = 3,3 V ennen kuin kytket antureita. Yli 6,5 V polttaa anturin
+   peruuttamattomasti (datasheet).
+3. **Yleismittari jatkuvuudelle:** 3V3_SENS ↔ GND ei saa olla oikosulussa, eikä 3V3_SENS ↔ 5 V.
+4. **Tarkista anturin pinni 1** on irti kaikesta. Se on helppo kytkeä vahingossa maahan, koska
+   pinni 3 ja 6 ovat maita.
+5. **Kytke anturit vasta viimeisenä**, kun kaikki jännitteet on mitattu oikeiksi.
+
+#### Symmetria myös protolevyllä
+
+R1 ei koske vain letkuja. Sijoita kolme anturia samaan riviin, saman etäisyyden päähän
+ADC-pinneistä, ja käytä **samanpituisia johtimia** jokaiselle kanavalle. Kolme eri tavalla
+reititettyä hyppylankaa on kolme eri tavalla kohisevaa kanavaa.
+
 ---
 
 ## 7. Kalibrointi (R4) — pakollinen, ei valinnainen

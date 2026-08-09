@@ -186,15 +186,27 @@ säätöluvuksi houkuttelisi korjaamaan kaasuttimella jotain, joka ei ole kaasut
 *Seuraus:* kolme lukua per kanava on halpaa laskea. Yksi **säätöohje** — se on kallis, ja niitä on
 tasan yksi.
 
-### D2 — Toleranssi eli milloin "riittävän hyvä" 🔴 AVOIN
+### D2 — Toleranssi ✅ PÄÄTETTY 9.8.2026
 
-Tarvitaan konkreettinen kynnys, jonka UI ilmaisee värillä. Ilman tätä mekaanikko säätää ikuisesti.
+**Absoluuttinen kynnys `spread` = max(Δ) − min(Δ) -luvulle:**
 
-*Alustava ehdotus:* max−min ≤ **1,5 kPa** = vihreä, ≤ **3,0 kPa** = keltainen, yli = punainen.
-Perustuu yleiseen synkronointiohjeistukseen (tyypillisesti ±1–2 cmHg ≈ 1,3–2,7 kPa).
+| spread | tila |
+|-----|-----|
+| ≤ **1,5 kPa** | 🟢 synkronoitu |
+| ≤ **3,0 kPa** | 🟡 lähellä, säätöä varaa |
+| > 3,0 kPa | 🔴 ei synkronissa |
 
-*Avoin alakysymys:* absoluuttinen (kPa) vai suhteellinen (% keskiarvosta)? Alipaine riippuu
-kierrosluvusta, mutta synkronointi tehdään joutokäynnillä → absoluuttinen riittää MVP:hen.
+*Perustelu:* vastaa yleistä synkronointiohjeistusta (±1–2 cmHg ≈ 1,3–2,7 kPa). Absoluuttinen
+kPa-kynnys suhteellisen sijaan, koska synkronointi tehdään joutokäynnillä eikä alipaine ehdi
+muuttua merkittävästi, ja koska kPa-luku on vertailukelpoinen muihin mittareihin ja
+valmistajan huolto-ohjeisiin.
+
+*Mittaustekninen kate:* resoluutio keskiarvolla N=16 on 0,046 kPa, eli 30× kynnystä tarkempi.
+Kynnys ei ole mittauksen rajoittama. **Mutta:** anturin oma tarkkuus on ±2 kPa, joten
+kalibroimaton laite ei voi täyttää tätä kynnystä lainkaan → R4.
+
+*Nämä ovat lähtöarvoja.* S5a:n mukaan molemmat kynnykset ovat ajonaikaisesti säädettäviä, ja
+lopulliset luvut asetetaan vaiheessa 4 nauhoitetun datan perusteella.
 
 ### D3 — Näyttötapa ✅ PÄÄTETTY 9.8.2026
 
@@ -260,11 +272,19 @@ Merkki, malli, kaasutin vai ITB. Vaikuttaa letkuliitosten tyyppiin (kierre vs. t
 T-haara) ja siihen, onko sylinterien välillä tasauskanavia (balance tubes) — ne vaimentavat
 kanavien välisiä eroja ja muuttavat signaalin muotoa merkittävästi.
 
-### D7 — Master-kanavan valinta 🔴 AVOIN
+### D7 — Master-kanava ✅ PÄÄTETTY 9.8.2026
 
-D3:n seuraus. Onko master (a) kiinteä SYL 1, (b) käyttäjän valittavissa UI:sta, vai (c)
-automaattisesti se kanava, jonka lukema on keskimmäinen? Vaihtoehto (c) on houkutteleva mutta
-vaarallinen: master vaihtuisi säädön aikana ja nollataso hyppäisi.
+**Käyttäjän valittavissa UI:sta, oletus SYL 1.** Valinta säilyy NVS:ssä.
+
+*Perustelu:* vastaa fyysistä säätötyötä — monessa moottorissa yhtä kaasuläppää ei voi säätää, ja
+mekaanikko tietää kumpi se on. Nollataso pysyy paikallaan koko säädön ajan.
+
+*Hylätty vaihtoehto ja miksi:* automaattinen "keskimmäinen kanava" olisi näyttänyt kätevältä,
+mutta master vaihtuisi kesken säädön → nollataso hyppäisi ja mekaanikko menettäisi viitteen
+juuri sillä hetkellä kun hän kääntää ruuvia. Sama ansa kuin §3.4:ssä, eri muodossa.
+
+*Seuraus:* jos master itse on vialla (letku irti, anturivika), erotusnäkymä on merkityksetön →
+käytösmatriisin rivi 12.
 
 ---
 
@@ -296,13 +316,15 @@ vaarallinen: master vaihtuisi säädön aikana ja nollataso hyppäisi.
 D5:n mukaisesti mennään suoraan synkronointinäyttöön. Nauhoitinvaihetta ei ole, mutta S5b
 (rengaspuskuri) tuo saman tiedollisen hyödyn ensimmäisestä moottorikäynnistä.
 
-**Vaihe 0 — Päätökset ja hankinnat.** ✅ osin tehty. D1, D3, D4, D5, D8 kirjattu; rautasuunnitelma
-ja BOM valmiit ([docs/rauta.md](docs/rauta.md), [docs/hankinnat.md](docs/hankinnat.md)).
-Jäljellä D2, D6, D7 — joista **D6 (kohdemoottori) estää letkuadapterien tilaamisen.**
+**Vaihe 0 — Päätökset ja hankinnat.** ✅ **valmis lukuun ottamatta D6:ta.** D1–D5, D7, D8
+kirjattu; rautasuunnitelma ja BOM valmiit ([docs/rauta.md](docs/rauta.md),
+[docs/hankinnat.md](docs/hankinnat.md)). Kaikki muu on tilattavissa, mutta **D6 (kohdemoottori)
+estää letkuadapterien hankinnan** — ja siten mittaamisen.
 
-**Vaihe 1 — Rauta protolevylle.** Reikälevy, ei PCB. Perustelu: [docs/rauta.md](docs/rauta.md)
-§6.5 — kolme rautakysymystä (H1 anturin alue, H2 riittääkö ADC, H3 kotelo) ratkeavat vasta
-ensimmäisellä moottorikäynnillä, ja ne kaikki pakottaisivat toisen levykierroksen.
+**Vaihe 1 — Rauta protolevylle.** ✅ päätetty 9.8.2026: reikälevy, ei PCB. Johdotustaulukko on
+[docs/rauta.md](docs/rauta.md) §6.6. Perustelu: §6.5 — kolme rautakysymystä (H1 anturin alue,
+H2 riittääkö ADC, H3 kotelo) ratkeavat vasta ensimmäisellä moottorikäynnillä, ja ne kaikki
+pakottaisivat toisen levykierroksen.
 
 **Vaihe 2 — Firmware, alhaalta ylös.**
 1. ADC-luku 1 kHz × 3 kanavaa + desimointi 16 → 62,5 Hz
@@ -338,8 +360,9 @@ Lukema on aina D1:n **keskiarvo yli syklin**, ja näyttö on aina D3:n **poikkea
 |---|-----|-----|-----|-----|
 | 1 | Moottori sammuksissa | kaikki kanavat 0 ± 2 kPa gauge, ei pulssia ≥3 s | "Moottori ei käy" + **automaattinen nollakalibrointi** ajetaan | käynnistää moottorin |
 | 2 | Käynnistyy / epävakaa | pulssi havaittu, mutta rpm-hajonta > 15 % | "Odota, käynti tasaantuu" + rpm harmaana, palkit piilossa | odottaa |
-| 3 | Joutokäynti vakaa, **synkronissa** | rpm 600–1200 ja vakaa ≥3 s, `spread` ≤ D2-kynnys | **VIHREÄ**, "Synkronoitu", Δ-luvut, rpm ja ±hajonta | valmis |
-| 4 | Joutokäynti vakaa, **ei synkronissa** | sama, mutta `spread` > kynnys | **KELTAINEN/PUNAINEN** + suurin poikkeama korostettuna + säätösuunta sanallisesti | säätää nimettyä sylinteriä |
+| 3 | Joutokäynti vakaa, **synkronissa** | rpm 600–1200 ja vakaa ≥3 s, `spread` ≤ **1,5 kPa** | 🟢 "Synkronoitu", Δ-luvut, rpm ja ±hajonta | valmis |
+| 4a | Joutokäynti vakaa, **lähellä** | sama, `spread` **1,5–3,0 kPa** | 🟡 suurin poikkeama korostettuna + säätösuunta sanallisesti | hienosäätää |
+| 4b | Joutokäynti vakaa, **ei synkronissa** | sama, `spread` > **3,0 kPa** | 🔴 sama näkymä, voimakkaampi korostus | säätää nimettyä sylinteriä |
 | 5 | Kierrosluku ajautuu säädön aikana | rpm muuttuu > 50 rpm / 2 s | Δ-luvut **pysyvät näkyvissä** (yhteismuotoinen liike on jo poistettu), rpm korostuu muuttuvana | jatkaa säätöä |
 | 6 | Yksi letku irti tai vuotaa | kanava 0 ± 2 kPa muiden pulssiessa | **VIKA**: "Kanava N: ei alipainetta — tarkista letku" | kytkee letkun |
 | 7 | Anturi rikki tai irti | ADC-lukema kiinni ääripäässä (< 0,10 V tai > 3,15 V) ≥ 1 s | **VIKA**: "Kanava N: anturivika" | vaihtaa anturin |
@@ -347,14 +370,15 @@ Lukema on aina D1:n **keskiarvo yli syklin**, ja näyttö on aina D3:n **poikkea
 | 9 | Rpm liian korkea mittaukseen | rpm > 3000 | rpm näytetään, **synkronointiarvio piilotetaan** ("Säädä joutokäynnillä") | laskee kaasua |
 | 10 | Signaali saturoituu | ADC ≥ 2,68 V pulssin huipulla | varoitus: "Positiivinen paine leikkautuu (H1)" | — (kirjataan, ks. H1) |
 | 11 | Kalibrointi puuttuu tai vanhentunut | NVS:ssä ei kertoimia, tai anturi vaihdettu | **KELTAINEN**: "Kalibroimaton — lukemat suuntaa-antavia" | ajaa kalibroinnin |
-| 12 | Master-kanava on itse vialla | master täyttää rivin 6 tai 7 ehdon | **VIKA** + kehotus valita toinen master | vaihtaa masterin |
+| 12 | Master-kanava on itse vialla | master täyttää rivin 6 tai 7 ehdon | **VIKA**: "Master (SYL N) ei kelpaa viitteeksi" + master-valitsin korostettuna | valitsee toisen masterin |
 
 **Suunnittelusääntö, joka ratkaisee ristiriidat:** vikatilat (6, 7, 8, 12) voittavat aina
-säätötilat (3, 4). Laite ei koskaan näytä vihreää, jos yksikään kanava on epäluotettava —
+säätötilat (3, 4a, 4b). Laite ei koskaan näytä vihreää, jos yksikään kanava on epäluotettava —
 väärä "synkronoitu" on pahempi kuin ei tulosta lainkaan.
 
-**Vielä auki:** rivien 3 ja 4 kynnys on **D2**, ja rivi 12 riippuu **D7**:stä. Rivi 9:n
-3000 rpm on alustava — se on tarkistettava kun tiedetään, mihin asti mittaus pysyy pätevänä.
+**Vielä tarkistettavaa:** rivi 9:n 3000 rpm on alustava raja — se vahvistetaan vaiheessa 4, kun
+tiedetään mihin asti mittaus pysyy pätevänä. Rivien 1 ja 6 "±2 kPa" on sama luku kahdessa eri
+merkityksessä (nollan tunnistus vs. letkuvian tunnistus); ne saattavat tarvita eri arvot.
 
 ---
 
@@ -382,3 +406,4 @@ väärä "synkronoitu" on pahempi kuin ei tulosta lainkaan.
 | 9.8.2026 | Dokumentti luotu. Mitoituslaskenta tehty, HX710B hylätty, D1–D6 avattu. |
 | 9.8.2026 | D1, D3, D4, D5 päätetty. D5:n seuraukset S5a/S5b kirjattu, D7 avattu. |
 | 9.8.2026 | Anturi valittu (`XGZP6847A100KPGN33`) datasheetin pohjalta; D8 (ESP32 classic) päätetty. Rautasuunnitelma ja BOM laadittu. R5, R6 lisätty. §7 kirjoitettu D5:n mukaan, §8 käytösmatriisi täytetty. |
+| 9.8.2026 | D2 (1,5 / 3,0 kPa) ja D7 (master valittavissa, oletus SYL 1) päätetty. Vaihe 1 = protolevy. **Kaikki päätökset kiinni paitsi D6.** |
