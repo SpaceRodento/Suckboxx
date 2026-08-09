@@ -1,9 +1,16 @@
 # SUCKBOXX — suunnitteludokumentti
 
-> Tila: **LUONNOS / keskustelu käynnissä**. Mikään tässä ei ole lukittu ennen kuin se on merkitty
-> päätöslokiin (§5) tunnuksella ja päivämäärällä. Ei koodia ennen kuin D1–D5 on ratkaistu.
+> Tila: **suunnittelu käynnissä**. Mikään ei ole lukittu ennen kuin se on merkitty päätöslokiin
+> (§5) tunnuksella ja päivämäärällä. Rauta on suunniteltu ja tilattavissa; **D2, D6 ja D7 ovat
+> yhä auki**, ja niistä D6 estää letkuadapterien hankinnan.
 >
-> Lähtöaineisto: [Suckboxx.md](Suckboxx.md) (vapaamuotoinen spec + Geminin luonnos)
+> | dokumentti | sisältö |
+> |-----|-----|
+> | tämä | päätökset, perustelut, käytösmatriisi, vaiheistus |
+> | [docs/rauta.md](docs/rauta.md) | anturivalinta, kytkentä, mitoitus, pinnijako, PCB |
+> | [docs/hankinnat.md](docs/hankinnat.md) | osaluettelo, tilauskoodit, mitä *ei* kannata ostaa |
+> | [Suckboxx.md](Suckboxx.md) | lähtöaineisto: vapaamuotoinen spec + Geminin luonnos |
+> | [tools/](tools/) | mitoituslaskennat — kaikki luvut näissä dokumenteissa tulevat näistä |
 
 ---
 
@@ -159,51 +166,105 @@ näyttää numeroita, joista ei osaa säätää mitään.
 
 ---
 
-## 5. Päätösloki — AVOIMET PÄÄTÖKSET
+## 5. Päätösloki
 
-Nämä ratkaistaan **ennen** ensimmäistä koodiriviä. Jokainen saa tunnuksen, päätöksen, perustelun ja
-päivämäärän. Tämä taulukko on projektin tärkein tiedosto.
+Jokainen päätös saa tunnuksen, perustelun ja päivämäärän. Tämä taulukko on projektin tärkein
+tiedosto: jos jokin käytös on epäselvä myöhemmin, vastaus on täällä tai sitä ei ole päätetty.
 
-### D1 — Mikä luku on kanavan "lukema"? 🔴 AVOIN
+### D1 — Kanavan "lukema" ✅ PÄÄTETTY 9.8.2026
 
-Ehdokkaat ja niiden fysikaalinen merkitys:
+**Säätöluku on keskiarvo yli syklin.** Minimi (syvin pohja) ja huippu–huippu lasketaan ja
+näytetään **diagnostiikkana**, mutta ne eivät ohjaa säätöä.
 
-| ehdokas | mittaa | huomio |
-|-----|-----|-----|
-| **Keskiarvo yli syklin** | sylinterin läpi kulkevaa ilmamassaa | Fysikaalisesti oikein: virtaus ∝ paine-ero kaasuläpän yli. Tätä mekaaniset mittarit mittaavat (vaimennettuna). |
-| Minimi (syvin pohja) | imutahdin huippualipainetta | Herkin sylinterikohtaisille eroille (venttiilit, tiiviys) — mutta *ei* mittaa kaasuläpän asentoa. |
-| Huippu–huippu | pulssin voimakkuutta | Diagnostiikka-arvo, ei säätöarvo. |
-| Integraali | ilmamassaa tarkemmin | ~sama kuin keskiarvo, monimutkaisempi. |
+*Perustelu:* keskiarvo mittaa sylinterin läpi kulkevaa ilmamassaa (virtaus ∝ paine-ero kaasuläpän
+yli) eli sitä suuretta, jota kaasuttimien synkronoinnilla oikeasti tasataan. Se on myös se, mitä
+mekaaniset mittarit näyttävät vaimennettuna — vuosikymmenten mekaanikkokokemus on kertynyt
+tulkitsemaan tätä lukua. Minimi on herkempi sylinterikohtaisille eroille, mutta se mittaa
+sylinterin *kuntoa* (venttiilit, tiiviys, puristus), ei kaasuläpän asentoa; sen nostaminen
+säätöluvuksi houkuttelisi korjaamaan kaasuttimella jotain, joka ei ole kaasuttimessa.
 
-**Alustava suositus: keskiarvo** — koska se vastaa sitä, mitä vuosikymmenten mekaanikkokokemus on
-kertynyt tulkitsemaan, ja se mittaa oikeaa fysikaalista suuretta (ilmamassa).
-**Mutta:** minimi ja huippu–huippu kannattaa laskea ja näyttää *diagnostiikkana*, koska ne
-paljastavat eri viat. Kolme lukua per kanava on halpaa; kolme *säätöohjetta* olisi kallista.
+*Seuraus:* kolme lukua per kanava on halpaa laskea. Yksi **säätöohje** — se on kallis, ja niitä on
+tasan yksi.
 
-### D2 — Mikä on toleranssi eli milloin "riittävän hyvä"? 🔴 AVOIN
+### D2 — Toleranssi eli milloin "riittävän hyvä" 🔴 AVOIN
 
-Tarvitaan konkreettinen kynnys, esim. "max−min < 2,0 kPa → VIHREÄ". Ilman tätä UI ei voi sanoa
-mitään, ja mekaanikko säätää ikuisesti. Pitää myös päättää, onko kynnys absoluuttinen (kPa) vai
-suhteellinen (% keskiarvosta), koska alipaine muuttuu kierrosluvun mukana.
+Tarvitaan konkreettinen kynnys, jonka UI ilmaisee värillä. Ilman tätä mekaanikko säätää ikuisesti.
 
-### D3 — Näytetäänkö absoluuttiset arvot vai erot? 🔴 AVOIN
+*Alustava ehdotus:* max−min ≤ **1,5 kPa** = vihreä, ≤ **3,0 kPa** = keltainen, yli = punainen.
+Perustuu yleiseen synkronointiohjeistukseen (tyypillisesti ±1–2 cmHg ≈ 1,3–2,7 kPa).
 
-Ks. §3.4. Vaihtoehdot: absoluuttiset palkit / poikkeama kanavien keskiarvosta / poikkeama valitusta
-master-kanavasta (kaasutinsäädössä yhtä ei yleensä säädetä). Tämä ratkaisee, onko laite käytettävä.
+*Avoin alakysymys:* absoluuttinen (kPa) vai suhteellinen (% keskiarvosta)? Alipaine riippuu
+kierrosluvusta, mutta synkronointi tehdään joutokäynnillä → absoluuttinen riittää MVP:hen.
 
-### D4 — Anturivalinta 🔴 AVOIN
+### D3 — Näyttötapa ✅ PÄÄTETTY 9.8.2026
 
-Riippuu §3.1:n vastauksesta ja siitä, onko rautaa jo hankittu.
+**Poikkeama valitusta master-kanavasta.** Nolla = master. Muut kaksi kanavaa näytetään
+poikkeamana siitä, etumerkillä, ja UI kertoo säätösuunnan sanallisesti.
 
-### D5 — Mikä on MVP:n tarkka rajaus? 🔴 AVOIN
+*Perustelu:* vastaa fyysistä säätötyötä — kaasutinsäädössä yhtä läppää ei yleensä voi säätää, ja
+muut tuodaan siihen. Kumoaa myös §3.4:n ansan: kun kierrosluku ajautuu säädön aikana, yhteismuotoinen
+liike katoaa erotuksesta ja mekaanikko näkee vain oman muutoksensa vaikutuksen.
 
-Onko ensimmäinen toimiva versio (a) synkronointinäyttö, (b) raakadatan nauhoitin ilman UI:ta, vai
-(c) molemmat? Ks. §7 — suositukseni poikkeaa lähtöaineiston luonnoksesta.
+*Seuraus:* master on valittava UI:sta → ks. **D7**.
+
+### D4 — Anturi ✅ PÄÄTETTY 9.8.2026
+
+**`XGZP6847A100KPGN33`** (CFSensor): analoginen, gauge −100…0 kPa, **3,3 V**, DIP6, letkunipalla.
+Kolme kappaletta samasta erästä. HX710B:t (jo ostetut) siirtyvät muuhun käyttöön.
+
+*Perustelu:* kolme ratkaisevaa etua, ks. [docs/rauta.md](docs/rauta.md) §1.1.
+Lyhyesti: **3,3 V natiivi** poistaa jännitteenjaon kokonaan (ulostulo 0,2–2,7 V menee suoraan
+ESP32:n ADC:hen); **gauge-alue** ei tuhlaa mitta-aluetta ilmanpaineen offsettiin, jolloin
+herkkyydeksi tulee 25 mV/kPa; ja **saatavuus** on nykytuotantoa toisin kuin MPX4115AP:n, joka on
+Motorola-aikainen osa ja ainakin yhdellä jälleenmyyjällä lopetetuksi merkitty.
+
+*Tunnustettu rajoitus:* `GN`-versio saturoituu 0 kPa:ssa, eli positiivinen paluuaaltohuippu
+leikkautuu. Hyväksytty, koska leikkautuminen on sama kaikissa kanavissa (D3:n erotus säilyy
+pätevänä), joutokäynnillä painetta ei ole nollan yläpuolella, ja saturaatio on havaittavissa →
+UI voi varoittaa. Vaihto-osa `XGZP6847A100KPGPN33` (−100…+100 kPa) on **pinnikompatibeli**, joten
+tämä ei lukitse PCB:tä. → **H1**.
+
+### D8 — Ohjainkortti ✅ PÄÄTETTY 9.8.2026
+
+**ESP32-WROOM-32 (classic), ei S3.** Valinta tehdään ADC:n takia: classicin ADC1 on tähän
+käyttöön paremmin tunnettu, ja siinä on I²S-DMA-reitti ajastettuun näytteenottoon varalla, jos
+`analogRead`-pohjainen 1 kHz osoittautuu jitteriseksi.
+
+*Pakotettu seuraus:* **ADC2 ei toimi Wi-Fin ollessa päällä**, ja MVP on Wi-Fi AP → kaikkien
+kolmen kanavan on oltava ADC1:ssä. Pinnit GPIO34/35/36 (+ GPIO39 kiskomonitorille), kaikki
+input-only. Ks. [docs/rauta.md](docs/rauta.md) §2.2.
+
+### D5 — MVP:n rajaus ✅ PÄÄTETTY 9.8.2026
+
+**Suoraan synkronointinäyttö.** Rauta → Wi-Fi AP → web-UI. Erillistä nauhoitinvaihetta ei tehdä.
+
+*Perustelu:* käyttäjän päätös. Nopein tie näkyvään tulokseen ja todelliseen käyttöön.
+
+*Tunnustettu vaihtokauppa:* suodatuksen ja kynnysten ensimmäinen versio perustuu laskettuun
+oletukseen signaalin muodosta (§2), ei mitattuun. Se on hyvin perusteltu oletus, mutta oletus silti.
+
+*Kaksi seurausta, jotka tämä pakottaa arkkitehtuuriin:*
+
+- **S5a — Kaikki kynnykset ja suodatinvakiot ajonaikaisesti säädettäviä.** Ei `#define`-vakioita
+  koodissa. Ne *tullaan* säätämään ensimmäisen moottorikäynnin aikana, ja jokainen uudelleenkäännös
+  laiturilla on kallis. Web-UI:hin huoltosivu, arvot NVS:ään.
+- **S5b — Raakadatan rengaspuskuri alusta asti** (R3). Firmware pitää muistissa viimeiset ~10 s
+  raakanäytteitä; UI:ssa on "Tallenna" → CSV. Maksaa muutaman kilotavun RAM:ia ja yhden
+  reitin, mutta säilyttää mahdollisuuden analysoida oikeaa dataa jälkikäteen — eli sen ainoan
+  hyödyn, joka erillisestä nauhoitinvaiheesta olisi saatu. **Ilman tätä ensimmäinen moottorikäynti
+  ei tuota mitään pysyvää tietoa signaalista.**
 
 ### D6 — Kohdemoottori 🔴 AVOIN
 
-Merkki, malli, kaasutin vai ITB. Vaikuttaa letkuliitosten tyyppiin ja siihen, onko tasauskanavia
-(balance tubes) sylinterien välillä — ne muuttavat signaalia merkittävästi.
+Merkki, malli, kaasutin vai ITB. Vaikuttaa letkuliitosten tyyppiin (kierre vs. tulppa vs.
+T-haara) ja siihen, onko sylinterien välillä tasauskanavia (balance tubes) — ne vaimentavat
+kanavien välisiä eroja ja muuttavat signaalin muotoa merkittävästi.
+
+### D7 — Master-kanavan valinta 🔴 AVOIN
+
+D3:n seuraus. Onko master (a) kiinteä SYL 1, (b) käyttäjän valittavissa UI:sta, vai (c)
+automaattisesti se kanava, jonka lukema on keskimmäinen? Vaihtoehto (c) on houkutteleva mutta
+vaarallinen: master vaihtuisi säädön aikana ja nollataso hyppäisi.
 
 ---
 
@@ -217,52 +278,83 @@ Merkki, malli, kaasutin vai ITB. Vaikuttaa letkuliitosten tyyppiin ja siihen, on
   Perustelu: §7.
 - **R4** — Kanavien keskinäinen tarkkuus on tärkeämpi kuin absoluuttinen tarkkuus. Yhteismuotoinen
   virhe (kaikki kolme lukevat 3 kPa liikaa) ei haittaa; kanavien välinen virhe pilaa mittauksen.
-  → kalibrointi tehdään kanavien *keskinäiseksi*, ilmanpaineeseen sammuneella moottorilla.
+  → kaksipistekalibrointi kanavien *keskinäiseksi*, ks. [docs/rauta.md](docs/rauta.md) §7.
+  Anturin oma tarkkuus on ±2 kPa, eli **kalibroimaton laite voisi näyttää 4 kPa eroa täysin
+  synkronoidulla moottorilla** — enemmän kuin koko D2-toleranssi. Kalibrointi ei ole valinnainen.
+- **R5** — Kotelo ei saa olla ilmatiivis. Gauge-anturin nollareferenssi on kotelon sisäilma
+  (anturissa on tasausreikä kyljessä). Tiiviissä kotelossa lämpötilan muutos siirtää kaikkien
+  kanavien nollaa **hiljaa ja yhteismuotoisesti** — juuri niin, ettei D3:n erotusnäkymä paljasta
+  sitä. Tarvitaan paineentasauselementti.
+- **R6** — Anturit saavat käyttöjännitteensä omasta LDO:sta, ei ESP32-devkitin kiskolta. Anturi on
+  ratiometrinen, ja 50 mV:n dippi kiskossa = **2,0 kPa virhe** absoluuttiseen lukemaan. Wi-Fi-lähetys
+  tuottaa juuri sen kokoluokan piikkejä. Erotusnäkymä kestää tämän, absoluuttinen lukema ei.
 
 ---
 
-## 7. Ehdotettu etenemisjärjestys (poikkeaa lähtöluonnoksesta)
+## 7. Etenemisjärjestys
 
-Lähtöluonnos etenee: rauta → UI → valmis. Ehdotan tilalle:
+D5:n mukaisesti mennään suoraan synkronointinäyttöön. Nauhoitinvaihetta ei ole, mutta S5b
+(rengaspuskuri) tuo saman tiedollisen hyödyn ensimmäisestä moottorikäynnistä.
 
-**Vaihe 0 — Päätökset.** D1–D6 ratkaistu ja kirjattu. Ei koodia.
+**Vaihe 0 — Päätökset ja hankinnat.** ✅ osin tehty. D1, D3, D4, D5, D8 kirjattu; rautasuunnitelma
+ja BOM valmiit ([docs/rauta.md](docs/rauta.md), [docs/hankinnat.md](docs/hankinnat.md)).
+Jäljellä D2, D6, D7 — joista **D6 (kohdemoottori) estää letkuadapterien tilaamisen.**
 
-**Vaihe 1 — Nauhoitin, ei mittaria.** ESP32 lukee 3 kanavaa ~1 kHz ja kirjoittaa CSV:tä
-(SD tai Wi-Fi). Ei suodatusta, ei UI:ta, ei tulkintaa. Käy moottorilla kerran ja tuo data kotiin.
-> **Perustelu:** jokainen suodatus- ja kynnyspäätös on arvaus, kunnes on nähty miltä *tämän
-> moottorin* signaali oikeasti näyttää. Ilman tätä vaihetta rakennamme algoritmin kuvitellulle
-> signaalille. Yksi ajokerta säästää viikkoja arvailua. Datamäärä on olematon: 60 s @ 1 kHz = 0,3 MB.
+**Vaihe 1 — Rauta protolevylle.** Reikälevy, ei PCB. Perustelu: [docs/rauta.md](docs/rauta.md)
+§6.5 — kolme rautakysymystä (H1 anturin alue, H2 riittääkö ADC, H3 kotelo) ratkeavat vasta
+ensimmäisellä moottorikäynnillä, ja ne kaikki pakottaisivat toisen levykierroksen.
 
-**Vaihe 2 — Algoritmi PC:llä.** Suodatus, syklintunnistus, D1:n lukema, RPM — kaikki Pythonilla
-nauhoitetusta datasta. Iteraatio sekunneissa, ei veneretkissä. Tuloksena tiedetään mikä toimii.
+**Vaihe 2 — Firmware, alhaalta ylös.**
+1. ADC-luku 1 kHz × 3 kanavaa + desimointi 16 → 62,5 Hz
+2. Rengaspuskuri + `/api/raw.csv` (S5b) — **tämä ennen UI:ta**, se on ensimmäisen
+   moottorikäynnin ainoa pysyvä tuotos
+3. Syklintunnistus ja D1:n keskiarvo, min, huippu–huippu
+4. RPM jaksonaikamittauksella + sykli-syklittäinen hajonta
+5. Kalibrointi (R4) ja NVS-tallennus
+6. Wi-Fi AP + web-UI, D3:n erotusnäkymä
+7. Huoltosivu: kaikki kynnykset ja suodatinvakiot säädettävissä (S5a)
 
-**Vaihe 3 — Portaus C++:aan + golden-vector-testit.** Sama nauhoitettu data syötetään
-firmware-toteutukseen ja verrataan Python-referenssiin. Jos ne eroavat, portauksessa on bugi.
-Tämä antaa regressiotestit ilman rautaa — sama kuvio kuin PlantMeisterin `pio test`.
+**Vaihe 3 — Ensimmäinen moottorikäynti.** Tavoite kaksijakoinen: (a) toimiiko mittari,
+(b) **nauhoita raakadata talteen.** Ilman (b) ajokerta ei tuota mitään, mitä voi analysoida
+jälkikäteen.
 
-**Vaihe 4 — UI ja käytösmatriisi.** Vasta nyt tiedetään mitä näytetään.
+**Vaihe 4 — Algoritmin viritys nauhoitetulla datalla.** Python PC:llä, sitten portaus C++:aan
+niin että sama nauhoitus toimii golden-vector-regressiotestinä (`pio test`, sama kuvio kuin
+PlantMeisterissä). Tässä vaiheessa D2:n toleranssi saa lopulliset lukunsa.
 
-**Vaihe 5 — Rautatesti oikealla moottorilla.**
-
-Kustannus: vaihe 1 maksaa ehkä päivän. Vastineeksi vaiheet 2–4 tehdään tiedon eikä oletusten varassa.
+**Vaihe 5 — PCB, kotelo, veneasennus.** Vasta kun H1–H5 ovat ratkenneet.
 
 ---
 
-## 8. Käytösmatriisi (runko — täytetään kun D1–D3 on ratkaistu)
+## 8. Käytösmatriisi
 
-Jokaisen rivin on oltava yksikäsitteinen. Tyhjä solu = löydetty aukko määrittelyssä.
+Tämä on §3.3:n vastalääke: jokaisen tilanteen on oltava yksikäsitteinen **ennen** kuin se
+koodataan. Merkintä 🔴 = riippuu vielä avoimesta päätöksestä.
 
-| tilanne | miten tunnistetaan | mitä UI näyttää | mitä käyttäjä tekee |
-|-----|-----|-----|-----|
-| Moottori sammuksissa | kaikki kanavat ≈ ilmanpaine, ei pulssia | | |
-| Käynnistyy / epävakaa | rpm-hajonta suuri | | |
-| Joutokäynti vakaa, synkronissa | | | |
-| Joutokäynti vakaa, EI synkronissa | | | |
-| Kierrosluku ajautuu säädön aikana | | | |
-| Yksi letku irti / vuotaa | kanava ≈ ilmanpaine muiden pulssiessa | | |
-| Anturi rikki tai irti | | | |
-| Kaikki letkut irti mutta moottori käy | | | |
-| Rpm liian korkea mittaukseen | | | |
+Lukema on aina D1:n **keskiarvo yli syklin**, ja näyttö on aina D3:n **poikkeama masterista**.
+`Δ` = kanavan lukema − masterin lukema. `spread` = max(Δ) − min(Δ).
+
+| # | tilanne | miten tunnistetaan | mitä UI näyttää | mitä käyttäjä tekee |
+|---|-----|-----|-----|-----|
+| 1 | Moottori sammuksissa | kaikki kanavat 0 ± 2 kPa gauge, ei pulssia ≥3 s | "Moottori ei käy" + **automaattinen nollakalibrointi** ajetaan | käynnistää moottorin |
+| 2 | Käynnistyy / epävakaa | pulssi havaittu, mutta rpm-hajonta > 15 % | "Odota, käynti tasaantuu" + rpm harmaana, palkit piilossa | odottaa |
+| 3 | Joutokäynti vakaa, **synkronissa** | rpm 600–1200 ja vakaa ≥3 s, `spread` ≤ D2-kynnys | **VIHREÄ**, "Synkronoitu", Δ-luvut, rpm ja ±hajonta | valmis |
+| 4 | Joutokäynti vakaa, **ei synkronissa** | sama, mutta `spread` > kynnys | **KELTAINEN/PUNAINEN** + suurin poikkeama korostettuna + säätösuunta sanallisesti | säätää nimettyä sylinteriä |
+| 5 | Kierrosluku ajautuu säädön aikana | rpm muuttuu > 50 rpm / 2 s | Δ-luvut **pysyvät näkyvissä** (yhteismuotoinen liike on jo poistettu), rpm korostuu muuttuvana | jatkaa säätöä |
+| 6 | Yksi letku irti tai vuotaa | kanava 0 ± 2 kPa muiden pulssiessa | **VIKA**: "Kanava N: ei alipainetta — tarkista letku" | kytkee letkun |
+| 7 | Anturi rikki tai irti | ADC-lukema kiinni ääripäässä (< 0,10 V tai > 3,15 V) ≥ 1 s | **VIKA**: "Kanava N: anturivika" | vaihtaa anturin |
+| 8 | Kaikki letkut irti, moottori käy | kaikki kanavat 0 ± 2 kPa, mutta rpm tuntematon | "Ei mittaussignaalia — kaikki letkut irti?" | kytkee letkut |
+| 9 | Rpm liian korkea mittaukseen | rpm > 3000 | rpm näytetään, **synkronointiarvio piilotetaan** ("Säädä joutokäynnillä") | laskee kaasua |
+| 10 | Signaali saturoituu | ADC ≥ 2,68 V pulssin huipulla | varoitus: "Positiivinen paine leikkautuu (H1)" | — (kirjataan, ks. H1) |
+| 11 | Kalibrointi puuttuu tai vanhentunut | NVS:ssä ei kertoimia, tai anturi vaihdettu | **KELTAINEN**: "Kalibroimaton — lukemat suuntaa-antavia" | ajaa kalibroinnin |
+| 12 | Master-kanava on itse vialla | master täyttää rivin 6 tai 7 ehdon | **VIKA** + kehotus valita toinen master | vaihtaa masterin |
+
+**Suunnittelusääntö, joka ratkaisee ristiriidat:** vikatilat (6, 7, 8, 12) voittavat aina
+säätötilat (3, 4). Laite ei koskaan näytä vihreää, jos yksikään kanava on epäluotettava —
+väärä "synkronoitu" on pahempi kuin ei tulosta lainkaan.
+
+**Vielä auki:** rivien 3 ja 4 kynnys on **D2**, ja rivi 12 riippuu **D7**:stä. Rivi 9:n
+3000 rpm on alustava — se on tarkistettava kun tiedetään, mihin asti mittaus pysyy pätevänä.
 
 ---
 
@@ -270,11 +362,15 @@ Jokaisen rivin on oltava yksikäsitteinen. Tyhjä solu = löydetty aukko määri
 
 | riski | vakavuus | hallinta |
 |-----|-----|-----|
-| Letkujen epäsymmetria vääristää vertailua | **korkea** | R1; tarkistus mittaamalla sammuneella moottorilla |
-| Määrittely jää auki → uudelleenkirjoitus myöhemmin | **korkea** | §5 päätösloki, vaihe 0 |
-| Signaali ei näytäkään oletetulta (tasauskanavat, paluuaallot) | keskitaso | Vaihe 1 nauhoitin ennen algoritmia |
-| ESP32:n ADC-kanavien keskinäinen ero | keskitaso | R4-kalibrointi; tarvittaessa ulkoinen ADC |
-| Kosteus/öljysumu tukkii anturin | keskitaso | Vesilukko letkuun, anturi letkun yläpäähän |
+| Letkujen epäsymmetria vääristää vertailua | **korkea** | R1; anturit symmetrisesti PCB:llä; tarkistus mittaamalla sammuneella moottorilla |
+| Määrittely jää auki → uudelleenkirjoitus myöhemmin | **korkea** | §5 päätösloki + §8 käytösmatriisi ennen koodia |
+| Kalibroimaton laite näyttää 4 kPa eroa synkatulla moottorilla | **korkea** | R4 pakollinen kaksipistekalibrointi; nollapiste automaattisesti käynnistyksessä |
+| Signaali ei näytäkään oletetulta (tasauskanavat, paluuaallot) | **korkea** *(nousi, koska D5 poisti nauhoitinvaiheen)* | S5b rengaspuskuri + S5a säädettävät vakiot; ensimmäisestä ajokerrasta on saatava data talteen |
+| Tiivis kotelo siirtää nollaa hiljaa | keskitaso | R5 paineentasaus; ei näy D3:n erotuksessa → ei löydy testaamalla |
+| Wi-Fi-piikit kiskossa = 2 kPa virhe | keskitaso | R6 oma LDO + kiskomonitori; D3 suojaa erotusnäkymän |
+| ESP32:n ADC-kanavien keskinäinen ero | keskitaso | R4-kalibrointi; varalla MCP3208 (H2) |
+| Kosteus/öljysumu tukkii anturin | keskitaso | Vesilukko letkuun, laite liitäntöjä ylemmäs |
+| MPX/XGZP-saatavuus muuttuu | matala | GN ja GPN ovat pinnikompatibeleja; 5 V:n versio toimii jakajalla |
 | Scope creep pivoteihin ennen MVP:tä | keskitaso | §1 missiolause portinvartijana |
 
 ---
@@ -284,3 +380,5 @@ Jokaisen rivin on oltava yksikäsitteinen. Tyhjä solu = löydetty aukko määri
 | pvm | muutos |
 |-----|-----|
 | 9.8.2026 | Dokumentti luotu. Mitoituslaskenta tehty, HX710B hylätty, D1–D6 avattu. |
+| 9.8.2026 | D1, D3, D4, D5 päätetty. D5:n seuraukset S5a/S5b kirjattu, D7 avattu. |
+| 9.8.2026 | Anturi valittu (`XGZP6847A100KPGN33`) datasheetin pohjalta; D8 (ESP32 classic) päätetty. Rautasuunnitelma ja BOM laadittu. R5, R6 lisätty. §7 kirjoitettu D5:n mukaan, §8 käytösmatriisi täytetty. |
