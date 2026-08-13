@@ -8,17 +8,22 @@
 
 ## 1. Lyhyt vastaus: mitä tilata
 
-**Anturi: `XGZP6847A100KPGN33`** — CFSensor, analoginen, −100…0 kPa gauge, **3,3 V**, DIP6,
-letkunipalla. Kolme kappaletta, mieluiten **samasta erästä** (peräkkäiset sarjanumerot →
-pienempi kanavien välinen hajonta ennen kalibrointia).
+**Anturi: `XGZP6847A100KPGN`** — CFSensor, analoginen, −100…0 kPa **alipaine (GN)**, DIP6,
+letkunipalla, **3,3 V tai 5 V, kumpikin käy**. Kolme kappaletta, mieluiten **samasta erästä**
+(peräkkäiset sarjanumerot → pienempi kanavien välinen hajonta ennen kalibrointia).
 
-Tilauskoodin loppuosa `33` on ratkaiseva: ilman sitä saat 5 V:n version, joka vaatii
-jännitteenjaon jokaiseen kanavaan. Varmista listauksesta että siinä lukee **3.3V**.
+**Ratkaiseva osa tilauskoodista on `100KPGN`, ei jännite.** `100KP` = mitta-alue 100 kPa,
+`GN` = negatiivinen gauge eli alipaine. Sekaannus on helppo tehdä: moni myyjä listaa saman
+piirisarjan myös **verenpainemittarin anturina** (0–40 kPa, `G`-tyyppi, positiivinen ylipaine)
+— se on väärä sekä alueeltaan että suunnaltaan, sama virhe kuin HX710B:llä (§3.3). Tarkempi
+selitys tilausansasta: [rauta.md](rauta.md) §1.5.
 
-AliExpressissä myyjät listaavat tämän usein muodossa *"XGZP6847A pressure sensor
-−100~0kPa 3.3V"*. Jos myyjä tarjoaa vain 5 V:n version, se **käy myös** — silloin lisätään
-jakaja 20 kΩ / 30 kΩ per kanava (mitoitettu, ks. [tools/signaaliketju.py](../tools/signaaliketju.py)),
-mutta se on kolme osaa ja yksi virhelähde enemmän.
+Jos listauksessa lukee **3,3 V** (`...GN33`), se on hieman siistimpi ratkaisu eikä vaadi
+jakajaa. Jos tarjolla on vain **5 V:n oletusversio**, se **kelpaa yhtä hyvin** — lisää jokaiseen
+kolmeen kanavaan sama 20 kΩ / 30 kΩ -jakaja (mitoitettu, ks.
+[tools/signaaliketju.py](../tools/signaaliketju.py)). Tämä ei ole enää kompromissi: tarkkaa
+1 kHz:n kanavatäsmäystä ei tarvita kun tavoite on perustason tasapainotus eikä pulssinmuodon
+tallennus RPM-laskentaan (ks. [rauta.md](rauta.md) §1.6).
 
 ---
 
@@ -28,7 +33,7 @@ mutta se on kolme osaa ja yksi virhelähde enemmän.
 
 | # | osa | määrä | tunnus / tarkennus | arvio |
 |---|-----|-----|-----|-----|
-| A1 | Paineanturi | **3** | `XGZP6847A100KPGN33` (CFSensor), DIP6, ⌀3 mm nippa | ~5–8 €/kpl |
+| A1 | Paineanturi | **3** | `XGZP6847A100KPGN` (CFSensor), DIP6, ⌀3 mm nippa, 3,3 V tai 5 V | ~5–8 €/kpl |
 | A2 | Silikoniletku | 3 m | **sisähalkaisija 2,5 mm**, ulkohalkaisija 5–6 mm | ~5 € |
 | A3 | Läpivientinippa (bulkhead) | 3 | M5 tai ⌀4 mm letkulle, kotelon seinään | ~2 €/kpl |
 | A4 | Letkunkiristimet / nippusiteet | 12 | pienet, ⌀5–8 mm | ~3 € |
@@ -88,21 +93,29 @@ hiljaa, ja tavalla jota D3:n erotusnäkymä *ei* paljasta. Ks. [rauta.md](rauta.
 
 | osa | hakusana |
 |-----|-----|
-| A1 anturi | `XGZP6847A 100KPGN 3.3V` tai `XGZP6847A -100~0kPa 3.3V` |
+| A1 anturi | `XGZP6847A -100~0kPa GN` tai `XGZP6847A 100KPGN` (3.3V tai 5V, kumpikin käy) |
 | A2 letku | `silicone tube 2.5mm ID 5mm OD` |
 | B1 ESP32 | `ESP32 WROOM 32 devkit NodeMCU 38pin` |
 | B2 buck | `MP1584EN mini buck converter` |
 
 **Ennen tilausta, tarkista listauksesta:**
-1. Käyttöjännite on **3,3 V** eikä 5 V.
-2. Mitta-alue on **−100…0 kPa** (myyjät myyvät samaa koteloa kymmenessä eri alueessa —
-   väärä alue on helppo tilata vahingossa).
-3. Ulostulo on **analoginen** (`A`), ei I²C (`D` = XGZP6847**D**).
+1. Mitta-alue on **−100…0 kPa** ja tyyppi **`GN`** (negatiivinen gauge). Myyjät myyvät samaa
+   koteloa kymmenessä eri alueessa ja myös **positiivisena** (`G`, esim. "0–40kPa
+   sphygmomanometer" -verenpainemittarianturina) — väärä alue tai väärä suunta on helppo
+   tilata vahingossa. Ks. [rauta.md](rauta.md) §1.5.
+2. Ulostulo on **analoginen** (`A`), ei I²C (`D` = XGZP6847**D**).
+3. Käyttöjännite: **3,3 V on siistimpi jos löytyy, mutta 5 V käy myös** (ks. §1 yllä ja
+   [rauta.md](rauta.md) §1.6) — ei enää este.
 
 Tilaa **4 kpl**, ei 3. Yksi vara-anturi on halpa vakuutus, ja ylimääräinen kanava on hyödyllinen
 kalibroinnin ristiintarkistuksessa.
 
-### 3.2 TME (suositeltu kaikelle muulle)
+### 3.2 TME — kaikelle muulle, ja kalliimpi varareitti anturille
+
+TME on suositeltu reitti kaikelle **muulle kuin anturille** (osaluettelo alla). Anturina
+`MPX4115AP` on kelvollinen mutta **ei enää ensisijainen suositus** — se on 3–10× kalliimpi kuin
+AliExpress-XGZP6847A (~20–70 € vs. ~5–8 €/kpl) ja tarpeellinen vain, jos AliExpress-tilaus
+jostain syystä ei onnistu (ks. [rauta.md](rauta.md) §1.6).
 
 TME:n valikoimassa oleva vastine on **`MPX4115A`** — mutta huomaa: datasheetin ORDERING
 INFORMATION -taulukon mukaan `MPX4115A` (Case 867-08) on *Basic Element*, **ilman letkunippaa**.
@@ -133,6 +146,8 @@ AliExpress-laadun arpominen ei kannata.
 | MPS20N0040D / vastaavat 40 kPa -moduulit | Sama alueongelma kuin HX710B:llä. |
 | ADS1115 | 860 SPS jaettuna kanaville = 215 SPS/kanava. Riittää joutokäynnille, ei täydelle kaasulle (tarve 1000 SPS/kanava). Jos ulkoinen ADC tarvitaan, se on **MCP3208** (SPI, 100 kSPS). |
 | 3-bar MAP-anturi (esim. GM 12223861) | Kolminkertainen mitta-alue = kolmasosa resoluutiosta meidän alueellamme. Jos auton MAP, niin **1 bar**. |
+| XGZP6847A-anturi **`G`-tyyppinä** (esim. "0-40kPa electronic sphygmomanometer sensor") | Positiivinen ylipaine (verenpainemittarikäyttöön), ei alipaine — väärä suunta *ja* liian pieni alue. Tarvitaan nimenomaan `GN`-tyyppi, ks. [rauta.md](rauta.md) §1.5. |
+| Auton MAP-anturi ensisijaisena valintana | Toimiva mutta 3–10× kalliimpi kuin XGZP6847A. Käytä vain jos AliExpress-tilaus ei onnistu, ks. §3.2. |
 
 ---
 

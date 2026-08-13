@@ -1,4 +1,4 @@
-import math
+<import math
 
 print("=== 1. SIGNAALIN PERUSTAAJUUDET (3-syl 4-tahti) ===")
 print(f"{'rpm':>6} {'kanava Hz':>10} {'jakso ms':>9} {'imusarja Hz':>12}")

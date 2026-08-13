@@ -10,7 +10,7 @@
 
 ## 1. Anturivalinta — vastaus siihen mitä tilata
 
-### 1.1 Valinta: **XGZP6847A100KPGN33**
+### 1.1 Valinta: **XGZP6847A100KPGN** (3,3 V tai 5 V — molemmat käyvät, ks. §1.6)
 
 CFSensorin kalibroitu analoginen paineanturi, DIP6-kotelo, letkunipalla.
 Tilauskoodi purkautuu näin (datasheet V2.7, ORDER GUIDE):
@@ -21,8 +21,8 @@ Tilauskoodi purkautuu näin (datasheet V2.7, ORDER GUIDE):
 | `A` | **A**nalog (vaihtoehto `D` = I²C) |
 | `100` | mitta-alueen luku |
 | `KP` | yksikkö = **kP**a |
-| `GN` | **G**auge **N**egative = alipaine, alue **−100…0 kPa** |
-| `33` | käyttöjännite **3,3 Vdc** (oletus ilman päätettä olisi 5 V) |
+| `GN` | **G**auge **N**egative = alipaine, alue **−100…0 kPa** — **tämä on ratkaisevin osa, ks. §1.5** |
+| `33` (valinnainen) | käyttöjännite **3,3 Vdc**; ilman päätettä oletus on 5 V — kumpikin kelpaa, ks. §1.6 |
 
 **Miksi juuri tämä**, kolme ratkaisevaa syytä:
 
@@ -30,6 +30,7 @@ Tilauskoodi purkautuu näin (datasheet V2.7, ORDER GUIDE):
    ESP32:n ADC-tuloon. Tämä poistaa kolme vastusta, niiden toleranssivirheen ja koko
    5 V:n analogiapuolen. 5 V:n anturilla (MPX4115AP) jokaiseen kanavaan tarvittaisiin jakaja,
    ja jakajan kuormitus on rajoitettu anturin ulostulovirralla.
+   *(Päivitys: tämä ei ole enää pakollinen tilausehto, ks. §1.6 — 5 V kelpaa nyt yhtä hyvin.)*
 2. **Gauge, ei absoluuttinen.** Imusarjan alipaine *on* gauge-suure. Emme tuhlaa mitta-aluetta
    ilmanpaineen offsetiin → koko 2,5 V:n ulostuloalue käytetään 100 kPa:lle, herkkyys
    **25 mV/kPa**. Absoluuttisella 15–115 kPa -anturilla sama alue jaettaisiin toisin.
@@ -87,6 +88,48 @@ Sama jalansija, sama kytkentä, vain kalibrointikerroin muuttuu → **ei vaadi P
 | **N/C** | VDD | GND | VDD | **OUT** | GND |
 
 ⚠ PIN 1 on N/C — *älä kytke sitä mihinkään, ei edes maahan.* VDD ja GND ovat kahdennettuja.
+
+### 1.5 🔴 Tilausansa: `G` ≠ `GN` — sphygmomanometer-esimerkki
+
+CFSensorin oman valintaoppaan mukaan tilauskoodin viimeinen kirjainryhmä ennen jännitettä
+kertoo **painetyypin**, ja tässä on helpoin tapa tilata täysin väärä osa samalla piirisarjalla:
+
+| tunnus | merkitys | esimerkki |
+|-----|-----|-----|
+| `G` | positiivinen gauge (0…+X kPa, **ylipaine**) | `XGZP6847A040KPG` = 0…40 kPa ylipaine |
+| `GN` | negatiivinen gauge (−X…0 kPa, **alipaine — tämä meille**) | `XGZP6847A100KPGN` = −100…0 kPa alipaine |
+| `GPN` | molemmat suunnat (−X…+X kPa) | `XGZP6847A100KPGPN` = −100…+100 kPa |
+
+Moni AliExpress-listaus myy samaa piirisarjaa **verenpainemittarin** (*"electronic
+sphygmomanometer sensor"*) komponenttina, tyypillisesti mitta-alueella **0–40 kPa** — se on
+`G`-tyyppi, positiivinen ylipaine, koska verenpainemansetti puristaa yli ilmanpaineen. Tämä on
+täsmälleen sama luokan virhe kuin HX710B:llä (ks. [hankinnat.md](hankinnat.md) §3.3): oikea
+piiri, väärä painesuunta *ja* väärä alue. Imusarjan alipaine on **aina** `GN`-tyyppiä, eikä
+40 kPa:n alue riitä edes joutokäynnille (tarve −55…−75 kPa, ks. §1.2).
+
+**Tarkista tilausvaiheessa kolme asiaa listauksesta / myyjän vastauksesta:**
+1. Koodi tai kuvaus sisältää **`GN`** — ei pelkkää `G`:tä eikä sanaa "sphygmomanometer"/"blood
+   pressure". `GPN` kelpaa myös (herkkyys puolittuu, ks. §1.3).
+2. Mitta-alue on **100 kPa** (`100KP`), ei 40 kPa tai muu pienempi.
+3. Ulostulo on **analoginen** (`A`), ei I²C (`D`).
+
+### 1.6 Jännitevaatimus höllentyy — 5 V kelpaa nyt yhtä hyvin
+
+Alkuperäinen 3,3 V (`...GN33`) -vaatimus perustui 1 kHz:n näytteenottoon ja kanavien tarkkaan
+täsmäytykseen pulssin *muodon* tallentamista varten (§3, RPM-diagnostiikka). Kun ensisijainen
+tavoite on **perustason tasapainotus** (kanavien keskinäinen vertailu, ei pulssin muoto),
+tarkkuusvaatimus höllenee eikä jännite ole enää ratkaiseva tilausehto:
+
+- **5 V:n oletusversio kelpaa** ilman erillistä varmistelua myyjältä. Lisää jokaiseen kolmeen
+  kanavaan sama 20 kΩ / 30 kΩ -jakaja ennen ADC-pinniä (mitoitettu
+  [tools/signaaliketju.py](../tools/signaaliketju.py):ssä) — kaksi halpaa vastusta per kanava.
+  Tällöin §6.6:n anturi-LDO (3V3_SENS) jää pois, ja jakajan alaosa toimii samalla anti-alias-C:n
+  paikkana.
+- **3,3 V (`...33`) on silti siistimpi jos sen löytää samaan hintaan** — yksi jännitealue ja yksi
+  osaryhmä (LDO) vähemmän — mutta ei enää pakollinen tilausehto.
+- Auton MAP-anturi (esim. `MPX4115AP` TME:stä) on edelleen kelvollinen **varareitti**, jos
+  AliExpress-tilaus jostain syystä ei onnistu, mutta se on 3–10× kalliimpi (~20–70 €/kpl vs.
+  ~5–8 €/kpl XGZP6847A:lla) eikä ole enää ensisijainen suositus.
 
 ---
 
@@ -390,6 +433,11 @@ maksaa muutaman euron; turha PCB-kierros maksaa viikkoja.
 ### 6.6 Protolevyn johdotus
 
 Päätetty 9.8.2026: **vaihe 1 rakennetaan reikälevylle.** Tässä täydellinen kytkentä.
+
+⚠ Kytkentä olettaa **3,3 V:n anturin**. Jos päädytään 5 V:n oletusversioon (§1.6, nyt yhtä
+kelvollinen tilausvaihtoehto), anturi-LDO (rivit "buck OUT+ → 5 V -kisko → LDO" alla) jää pois,
+ja jokaisen anturin OUT-pinnin ja ADC-pinnin väliin tulee LDO:n sijaan 20 kΩ / 30 kΩ -jakaja
+GND:hen — muu kytkentä (RC-suodatin, kiskomonitori) pysyy samana.
 
 #### Virransyöttö
 
