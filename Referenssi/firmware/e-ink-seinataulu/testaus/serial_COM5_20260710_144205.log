@@ -1,0 +1,10 @@
+=== capture_serial: COM5 @ 115200, 40 s, started 2026-07-10 14.42.06 ===
+[INFO]  DNS -> 192.168.0.196
+[INFO]  Haetaan: http://192.168.0.196:80/api/state
+[INFO]  Data haettu onnistuneesti
+[INFO]  View profile: USER
+_PowerOn : 129999
+_Update_Full : 1596000
+_PowerOff : 40999
+[INFO]  E-ink: renderoidty
+=== capture_serial: ended 2026-07-10 14.42.46, 8 lines ===

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="fi">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>E-ink Growth Preview</title>
+    <style>
+        body { font-family: Segoe UI, Arial, sans-serif; margin: 20px; background: #f6f7f8; color: #111; }
+        .top { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 18px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+        .card { background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 10px; }
+        h1 { margin: 0 0 6px 0; font-size: 22px; }
+        h2 { margin: 0 0 8px 0; font-size: 16px; text-transform: lowercase; }
+        img { width: 100%; image-rendering: pixelated; border: 1px solid #ddd; background: #fff; }
+        .note { font-size: 13px; color: #444; }
+        .mono { font-family: Consolas, monospace; }
+    </style>
+</head>
+<body>
+    <h1>E-ink Growth Preview</h1>
+    <div class="note">Preview-stripit generoitu build_growth_assets.py:lla. Invert vaihtaa normal/invert kuvan.</div>
+    <div class="top">
+        <label><input type="checkbox" id="invert" /> Invert preview</label>
+        <span class="mono">*_preview.png / *_preview_invert.png</span>
+    </div>
+    <div class="grid">
+            <section class="card" data-plant="generic">
+                <h2>generic</h2>
+                <img id="img-generic" src="generic_preview.png" alt="generic preview" />
+            </section>
+
+
+            <section class="card" data-plant="basil">
+                <h2>basil</h2>
+                <img id="img-basil" src="basil_preview.png" alt="basil preview" />
+            </section>
+
+
+            <section class="card" data-plant="chives">
+                <h2>chives</h2>
+                <img id="img-chives" src="chives_preview.png" alt="chives preview" />
+            </section>
+
+
+            <section class="card" data-plant="cilantro">
+                <h2>cilantro</h2>
+                <img id="img-cilantro" src="cilantro_preview.png" alt="cilantro preview" />
+            </section>
+
+
+            <section class="card" data-plant="dill">
+                <h2>dill</h2>
+                <img id="img-dill" src="dill_preview.png" alt="dill preview" />
+            </section>
+
+
+            <section class="card" data-plant="mint">
+                <h2>mint</h2>
+                <img id="img-mint" src="mint_preview.png" alt="mint preview" />
+            </section>
+
+
+            <section class="card" data-plant="parsley">
+                <h2>parsley</h2>
+                <img id="img-parsley" src="parsley_preview.png" alt="parsley preview" />
+            </section>
+
+    </div>
+    <script>
+        const invert = document.getElementById('invert');
+        invert.addEventListener('change', () => {
+            const on = invert.checked;
+            document.querySelectorAll('img[id^="img-"]').forEach(img => {
+                const base = img.id.replace('img-', '');
+                img.src = on ? `${base}_preview_invert.png` : `${base}_preview.png`;
+            });
+        });
+    </script>
+</body>
+</html>

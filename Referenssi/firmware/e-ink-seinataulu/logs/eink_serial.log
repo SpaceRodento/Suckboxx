@@ -1,0 +1,119 @@
+********************************************************************************
+Obsolete PIO Core v6.1.18 is used (previous was 6.1.19)
+Please remove multiple PIO Cores from a system:
+https://docs.platformio.org/en/latest/core/installation/troubleshooting.html
+********************************************************************************
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x28 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+
+[INFO]  E-ink seinataulu — boot #1
+[INFO]  WiFi: yhdistetaan Ankkalinna...
+[INFO]  WiFi: yhdistetty, IP=192.168.0.112
+[INFO]  NTP: 10:32:39 24.5.2026
+[INFO]  DNS -> 192.168.0.196
+[INFO]  Haetaan: http://192.168.0.196:80/api/state
+[INFO]  Data haettu onnistuneesti
+_PowerOn : 128999
+_Update_Full : 1595000
+_PowerOff : 41000
+[INFO]  E-ink: renderoidty
+[INFO]  Deep sleep pois paalta — odotetaan...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0xc (RTC_SW_CPU_RST),boot:0x28 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x4209a38e
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+
+[INFO]  E-ink seinataulu — boot #1
+[INFO]  WiFi: yhdistetaan Ankkalinna...
+[INFO]  WiFi: yhdistetty, IP=192.168.0.112
+[INFO]  NTP: 10:33:13 24.5.2026
+[INFO]  DNS -> 192.168.0.196
+[INFO]  Haetaan: http://192.168.0.196:80/api/state
+[INFO]  Data haettu onnistuneesti
+_PowerOn : 129999
+_Update_Full : 1594999
+_PowerOff : 41000
+[INFO]  E-ink: renderoidty
+[INFO]  Deep sleep pois paalta — odotetaan...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0xc (RTC_SW_CPU_RST),boot:0x28 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x4209a38e
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+
+[INFO]  E-ink seinataulu — boot #1
+[INFO]  WiFi: yhdistetaan Ankkalinna...
+[INFO]  WiFi: yhdistetty, IP=192.168.0.112
+[INFO]  NTP: 10:33:47 24.5.2026
+[INFO]  DNS -> 192.168.0.196
+[INFO]  Haetaan: http://192.168.0.196:80/api/state
+[INFO]  Data haettu onnistuneesti
+_PowerOn : 129999
+_Update_Full : 1594999
+_PowerOff : 41000
+[INFO]  E-ink: renderoidty
+[INFO]  Deep sleep pois paalta — odotetaan...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0xc (RTC_SW_CPU_RST),boot:0x28 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x4209a38e
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+
+[INFO]  E-ink seinataulu — boot #1
+[INFO]  WiFi: yhdistetaan Ankkalinna...
+[INFO]  WiFi: yhdistetty, IP=192.168.0.112
+[INFO]  NTP: 10:34:21 24.5.2026
+[INFO]  DNS -> 192.168.0.196
+[INFO]  Haetaan: http://192.168.0.196:80/api/state
+[INFO]  Data haettu onnistuneesti
+_PowerOn : 130499
+_Update_Full : 1595000
+_PowerOff : 41000
+[INFO]  E-ink: renderoidty
+[INFO]  Deep sleep pois paalta — odotetaan...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0xc (RTC_SW_CPU_RST),boot:0x28 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x4209a38e
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+
+[INFO]  E-ink seinataulu — boot #1
+[INFO]  WiFi: yhdistetaan Ankkalinna...
+[INFO]  WiFi: yhdistetty, IP=192.168.0.112
+[INFO]  NTP: 10:34:54 24.5.2026
+[INFO]  DNS -> 192.168.0.196
+[INFO]  Haetaan: http://192.168.0.196:80/api/state
+[INFO]  Data haettu onnistuneesti
+_PowerOn : 129999
+_Update_Full : 1595000
+_PowerOff : 41000
+[INFO]  E-ink: renderoidty
+[INFO]  Deep sleep pois paalta — odotetaan...

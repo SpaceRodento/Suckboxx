@@ -1,0 +1,7 @@
+{
+  "plant_id": "generic",
+  "style": "neutral-herb-silhouette",
+  "dither": "bayer8",
+  "frame_count": 6,
+  "notes": "Fallback animation used when species-specific pack is missing"
+}

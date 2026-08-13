@@ -1,0 +1,362 @@
+{
+  "basil": {
+    "name": "Basilika",
+    "max_height_mm": 400,
+    "light_hours": 14,
+    "water_ml_per_dose": 25,
+    "water_interval_hours": 8,
+    "tds_target_ppm": 700,
+    "temp_min_c": 20.0,
+    "temp_max_c": 30.0,
+    "phases": [
+      {
+        "type": 0,
+        "label": "Juurtuminen",
+        "guidance": "Leikkaa 10-15 cm varsi solmun alta. Pida alusta kosteana ja tarkista juuret paivittain.",
+        "duration_days": 7,
+        "light_hours": 16,
+        "flood_interval_min": 0,
+        "flood_duration_sec": 0,
+        "tds_target_ppm": 0,
+        "temp_min_c": 22.0,
+        "temp_max_c": 28.0
+      },
+      {
+        "type": 1,
+        "label": "Taimivaihe",
+        "guidance": "Juuret yli 2 cm: kaynnista varovainen tulva ja nosta ravinne 1/4 vahvuuteen.",
+        "duration_days": 14,
+        "light_hours": 16,
+        "flood_interval_min": 360,
+        "flood_duration_sec": 30,
+        "tds_target_ppm": 400,
+        "temp_min_c": 20.0,
+        "temp_max_c": 28.0
+      },
+      {
+        "type": 2,
+        "label": "Kasvuvaihe",
+        "guidance": "Taysi kasvu: pida floodit tasaisina ja seuraa lehtien vari seka veden kulutus.",
+        "duration_days": 21,
+        "light_hours": 16,
+        "flood_interval_min": 180,
+        "flood_duration_sec": 45,
+        "tds_target_ppm": 700,
+        "temp_min_c": 20.0,
+        "temp_max_c": 30.0
+      },
+      {
+        "type": 3,
+        "label": "Sadonkorjuu",
+        "guidance": "Leikkaa latvat kahden solmun ylapuolelta. Toista sadonkorjuu 5-7 paivan valein.",
+        "duration_days": 0,
+        "light_hours": 14,
+        "flood_interval_min": 180,
+        "flood_duration_sec": 45,
+        "tds_target_ppm": 800,
+        "temp_min_c": 20.0,
+        "temp_max_c": 28.0
+      }
+    ]
+  },
+  "parsley": {
+    "name": "Persilja",
+    "max_height_mm": 300,
+    "light_hours": 12,
+    "water_ml_per_dose": 20,
+    "water_interval_hours": 12,
+    "tds_target_ppm": 600,
+    "temp_min_c": 15.0,
+    "temp_max_c": 25.0,
+    "phases": [
+      {
+        "type": 0,
+        "label": "Juurtuminen",
+        "guidance": "Siemenet itavat hitaasti. Pida alusta kosteana ja valta kovaa tulvakastelua.",
+        "duration_days": 10,
+        "light_hours": 14,
+        "flood_interval_min": 0,
+        "flood_duration_sec": 0,
+        "tds_target_ppm": 0,
+        "temp_min_c": 18.0,
+        "temp_max_c": 24.0
+      },
+      {
+        "type": 1,
+        "label": "Taimivaihe",
+        "guidance": "Kun ensilehdet avautuvat, aloita mieto ravinne ja kevyt tulvakierto.",
+        "duration_days": 14,
+        "light_hours": 14,
+        "flood_interval_min": 360,
+        "flood_duration_sec": 30,
+        "tds_target_ppm": 350,
+        "temp_min_c": 17.0,
+        "temp_max_c": 24.0
+      },
+      {
+        "type": 2,
+        "label": "Kasvuvaihe",
+        "guidance": "Persilja kasvaa tasaisesti. Pida valo 14 h ja tarkkaile ravinnetasoa.",
+        "duration_days": 28,
+        "light_hours": 14,
+        "flood_interval_min": 240,
+        "flood_duration_sec": 40,
+        "tds_target_ppm": 600,
+        "temp_min_c": 15.0,
+        "temp_max_c": 25.0
+      },
+      {
+        "type": 3,
+        "label": "Sadonkorjuu",
+        "guidance": "Leikkaa ulommat varret ensin. Jata keskusta kasvamaan jatkuvaa satoa varten.",
+        "duration_days": 0,
+        "light_hours": 12,
+        "flood_interval_min": 240,
+        "flood_duration_sec": 40,
+        "tds_target_ppm": 650,
+        "temp_min_c": 15.0,
+        "temp_max_c": 24.0
+      }
+    ]
+  },
+  "dill": {
+    "name": "Tilli",
+    "max_height_mm": 500,
+    "light_hours": 14,
+    "water_ml_per_dose": 20,
+    "water_interval_hours": 8,
+    "tds_target_ppm": 500,
+    "temp_min_c": 15.0,
+    "temp_max_c": 25.0,
+    "phases": [
+      {
+        "type": 0,
+        "label": "Juurtuminen",
+        "guidance": "Tillin siemenet itavat nopeasti. Pida pinta kosteana ja ilma kiertaavana.",
+        "duration_days": 7,
+        "light_hours": 14,
+        "flood_interval_min": 0,
+        "flood_duration_sec": 0,
+        "tds_target_ppm": 0,
+        "temp_min_c": 18.0,
+        "temp_max_c": 23.0
+      },
+      {
+        "type": 1,
+        "label": "Taimivaihe",
+        "guidance": "Aloita lyhyt tulva kun juuret sitovat alustan. Lisaa mieto ravinne.",
+        "duration_days": 10,
+        "light_hours": 14,
+        "flood_interval_min": 360,
+        "flood_duration_sec": 25,
+        "tds_target_ppm": 300,
+        "temp_min_c": 17.0,
+        "temp_max_c": 23.0
+      },
+      {
+        "type": 2,
+        "label": "Kasvuvaihe",
+        "guidance": "Tilli venyy valossa. Pida valojakso pitkana ja esta alustan kuivuminen.",
+        "duration_days": 24,
+        "light_hours": 14,
+        "flood_interval_min": 240,
+        "flood_duration_sec": 35,
+        "tds_target_ppm": 500,
+        "temp_min_c": 15.0,
+        "temp_max_c": 25.0
+      },
+      {
+        "type": 3,
+        "label": "Sadonkorjuu",
+        "guidance": "Korjaa tilli nuorena. Leikkaa latvat usein, jotta kasvu pysyy rehevana.",
+        "duration_days": 0,
+        "light_hours": 12,
+        "flood_interval_min": 240,
+        "flood_duration_sec": 35,
+        "tds_target_ppm": 550,
+        "temp_min_c": 15.0,
+        "temp_max_c": 24.0
+      }
+    ]
+  },
+  "mint": {
+    "name": "Minttu",
+    "max_height_mm": 350,
+    "light_hours": 14,
+    "water_ml_per_dose": 30,
+    "water_interval_hours": 6,
+    "tds_target_ppm": 800,
+    "temp_min_c": 18.0,
+    "temp_max_c": 28.0,
+    "phases": [
+      {
+        "type": 0,
+        "label": "Juurtuminen",
+        "guidance": "Minttu juurtuu helposti pistokkaasta. Pida varsi kosteana ilman jatkuvaa tulvaa.",
+        "duration_days": 7,
+        "light_hours": 14,
+        "flood_interval_min": 0,
+        "flood_duration_sec": 0,
+        "tds_target_ppm": 0,
+        "temp_min_c": 20.0,
+        "temp_max_c": 26.0
+      },
+      {
+        "type": 1,
+        "label": "Taimivaihe",
+        "guidance": "Kun juuria on hyvin, kaynnista tulva 6 h valein ja lisaa kevyt ravinne.",
+        "duration_days": 14,
+        "light_hours": 14,
+        "flood_interval_min": 360,
+        "flood_duration_sec": 30,
+        "tds_target_ppm": 450,
+        "temp_min_c": 19.0,
+        "temp_max_c": 26.0
+      },
+      {
+        "type": 2,
+        "label": "Kasvuvaihe",
+        "guidance": "Minttu kuluttaa vetta nopeasti. Tarkista taso paivittain ja pida TDS vakaana.",
+        "duration_days": 28,
+        "light_hours": 14,
+        "flood_interval_min": 180,
+        "flood_duration_sec": 40,
+        "tds_target_ppm": 800,
+        "temp_min_c": 18.0,
+        "temp_max_c": 28.0
+      },
+      {
+        "type": 3,
+        "label": "Sadonkorjuu",
+        "guidance": "Leikkaa pitkat versot takaisin. Jata 2-3 lehtisolmua uutta kasvua varten.",
+        "duration_days": 0,
+        "light_hours": 12,
+        "flood_interval_min": 180,
+        "flood_duration_sec": 40,
+        "tds_target_ppm": 850,
+        "temp_min_c": 18.0,
+        "temp_max_c": 27.0
+      }
+    ]
+  },
+  "chives": {
+    "name": "Ruohosipuli",
+    "max_height_mm": 300,
+    "light_hours": 12,
+    "water_ml_per_dose": 15,
+    "water_interval_hours": 12,
+    "tds_target_ppm": 600,
+    "temp_min_c": 15.0,
+    "temp_max_c": 25.0,
+    "phases": [
+      {
+        "type": 0,
+        "label": "Juurtuminen",
+        "guidance": "Ruohosipuli itaa rauhallisesti. Pida alusta kosteana ja lampo tasaisena.",
+        "duration_days": 10,
+        "light_hours": 13,
+        "flood_interval_min": 0,
+        "flood_duration_sec": 0,
+        "tds_target_ppm": 0,
+        "temp_min_c": 16.0,
+        "temp_max_c": 22.0
+      },
+      {
+        "type": 1,
+        "label": "Taimivaihe",
+        "guidance": "Aloita mieto tulva vasta kun juuret kiinnittyvat kunnolla alustaan.",
+        "duration_days": 14,
+        "light_hours": 13,
+        "flood_interval_min": 420,
+        "flood_duration_sec": 25,
+        "tds_target_ppm": 300,
+        "temp_min_c": 16.0,
+        "temp_max_c": 22.0
+      },
+      {
+        "type": 2,
+        "label": "Kasvuvaihe",
+        "guidance": "Kasvuvaiheessa ruohosipuli pitaa viileahkosta valosta ja tasaisesta vedesta.",
+        "duration_days": 24,
+        "light_hours": 13,
+        "flood_interval_min": 240,
+        "flood_duration_sec": 35,
+        "tds_target_ppm": 600,
+        "temp_min_c": 15.0,
+        "temp_max_c": 24.0
+      },
+      {
+        "type": 3,
+        "label": "Sadonkorjuu",
+        "guidance": "Leikkaa varret 3-5 cm korkeudelta. Anna kasvin palautua ennen seuraavaa leikkuuta.",
+        "duration_days": 0,
+        "light_hours": 12,
+        "flood_interval_min": 240,
+        "flood_duration_sec": 35,
+        "tds_target_ppm": 650,
+        "temp_min_c": 15.0,
+        "temp_max_c": 24.0
+      }
+    ]
+  },
+  "cilantro": {
+    "name": "Korianteri",
+    "max_height_mm": 300,
+    "light_hours": 12,
+    "water_ml_per_dose": 20,
+    "water_interval_hours": 8,
+    "tds_target_ppm": 500,
+    "temp_min_c": 15.0,
+    "temp_max_c": 25.0,
+    "phases": [
+      {
+        "type": 0,
+        "label": "Juurtuminen",
+        "guidance": "Korianteri itaa tasakosteassa alustassa. Valta ylikastelua kasvun alussa.",
+        "duration_days": 7,
+        "light_hours": 13,
+        "flood_interval_min": 0,
+        "flood_duration_sec": 0,
+        "tds_target_ppm": 0,
+        "temp_min_c": 16.0,
+        "temp_max_c": 22.0
+      },
+      {
+        "type": 1,
+        "label": "Taimivaihe",
+        "guidance": "Kun juuret vahvistuvat, aloita varovainen tulvakierto ja mieto ravinne.",
+        "duration_days": 10,
+        "light_hours": 13,
+        "flood_interval_min": 360,
+        "flood_duration_sec": 25,
+        "tds_target_ppm": 280,
+        "temp_min_c": 16.0,
+        "temp_max_c": 22.0
+      },
+      {
+        "type": 2,
+        "label": "Kasvuvaihe",
+        "guidance": "Pida lampo maltillisena. Liian kuuma voi kiihdyttaa kukintaa ennen aikojaan.",
+        "duration_days": 21,
+        "light_hours": 13,
+        "flood_interval_min": 240,
+        "flood_duration_sec": 35,
+        "tds_target_ppm": 500,
+        "temp_min_c": 15.0,
+        "temp_max_c": 24.0
+      },
+      {
+        "type": 3,
+        "label": "Sadonkorjuu",
+        "guidance": "Korjaa lehdet vaiheittain ylaosasta. Poista kukkavarret mahdollisimman aikaisin.",
+        "duration_days": 0,
+        "light_hours": 12,
+        "flood_interval_min": 240,
+        "flood_duration_sec": 35,
+        "tds_target_ppm": 550,
+        "temp_min_c": 15.0,
+        "temp_max_c": 24.0
+      }
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "assets": [
+    "generic",
+    "basil",
+    "chives",
+    "cilantro",
+    "dill",
+    "mint",
+    "parsley"
+  ],
+  "frame_count": 6,
+  "width": 152,
+  "height": 288,
+  "dither": "bayer8"
+}
