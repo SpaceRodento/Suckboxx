@@ -9,6 +9,10 @@
 // pulssi vaaditaan siitä huolimatta protokollan mukaan.
 class Hx710b {
  public:
+  // HUOM: GPIO34-39 ovat input-only eikä niissä ole sisäistä pull-uppia. Jos
+  // moduuli on irti, linja kelluu ja lukee satunnaisesti LOW - readRaw() nappaa
+  // sen kiinni palauttamalla false, mutta oikea korjaus on ulkoinen 10k pull-up
+  // DOUT:sta 3V3:een, jos kanava jätetään tarkoituksella kytkemättä.
   void begin(uint8_t sckPin, uint8_t doutPin) {
     sck_ = sckPin;
     dout_ = doutPin;
@@ -22,8 +26,12 @@ class Hx710b {
   bool isReady() const { return digitalRead(dout_) == LOW; }
 
   // Lukee yhden 24-bittisen näytteen ja etumerkkilaajentaa sen 32-bittiseksi.
-  // Kutsu vasta kun isReady() == true.
-  int32_t readRaw() {
+  // Kutsu vasta kun isReady() == true. Palauttaa false jos DOUT jäi matalaksi
+  // 25. pulssin jälkeen: toimiva HX710B nostaa linjan heti ylös seuraavan
+  // muunnoksen ajaksi, joten matalaksi jäänyt linja tarkoittaa ettei siellä ole
+  // sirua vastaamassa (moduuli irti, kelluva pinni, huono kytkentä). Silloin
+  // näyte on roskaa eikä sitä saa käyttää.
+  bool readRaw(int32_t& out) {
     uint32_t value = 0;
 
     noInterrupts();
@@ -41,10 +49,15 @@ class Hx710b {
     delayMicroseconds(1);
     interrupts();
 
+    if (digitalRead(dout_) == LOW) {
+      return false;  // linja ei vapautunut -> ei toimivaa sirua linjalla
+    }
+
     if (value & 0x800000UL) {
       value |= 0xFF000000UL;  // etumerkkilaajennus 24 -> 32 bittiä
     }
-    return static_cast<int32_t>(value);
+    out = static_cast<int32_t>(value);
+    return true;
   }
 
  private:

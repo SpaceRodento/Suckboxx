@@ -154,6 +154,7 @@ const char WEB_PAGE_HTML[] PROGMEM = R"HTMLPAGE(<!DOCTYPE html>
   var METER_HALF_PX = 105;   // meter-height 220px, keskiviivasta reunaan
   var MIN_SPAN = 500;        // lattia asteikolle ettei kohina heiluta palkkeja alussa
   var STALE_MS = 2000;
+  var POLL_MS = 500;
   var maxAbsDelta = MIN_SPAN;
 
   var statusLine = document.getElementById('statusLine');
@@ -185,7 +186,18 @@ const char WEB_PAGE_HTML[] PROGMEM = R"HTMLPAGE(<!DOCTYPE html>
     rawEl.textContent = 'raw ' + ch.raw;
   }
 
+  // Ketjutettu setTimeout eikä setInterval, ja yksi pyyntö kerrallaan:
+  // ESP32:n WebServer palvelee yhtä yhteyttä kerrallaan, joten päällekkäiset
+  // pyynnöt jonoutuvat ja näkyvät katkoina.
+  var inFlight = false;
+
+  function scheduleNextPoll() {
+    setTimeout(poll, POLL_MS);
+  }
+
   function poll() {
+    if (inFlight) { scheduleNextPoll(); return; }
+    inFlight = true;
     fetch('/api/readings')
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -202,6 +214,10 @@ const char WEB_PAGE_HTML[] PROGMEM = R"HTMLPAGE(<!DOCTYPE html>
       .catch(function () {
         statusLine.textContent = 'ei yhteyttä laitteeseen';
         statusLine.classList.add('offline');
+      })
+      .then(function () {
+        inFlight = false;
+        scheduleNextPoll();
       });
   }
 
@@ -211,7 +227,6 @@ const char WEB_PAGE_HTML[] PROGMEM = R"HTMLPAGE(<!DOCTYPE html>
     });
   });
 
-  setInterval(poll, 300);
   poll();
 })();
 </script>

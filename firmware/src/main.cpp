@@ -36,14 +36,24 @@ constexpr uint8_t PIN_DOUT[CHANNEL_COUNT] = {34, 35, 36};
 constexpr uint8_t PIN_LED = 2;
 constexpr unsigned long LED_BLINK_MS = 500;
 
+// HX710B tuottaa kiinteät 10 näytettä/s, joten 20 Hz kysely riittää reilusti.
+// Tämä katto on tärkeä: ilman sitä loop pyörittää readRaw():ta niin tiheään,
+// että noInterrupts()-jaksot syövät suurimman osan CPU-ajasta ja Wi-Fi AP:n
+// beaconit myöhästyvät -> verkko katoaa puhelimen listalta.
+constexpr unsigned long SAMPLE_INTERVAL_MS = 50;
+constexpr unsigned long DIAG_INTERVAL_MS = 5000;
+
 const char* const AP_SSID = "Suckboxx";
 const char* const AP_PASSWORD = "alipaine123";  // vähintään 8 merkkiä (WPA2)
+constexpr uint8_t AP_CHANNEL = 1;
+constexpr uint8_t AP_MAX_CLIENTS = 4;
 
 Hx710b sensors[CHANNEL_COUNT];
 int32_t latestRaw[CHANNEL_COUNT] = {0, 0, 0};
 int32_t zeroOffset[CHANNEL_COUNT] = {0, 0, 0};
 unsigned long lastUpdateMs[CHANNEL_COUNT] = {0, 0, 0};
 bool everRead[CHANNEL_COUNT] = {false, false, false};
+uint32_t badReads[CHANNEL_COUNT] = {0, 0, 0};
 
 WebServer server(80);
 
@@ -89,9 +99,17 @@ void setup() {
   }
 
   WiFi.mode(WIFI_AP);
-  WiFi.softAP(AP_SSID, AP_PASSWORD);
+  WiFi.setSleep(false);  // AP ei saa mennä modem sleepiin - katkoo yhteyksiä
+  // Kiinteä kanava ja asiakasraja: automaattivalinta vaihtaa kanavaa lennossa,
+  // mikä näkyy puhelimessa AP:n katoamisena ja uudelleenilmestymisenä.
+  bool apOk = WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL, 0, AP_MAX_CLIENTS);
+  if (!apOk) {
+    Serial.println("[VIRHE] softAP-kaynnistys epaonnistui");
+  }
   Serial.print("[INFO] Wi-Fi AP kaynnissa, SSID=");
   Serial.print(AP_SSID);
+  Serial.print(" kanava=");
+  Serial.print(AP_CHANNEL);
   Serial.print(" IP=");
   Serial.println(WiFi.softAPIP());
 
@@ -107,9 +125,19 @@ void loop() {
   server.handleClient();
 
   unsigned long now = millis();
-  for (uint8_t i = 0; i < CHANNEL_COUNT; i++) {
-    if (sensors[i].isReady()) {
-      int32_t value = sensors[i].readRaw();
+
+  static unsigned long lastSampleMs = 0;
+  if (now - lastSampleMs >= SAMPLE_INTERVAL_MS) {
+    lastSampleMs = now;
+    for (uint8_t i = 0; i < CHANNEL_COUNT; i++) {
+      if (!sensors[i].isReady()) {
+        continue;
+      }
+      int32_t value = 0;
+      if (!sensors[i].readRaw(value)) {
+        badReads[i]++;  // kelluva tai jumissa oleva DOUT - ei oikeaa dataa
+        continue;
+      }
       latestRaw[i] = value;
       lastUpdateMs[i] = now;
       if (!everRead[i]) {
@@ -124,4 +152,20 @@ void loop() {
     lastBlinkMs = now;
     digitalWrite(PIN_LED, !digitalRead(PIN_LED));
   }
+
+  static unsigned long lastDiagMs = 0;
+  if (now - lastDiagMs >= DIAG_INTERVAL_MS) {
+    lastDiagMs = now;
+    Serial.printf(
+      "[DIAG] up=%lus asiakkaita=%d heap=%u ika_ms=%lu/%lu/%lu virhelukuja=%lu/%lu/%lu\n",
+      now / 1000, WiFi.softAPgetStationNum(), ESP.getFreeHeap(),
+      now - lastUpdateMs[0], now - lastUpdateMs[1], now - lastUpdateMs[2],
+      static_cast<unsigned long>(badReads[0]),
+      static_cast<unsigned long>(badReads[1]),
+      static_cast<unsigned long>(badReads[2]));
+  }
+
+  // Antaa idle-taskin ja Wi-Fi-pinon ajoaikaa. Ilman tätä loop on busy-loop,
+  // joka nälkiinnyttää muut taskit ja laukaisee task watchdogin (CPU1).
+  delay(2);
 }
