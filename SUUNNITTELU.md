@@ -407,3 +407,4 @@ merkityksessä (nollan tunnistus vs. letkuvian tunnistus); ne saattavat tarvita 
 | 9.8.2026 | D1, D3, D4, D5 päätetty. D5:n seuraukset S5a/S5b kirjattu, D7 avattu. |
 | 9.8.2026 | Anturi valittu (`XGZP6847A100KPGN33`) datasheetin pohjalta; D8 (ESP32 classic) päätetty. Rautasuunnitelma ja BOM laadittu. R5, R6 lisätty. §7 kirjoitettu D5:n mukaan, §8 käytösmatriisi täytetty. |
 | 9.8.2026 | D2 (1,5 / 3,0 kPa) ja D7 (master valittavissa, oletus SYL 1) päätetty. Vaihe 1 = protolevy. **Kaikki päätökset kiinni paitsi D6.** |
+| 18.8.2026 | Ensimmäinen firmware ([firmware/](firmware/)): ESP32-WROOM-32 (ESP32-D0WD-V3, MAC 48:9d:31:c0:1f:18, varmistettu esptoolilla COM5:stä) + 3× HX710B bittisarjaluku, Wi-Fi AP + web-UI kolmella palkilla. Tietoisesti väliaikainen: HX710B ei ole D4:n XGZP6847A, luvut ovat raakoja eikä kalibroituja. OTA, rengaspuskuri (S5b), kalibrointi (R4) ja käytösmatriisi (§8) rajattu pois — tulevat kun XGZP6847A-anturit saapuvat. |
