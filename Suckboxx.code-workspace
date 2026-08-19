@@ -1,6 +1,9 @@
 {
 	"folders": [
 		{
+			"path": "firmware/hx710b_test"
+		},
+		{
 			"path": "."
 		}
 	],
