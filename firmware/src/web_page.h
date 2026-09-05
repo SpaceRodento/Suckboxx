@@ -152,10 +152,14 @@ const char WEB_PAGE_HTML[] PROGMEM = R"HTMLPAGE(<!DOCTYPE html>
 <script>
 (function () {
   var METER_HALF_PX = 105;   // meter-height 220px, keskiviivasta reunaan
-  var MIN_SPAN = 500;        // lattia asteikolle ettei kohina heiluta palkkeja alussa
+  // Kiinteä asteikon täysi skaala raakayksikköinä (delta-arvo joka täyttää
+  // palkin puolikkaan kokonaan). Säädä tätä käsin normaalin puhalluksen
+  // mukaan - ei automaattista kasvatusta, jotta yksi ylikuormituspiikki
+  // (esim. anturi täyteen pohjaan asti) ei enää lukitse asteikkoa isoksi
+  // ja tee kaikista muista lukemista näennäisen pieniä.
+  var FULL_SCALE_DELTA = 20000;
   var STALE_MS = 2000;
   var POLL_MS = 500;
-  var maxAbsDelta = MIN_SPAN;
 
   var statusLine = document.getElementById('statusLine');
 
@@ -168,7 +172,7 @@ const char WEB_PAGE_HTML[] PROGMEM = R"HTMLPAGE(<!DOCTYPE html>
     var stale = ch.age_ms > STALE_MS;
     chEl.classList.toggle('stale', stale);
 
-    var pct = Math.min(1, Math.abs(ch.delta) / maxAbsDelta);
+    var pct = Math.min(1, Math.abs(ch.delta) / FULL_SCALE_DELTA);
     var px = Math.round(pct * METER_HALF_PX);
     if (ch.delta >= 0) {
       fillEl.style.background = 'var(--fill-pos)';
@@ -203,9 +207,6 @@ const char WEB_PAGE_HTML[] PROGMEM = R"HTMLPAGE(<!DOCTYPE html>
       .then(function (data) {
         var channels = data.ch;
         for (var i = 0; i < channels.length; i++) {
-          maxAbsDelta = Math.max(maxAbsDelta, Math.abs(channels[i].delta));
-        }
-        for (var i = 0; i < channels.length; i++) {
           updateChannel(i, channels[i]);
         }
         statusLine.textContent = 'yhteys OK · uptime ' + Math.round(data.uptime_ms / 1000) + ' s';
@@ -222,9 +223,7 @@ const char WEB_PAGE_HTML[] PROGMEM = R"HTMLPAGE(<!DOCTYPE html>
   }
 
   document.getElementById('zeroBtn').addEventListener('click', function () {
-    fetch('/api/zero', { method: 'POST' }).then(function () {
-      maxAbsDelta = MIN_SPAN;
-    });
+    fetch('/api/zero', { method: 'POST' });
   });
 
   poll();
