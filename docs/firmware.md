@@ -400,10 +400,27 @@ Tiedostot `src/main.cpp` ja `src/hal/*` (Arduino-ESP32 2.0.17, ESPAsyncWebServer
   pudotus näkyy seq-aukkona (`diag.gaps`).
 - **Ei pitkiä keskeytyskieltoja eikä busy-waitia.** Bring-up-firmwaressa `noInterrupts()`
   yli 90 % ajasta myöhästytti AP:n beaconit ja laukaisi watchdogin (commit b838911).
+- **Tahdistus (WP-7a):** `seq` laskee 1 ms:n jaksoja. Alle 3 ms:n myöhästyminen otetaan
+  kiinni. Pidempi pysähdys (esim. flash-kirjoitus) ohitetaan, ja seq hyppää yli, jolloin
+  pudotus näkyy aukkona eikä näytteitä väärennetä. Jonon alkio on `RawFrame` sekä aikaleima,
+  myöhästyminen ja lähteen lukuaika (diagnostiikka).
 - **Käsittely:** `tick` 20 Hz, snapshot `push_rate_hz`:llä SSE-tapahtumana `snap`. Processor
   mutexin takana. Web-käsittelijät ajetaan AsyncTCP-taskissa ytimellä 0.
-- **Wi-Fi AP:** SSID `Suckboxx`, salasana `alipaine123`, kanava 1, enintään 4 asiakasta,
-  `WiFi.setSleep(false)` (bring-up-firmwaren arvot).
+
+  | taski | ydin | prio | tehtävä |
+  |---|---|---|---|
+  | `sbx_sample` | 1 | 20 | näytteenotto, `vTaskDelayUntil` 1 ms |
+  | `sbx_proc` | 1 | 5 | jonon tyhjennys 4 ms:n välein → `Processor::push`, `tick` 20 Hz |
+  | `sbx_push` | 0 | 11 | SSE-lähetys; `async_tcp` + 1, koska ESPAsyncWebServer 3.6.0:n `AsyncEventSource` lukee asiakkaan TCP-osoittimen ilman lukkoa, joten `send()` ja `count()` kutsutaan vain täältä |
+  | `async_tcp` | 0 | 10 | web-käsittelijät (task watchdog 5 s) |
+
+- **Wi-Fi AP:** SSID `Suckboxx`, salasana `alipaine123`, kanava 1, enintään 4 asiakasta
+  (bring-up-firmwaren arvot), `WiFi.persistent(false)`, jotta asetuksia ei kirjoiteta
+  flashiin. `setSleep(false)` ei vaikuta pelkässä AP-tilassa (WiFiGeneric.cpp), mutta se
+  jätetään paikalleen.
+- **Käännösliput:** `SBX_SAMPLE_SOURCE` valitsee oletuslähteen (`esp32dev_adc`,
+  `esp32dev_hx`), `SSE_MAX_QUEUED_MESSAGES=8` (hitaalle asiakkaalle enintään ~0,5 s vanhaa
+  dataa) ja `CORE_DEBUG_LEVEL=0` (kirjaston loki odottaisi sarjaporttia).
 - **NVS** (`Preferences`, nimiavaruus `sbx`): konfiguraatio kenttä kerrallaan rekisterin
   kautta (§4.4) ja skeemaversio; kalibroinnista vain gainit ja `gain_valid` (D11: nollaus ei
   ole pysyvä). Tallennus dirty-lipuista viiveellä, jotta flash ei kulu.
