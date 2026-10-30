@@ -8,7 +8,7 @@ Tässä on tila ja avoimet asiat, jotta jatko onnistuu ilman istunnon lokeja.
 ```sh
 cd firmware
 pio test -e native        # oikea Unity; vrt. tools/run_native_tests.sh (shim + ASan/UBSan)
-pio run -e esp32dev       # HUOM: src/main.cpp on yhä vanha HX710B-bring-up (M3 korvaa)
+pio run -e esp32dev       # HUOM: src/main.cpp on XGZP6847A-ADC-bring-up, ei vielä core/-logiikkaa (M3 korvaa)
 cd ..
 python3 tools/mock_server.py   # UI selaimeen simulaattoria vasten (http://localhost:8000)
 python3 tools/embed_web.py --check
@@ -16,9 +16,9 @@ python3 tools/embed_web.py --selftest
 python3 tools/mock_server.py --check-config
 ```
 
-ESP32-käännöstä ja `pio test` -ajoa ei ole ajettu kertaakaan, koska PlatformIO-rekisteri
-oli estetty pilviympäristössä. Odotettavissa on GCC 8.4 -yhteensopivuuskorjauksia (koodi
-käyttää vain C++17:ää, joka GCC 8:ssa on). `[env:native]`-ympäristössä ei ole `-Werror`ia,
+Ajettu pöytäkoneella 30.10.2026 (XGZP-bring-upin yhdistämisen jälkeen): `pio run -e esp32dev`
+onnistuu ilman korjauksia (espressif32 6.9.0, GCC 8.4), ja `pio test -e native` antaa 205/205.
+Laite on flashattu XGZP-bring-upilla. `[env:native]`-ympäristössä ei ole `-Werror`ia,
 joten varoitukset eivät kaada `pio test`-ajoa. Kaikki testit kääntyvät silti -O2- ja
 -Os-tasoilla ilman varoituksia (`-Wall -Wextra -Wshadow -Wdouble-promotion -Werror`).
 
