@@ -220,7 +220,7 @@ void test_fractional_boundary_single_cycle_mean() {
   }
   msg("yhden syklin keskiarvon maksimivirhe %.4f kPa (%.0f sykliä)", static_cast<double>(worst),
       static_cast<double>(checked));
-  TEST_ASSERT_GREATER_THAN(250, checked);
+  TEST_ASSERT_GREATER_THAN(130, checked);  // 3 s / 21,8 ms
   TEST_ASSERT_LESS_THAN_FLOAT(0.05f, worst);
 }
 
@@ -237,7 +237,9 @@ void test_crosstalk_does_not_triple_rpm() {
 
     // Varmistetaan, että signaali todella on haastava: naiivi ilmaisin
     // (suodatettu signaali ylittää keskiarvonsa alaspäin) laskee
-    // vuotopulssit omiksi sykleikseen -> ~3 per moottorisykli.
+    // vuotopulssit omiksi sykleikseen -> ~3 per moottorisykli. 3000 rpm:ssä
+    // vuotopulssien perustaajuus on 75 Hz, jonka 40 Hz:n alipäästö jo
+    // vaimentaa, joten haaste koskee vain alempia kierroksia.
     sbx::ButterLp4 lp;
     lp.setup(40.0f, 1000.0f);
     bool primed = false;
@@ -260,7 +262,7 @@ void test_crosstalk_does_not_triple_rpm() {
       }
     }
     const int engine = static_cast<int>(g_rig.syn.cyclesStarted() - c0);
-    TEST_ASSERT_GREATER_THAN(engine * 5 / 2, naive);
+    if (rpm <= 1500.0f) TEST_ASSERT_GREATER_THAN(engine * 5 / 2, naive);
 
     const uint32_t start_cycles = g_rig.dsp.channel(1).cycles;
     const uint32_t start_engine = g_rig.syn.cyclesStarted();
@@ -332,10 +334,13 @@ void test_has_pulse_within_three_cycles_of_plug_in() {
   // DSP käynnistyy käyvän moottorin signaaliin satunnaisessa vaiheessa, myös
   // keskeltä vuotopulssia (xtalk). Ensimmäisen hyväksytyn syklin on oltava
   // oikea: väärä ensimmäinen sykli näkyisi 8 syklin ajan keskiarvossa.
-  const float phases[] = {0.0f, 0.2f, 0.37f, 0.6f, 0.85f};
+  // Pahin tapaus ~3,4 sykliä: ensimmäinen oma pulssi osuu suotimen
+  // asettumisaikaan (37,5 ms), ja lukitus vaatii kolme samankokoista pulssia.
   const float xt[] = {0.0f, 0.3f};
+  int worst = 0;
   for (float x : xt) {
-    for (float ph : phases) {
+    for (int k = 0; k < 20; ++k) {
+      const float ph = 0.05f * static_cast<float>(k);
       SynthParams p = idleParams();
       p.start_phase = ph;
       p.xtalk = x;
@@ -357,60 +362,72 @@ void test_has_pulse_within_three_cycles_of_plug_in() {
       for (int c = 0; c < kChannels; ++c) {
         TEST_ASSERT_GREATER_OR_EQUAL(0, first[c]);
         TEST_ASSERT_LESS_OR_EQUAL(static_cast<int>(3.5f * period_ms), first[c]);
+        if (first[c] > worst) worst = first[c];
       }
     }
   }
+  msg("lukitus käyvään signaaliin: pahin %.0f ms = %.2f sykliä (850 rpm)", static_cast<double>(worst),
+      static_cast<double>(worst) / (120000.0 / 850.0));
 }
 
 void test_has_pulse_after_engine_start_from_atmosphere() {
   // Moottori seis (ilmanpaine + kohina) -> käynnistys suoraan -55 kPa:iin.
-  // Askel on vaikein tapaus verhokäyrälle: se on 2,5x pulssin korkuinen.
-  SynthParams p = idleParams();
-  p.engine_on = false;
-  g_rig.begin(p);
-  for (int i = 0; i < 3000; ++i) {
-    g_rig.step();
-    for (int c = 0; c < kChannels; ++c) TEST_ASSERT_FALSE(g_rig.dsp.channel(c).has_pulse);
+  // Askel on verhokäyrälle vaikein tapaus: se on 2,5x pulssin korkuinen, ja
+  // vanha verhokäyrä vanhenee vasta pisimmän sallitun jakson (rpm_min) jälkeen.
+  // Oikea käynnistys on loivempi (startti pyörittää ensin ~300 rpm).
+  int worst = 0;
+  for (int k = 0; k < 10; ++k) {
+    SynthParams p = idleParams();
+    p.engine_on = false;
+    p.xtalk = (k & 1) ? 0.3f : 0.0f;
+    p.seed = 100u + static_cast<uint32_t>(k);
+    g_rig.begin(p);
+    for (int i = 0; i < 3000 + 13 * k; ++i) {
+      g_rig.step();
+      for (int c = 0; c < kChannels; ++c) TEST_ASSERT_FALSE(g_rig.dsp.channel(c).has_pulse);
+    }
+    p.engine_on = true;
+    p.start_phase = 0.1f * static_cast<float>(k);
+    g_rig.syn.setParams(p);
+    int first = -1;
+    for (int i = 0; i < 2000 && first < 0; ++i) {
+      g_rig.step();
+      bool all = true;
+      for (int c = 0; c < kChannels; ++c) all = all && g_rig.dsp.channel(c).has_pulse;
+      if (all) first = i;
+    }
+    TEST_ASSERT_GREATER_OR_EQUAL(0, first);
+    TEST_ASSERT_LESS_THAN(1000, first);
+    if (first > worst) worst = first;
+    g_rig.run(2.0f);
+    for (int c = 0; c < kChannels; ++c) {
+      TEST_ASSERT_FLOAT_WITHIN(0.01f * p.rpm, p.rpm, g_rig.dsp.channel(c).rpm);
+      TEST_ASSERT_FLOAT_WITHIN(0.1f, g_rig.syn.trueMean(c), g_rig.dsp.channel(c).mean_kpa);
+    }
   }
-  p.engine_on = true;
-  p.start_phase = 0.0f;
-  g_rig.syn.setParams(p);
-  int first = -1;
-  for (int i = 0; i < 2000 && first < 0; ++i) {
-    g_rig.step();
-    bool all = true;
-    for (int c = 0; c < kChannels; ++c) all = all && g_rig.dsp.channel(c).has_pulse;
-    if (all) first = i;
-  }
-  msg("käynnistys ilmanpaineesta: kaikki kanavat pulssivat %.0f ms:n jälkeen", static_cast<double>(first));
-  TEST_ASSERT_GREATER_OR_EQUAL(0, first);
-  TEST_ASSERT_LESS_THAN(1000, first);
-  g_rig.run(2.0f);
-  for (int c = 0; c < kChannels; ++c) {
-    TEST_ASSERT_FLOAT_WITHIN(0.01f * p.rpm, p.rpm, g_rig.dsp.channel(c).rpm);
-    TEST_ASSERT_FLOAT_WITHIN(0.1f, g_rig.syn.trueMean(c), g_rig.dsp.channel(c).mean_kpa);
-  }
+  msg("käynnistys ilmanpaineesta: kaikki kanavat pulssivat viimeistään %.0f ms:n jälkeen",
+      static_cast<double>(worst));
 }
 
 void test_pulse_timeout_when_signal_goes_flat() {
+  // Seurataan, milloin viimeinen sykli hyväksyttiin; has_pulse putoaa
+  // tasan pulse_timeout_s (1000 näytettä) sen jälkeen. Indeksi 0 = pysähdys.
   SynthParams p = idleParams();
   g_rig.begin(p);
-  g_rig.run(3.0f);
-  TEST_ASSERT_TRUE(g_rig.dsp.rpm().valid);
-  p.engine_on = false;  // ilmanpaine + kohina (rivi 1 / 8)
-  g_rig.syn.setParams(p);
-
-  // Seurataan, milloin viimeinen sykli hyväksyttiin; has_pulse putoaa
-  // tasan pulse_timeout_s (1000 näytettä) sen jälkeen.
   int last_cycle[kChannels];
   int fell[kChannels];
   uint32_t prev[kChannels];
   for (int c = 0; c < kChannels; ++c) {
-    last_cycle[c] = -1;
+    last_cycle[c] = -100000;
     fell[c] = -1;
-    prev[c] = g_rig.dsp.channel(c).cycles;
+    prev[c] = 0;
   }
-  for (int i = 0; i < 6000; ++i) {
+  for (int i = -3000; i < 6000; ++i) {
+    if (i == 0) {
+      TEST_ASSERT_TRUE(g_rig.dsp.rpm().valid);
+      p.engine_on = false;  // ilmanpaine + kohina (rivi 1 / 8)
+      g_rig.syn.setParams(p);
+    }
     g_rig.step();
     for (int c = 0; c < kChannels; ++c) {
       const ChannelState& s = g_rig.dsp.channel(c);
@@ -418,11 +435,13 @@ void test_pulse_timeout_when_signal_goes_flat() {
         prev[c] = s.cycles;
         last_cycle[c] = i;
       }
-      if (fell[c] < 0 && !s.has_pulse) fell[c] = i;
+      if (i >= 0 && fell[c] < 0 && !s.has_pulse) fell[c] = i;
     }
   }
   for (int c = 0; c < kChannels; ++c) {
-    TEST_ASSERT_LESS_THAN(200, last_cycle[c]);  // pysähdyksen jälkeen ei uusia syklejä
+    // Viimeinen sykli päättyy viimeisen pulssin rajalle (suotimen viive ~15 ms).
+    TEST_ASSERT_GREATER_THAN(-200, last_cycle[c]);
+    TEST_ASSERT_LESS_THAN(50, last_cycle[c]);
     TEST_ASSERT_EQUAL_INT(last_cycle[c] + 1000, fell[c]);
     const ChannelState& s = g_rig.dsp.channel(c);
     TEST_ASSERT_FALSE(s.has_pulse);  // eikä kohina herättänyt sitä 5 s:n aikana
@@ -638,11 +657,14 @@ void test_avg_cycles_sets_response_and_noise() {
   msg("asettuminen sykleinä: avg 1 -> %.0f, 8 -> %.0f, 32 -> %.0f, 0 -> %.0f, 255 -> %.0f",
       static_cast<double>(n1), static_cast<double>(n8), static_cast<double>(n32), static_cast<double>(n0),
       static_cast<double>(n255));
-  // Muutos osuu ensimmäiseen sykliin osittain (vaiheesta riippuen), joten
-  // asettuminen vie avg_cycles + 0...1 sykliä.
-  TEST_ASSERT_INT_WITHIN(1, 2, n1);
-  TEST_ASSERT_INT_WITHIN(1, 9, n8);
-  TEST_ASSERT_INT_WITHIN(1, 33, n32);
+  // 0,1 kPa:n päähän 2 kPa:n askeleesta = 95 % uusista sykleistä, eli
+  // ceil(0,95 N) kokonaista sykliä; askel osuu kesken syklin, joten +0...1.
+  TEST_ASSERT_GREATER_OR_EQUAL(1, n1);
+  TEST_ASSERT_LESS_OR_EQUAL(2, n1);
+  TEST_ASSERT_GREATER_OR_EQUAL(8, n8);
+  TEST_ASSERT_LESS_OR_EQUAL(9, n8);
+  TEST_ASSERT_GREATER_OR_EQUAL(31, n32);
+  TEST_ASSERT_LESS_OR_EQUAL(32, n32);
   TEST_ASSERT_EQUAL_INT(n1, n0);
   TEST_ASSERT_EQUAL_INT(n32, n255);
 
@@ -652,6 +674,74 @@ void test_avg_cycles_sets_response_and_noise() {
       static_cast<double>(sd16));
   // Valkoisella kohinalla hajonta ~ 1/sqrt(N): 16 sykliä -> ~4x pienempi.
   TEST_ASSERT_GREATER_THAN_FLOAT(2.5f * sd16, sd1);
+}
+
+void test_filter_cutoff_changes_min_p2p_but_not_mean() {
+  // D1: säätöluku lasketaan suodattamattomasta signaalista, joten
+  // alipäästön rajataajuus ei saa siirtää keskiarvoa - vain diagnostiikan
+  // min/p2p:tä, jotka tulevat suodatetusta signaalista.
+  SynthParams p = idleParams();
+  p.rpm = 1500.0f;
+  DspParams dp;
+  float mean[2], p2p[2], mn[2];
+  const float cut[2] = {40.0f, 12.0f};
+  for (int k = 0; k < 2; ++k) {
+    dp.lp_cutoff_hz = cut[k];
+    g_rig.begin(p, dp);
+    g_rig.run(3.0f);
+    TEST_ASSERT_TRUE(g_rig.dsp.channel(0).has_pulse);
+    mean[k] = g_rig.dsp.channel(0).mean_kpa;
+    p2p[k] = g_rig.dsp.channel(0).p2p_kpa;
+    mn[k] = g_rig.dsp.channel(0).min_kpa;
+  }
+  msg("lp 40 Hz: p2p %.2f min %.2f ka %.3f | lp 12 Hz: p2p %.2f min %.2f ka %.3f",
+      static_cast<double>(p2p[0]), static_cast<double>(mn[0]), static_cast<double>(mean[0]),
+      static_cast<double>(p2p[1]), static_cast<double>(mn[1]), static_cast<double>(mean[1]));
+  TEST_ASSERT_FLOAT_WITHIN(0.05f, mean[0], mean[1]);
+  TEST_ASSERT_LESS_THAN_FLOAT(0.7f * p2p[0], p2p[1]);  // 1500 rpm: 12,5 Hz perustaajuus vaimenee
+  TEST_ASSERT_GREATER_THAN_FLOAT(mn[0] + 2.0f, mn[1]);  // pohja nousee
+}
+
+void test_hyst_min_sets_pulse_detection_floor() {
+  // Pienin hyväksyttävä pulssi = 3 x hyst_min_kpa (kohinasuoja, rivit 1/6).
+  SynthParams p = idleParams();
+  p.depth_kpa = 4.0f;  // suodatettu p2p ~4 kPa
+  p.res_kpa = 0.5f;
+  DspParams dp;
+  g_rig.begin(p, dp);  // oletus 0,3 kPa -> raja 0,9 kPa
+  g_rig.run(3.0f);
+  TEST_ASSERT_TRUE(g_rig.dsp.channel(0).has_pulse);
+  dp.hyst_min_kpa = 2.0f;  // raja 6 kPa
+  g_rig.begin(p, dp);
+  g_rig.run(3.0f);
+  for (int c = 0; c < kChannels; ++c) TEST_ASSERT_FALSE(g_rig.dsp.channel(c).has_pulse);
+}
+
+void test_pulse_timeout_parameter() {
+  SynthParams p = idleParams();
+  DspParams dp;
+  dp.pulse_timeout_s = 0.3f;
+  g_rig.begin(p, dp);
+  g_rig.run(3.0f);
+  p.engine_on = false;
+  g_rig.syn.setParams(p);
+  uint32_t prev = g_rig.dsp.channel(0).cycles;
+  int last = 0;
+  int fell = -1;
+  for (int i = 0; i < 1000 && fell < 0; ++i) {
+    g_rig.step();
+    const ChannelState& s = g_rig.dsp.channel(0);
+    if (s.cycles != prev) {
+      prev = s.cycles;
+      last = i;
+    }
+    if (!s.has_pulse) fell = i;
+  }
+  // Pysähdyksen jälkeen viimeinen sykli voi vielä valmistua (suotimen viive),
+  // joten last >= 0 ei ole varma; pudotus on kuitenkin 300 ms viimeisestä.
+  TEST_ASSERT_GREATER_THAN(0, fell);
+  TEST_ASSERT_LESS_OR_EQUAL(300, fell);
+  if (last > 0) TEST_ASSERT_EQUAL_INT(last + 300, fell);
 }
 
 void test_rpm_limits_reject_out_of_range_periods() {
@@ -770,11 +860,13 @@ void test_displayed_mean_noise_floor_at_idle() {
     g_rig.step();
     if (i % 20 != 0) continue;  // ~näyttötahti
     for (int c = 0; c < kChannels; ++c) {
-      const float v = g_rig.dsp.channel(c).mean_kpa;
+      // Poikkeama totuudesta, ei raaka -55 kPa: float-varianssi kumoutuisi.
+      const float v = g_rig.dsp.channel(c).mean_kpa - g_rig.syn.trueMean(c);
       s[c] += v;
       s2[c] += v * v;
     }
-    const float delta = g_rig.dsp.channel(0).mean_kpa - g_rig.dsp.channel(1).mean_kpa;
+    const float delta = g_rig.dsp.channel(0).mean_kpa - g_rig.dsp.channel(1).mean_kpa -
+                        (g_rig.syn.trueMean(0) - g_rig.syn.trueMean(1));
     d += delta;
     d2 += delta * delta;
     ++n;
@@ -783,7 +875,6 @@ void test_displayed_mean_noise_floor_at_idle() {
   float worst = 0.0f;
   for (int c = 0; c < kChannels; ++c) {
     const float mu = s[c] / fn;
-    // -55 kPa:n ympärillä float-kumoutuminen: lasketaan poikkeama erikseen.
     const float var = s2[c] / fn - mu * mu;
     const float sd = std::sqrt(var > 0.0f ? var : 0.0f);
     if (sd > worst) worst = sd;
@@ -834,6 +925,9 @@ int main() {
   RUN_TEST(test_saturation_flag_lasts_one_second);
   RUN_TEST(test_configure_resets_state);
   RUN_TEST(test_avg_cycles_sets_response_and_noise);
+  RUN_TEST(test_filter_cutoff_changes_min_p2p_but_not_mean);
+  RUN_TEST(test_hyst_min_sets_pulse_detection_floor);
+  RUN_TEST(test_pulse_timeout_parameter);
   RUN_TEST(test_rpm_limits_reject_out_of_range_periods);
   RUN_TEST(test_rpm_median_with_hose_off_and_validity);
   RUN_TEST(test_missed_pulse_does_not_halve_rpm);

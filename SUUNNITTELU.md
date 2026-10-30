@@ -11,6 +11,7 @@
 > | [docs/rauta.md](docs/rauta.md) | anturivalinta, kytkentä, mitoitus, pinnijako, PCB |
 > | [docs/hankinnat.md](docs/hankinnat.md) | osaluettelo, tilauskoodit, mitä *ei* kannata ostaa |
 > | [docs/firmware.md](docs/firmware.md) | firmware-arkkitehtuuri, moduulit, rajapinnat, web-API |
+> | [docs/jatko.md](docs/jatko.md) | M1/M2:n tila ja avoimet katselmointihavainnot (jatko pöytäkoneella) |
 > | [Suckboxx.md](Suckboxx.md) | lähtöaineisto: vapaamuotoinen spec + Geminin luonnos |
 > | [tools/](tools/) | mitoituslaskennat — kaikki luvut näissä dokumenteissa tulevat näistä |
 
@@ -523,8 +524,8 @@ Pivotit (dataloggeri, NMEA 2000, EFI) ovat tietoisesti ulkona.
 | # | vaihe | vaatii | tila |
 |---|---|---|---|
 | M0 | Päätökset D9–D14, arkkitehtuuri ([docs/firmware.md](docs/firmware.md)), testiympäristö | — | ✅ |
-| M1 | Simulaattori, DSP (syklit, D1-luvut, RPM), kalibrointi, konfiguraatio, rengaspuskuri, käytösmatriisi — kaikki native-testein | — | käynnissä |
-| M2 | Web-UI + PC-mock-palvelin (sama API kuin laitteella) | — | käynnissä |
+| M1 | Simulaattori, DSP (syklit, D1-luvut, RPM), kalibrointi, konfiguraatio, rengaspuskuri, käytösmatriisi — kaikki native-testein | — | kesken, ks. [docs/jatko.md](docs/jatko.md) |
+| M2 | Web-UI + PC-mock-palvelin (sama API kuin laitteella) | — | kesken, ks. [docs/jatko.md](docs/jatko.md) |
 | M3 | Processor + integraatiotestit simulaattorilla (jokainen §8:n rivi testinä) + ESP32-liima (1 kHz näytteenotto, NVS, SSE) | ESP32 | |
 | M4 | Laitteella simulaattorilla: UI puhelimessa, suorituskyky (näytteenoton jitter, heap, Wi-Fi) | ESP32 | |
 | M5 | XGZP-anturit protolevylle (rauta.md §6.6), ADC-lähde, penkkitesti T-haaralla | anturit | |

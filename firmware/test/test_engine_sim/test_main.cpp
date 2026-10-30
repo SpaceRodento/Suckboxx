@@ -288,27 +288,34 @@ void test_cycle_mean_equals_truth_with_noise_and_resonance() {
 }
 
 void test_sensor_gain_and_offset_error_applied() {
+  // Virheet niin suuria, että järjestys erottuu: oikea (1 + g)·P + offset ja väärä
+  // (1 + g)·(P + offset) eroavat g·offset:n verran, kanavalla 0 0.4 kPa ja
+  // kanavalla 2 0.24 kPa (toleranssi 0.05).
   SimParams p;
-  p.sensor_gain_err[0] = 0.02f;
-  p.sensor_gain_err[2] = -0.03f;
-  p.sensor_offset_kpa[0] = -0.8f;
+  p.sensor_gain_err[0] = 0.10f;
+  p.sensor_offset_kpa[0] = -4.0f;
   p.sensor_offset_kpa[1] = 0.6f;
+  p.sensor_gain_err[2] = -0.08f;
+  p.sensor_offset_kpa[2] = 3.0f;
   p.seed = 5;
   const SensorParams sp;
   const Rec r = run(p, 20000, sp);
+  // R4: anturi näkee (1 + g)·P + offset, joten nimellinen keskiarvo siirtyy.
+  const float expected[kChannels] = {1.10f * -55.0f - 4.0f,   // -64.5 (väärin -64.9)
+                                     -55.0f + 0.6f,           // -54.4
+                                     0.92f * -55.0f + 3.0f};  // -47.6 (väärin -47.84)
   for (int c = 0; c < kChannels; ++c) {
-    // R4: anturi näkee (1 + g)·P + offset, joten nimellinen keskiarvo siirtyy.
-    const float expected = (1.0f + p.sensor_gain_err[c]) * p.base_kpa + p.sensor_offset_kpa[c];
     const std::vector<float> t = cycleStarts(r.kpa[c], smoothLenFor(p.rpm));
     const size_t a = static_cast<size_t>(std::ceil(t.front()));
     const size_t b = static_cast<size_t>(std::ceil(t.back()));
-    TEST_ASSERT_FLOAT_WITHIN(0.05f, expected, meanOf(r.kpa[c], a, b));
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, expected[c], meanOf(r.kpa[c], a, b));
   }
-  // Ilmanpaineessa offset näkyy suoraan (automaattisen nollauksen peruste, rivi 1)...
+  // Ilmanpaineessa offset näkyy suoraan (automaattisen nollauksen peruste, rivi 1)
+  // eikä vahvistusvirhe vaikuta siihen: 2700 + 25·(-4) = 2600 (väärin 2590)...
   p.engine_on = false;
   p.noise_mv = 0.0f;
   const Rec off = run(p, 100, sp);
-  TEST_ASSERT_EQUAL_UINT16(2680, off.mv[0][50]);  // 2700 + 25·(-0.8)
+  TEST_ASSERT_EQUAL_UINT16(2600, off.mv[0][50]);
   // ...paitsi positiivinen offset, joka GN-anturilla leikkautuu 2700 mV:iin (D4/H1).
   TEST_ASSERT_EQUAL_UINT16(2700, off.mv[1][50]);
   TEST_ASSERT_EQUAL_UINT16(2700, off.mv[2][50]);
@@ -452,10 +459,12 @@ void test_drift_changes_true_rpm_and_period() {
     const float measured = 120.0f * kFs / (t[k] - t[k - 1]);
     TEST_ASSERT_FLOAT_WITHIN(expected * 0.01f, expected, measured);
   }
-  // Pelkän driftin muutos jatkaa nykyisestä kierrosluvusta (ei hyppyä 850:een).
+  // Pelkän driftin muutos jatkaa nykyisestä kierrosluvusta (ei hyppyä 850:een),
+  // ja asetusarvo seuraa mukana: params() kertoo, missä simulaattori pysyy.
   p.rpm_drift = 0.0f;
   sim.configure(p, sp);
   TEST_ASSERT_FLOAT_WITHIN(0.1f, 1150.0f, sim.trueRpm());
+  TEST_ASSERT_EQUAL_FLOAT(sim.trueRpm(), sim.params().rpm);
   for (int i = 0; i < 1000; ++i) sim.next();
   TEST_ASSERT_FLOAT_WITHIN(0.1f, 1150.0f, sim.trueRpm());
   // Uusi asetusarvo tulee voimaan heti.
@@ -468,6 +477,73 @@ void test_drift_changes_true_rpm_and_period() {
   sim.configure(p, sp);
   for (int i = 0; i < 2000; ++i) sim.next();
   TEST_ASSERT_EQUAL_FLOAT(EngineSim::kRpmMin, sim.trueRpm());
+}
+
+// UI:n kulku rivin 5 testaukseen: GET /api/sim = params(), POST = osajoukko
+// avaimia yhdistettynä params():iin. Paluu alkuperäiseen kierroslukuun driftin
+// jälkeen ei saa ohittua hiljaa.
+void test_rpm_returns_to_original_after_drift() {
+  const SensorParams sp;
+  EngineSim sim;
+  sim.configure(quiet(), sp);
+  for (int i = 0; i < 500; ++i) sim.next();
+  // POST drift=100: ankkuroi nykyiseen 850:een.
+  SimParams q = sim.params();
+  q.rpm_drift = 100.0f;
+  sim.configure(q, sp);
+  TEST_ASSERT_EQUAL_FLOAT(850.0f, sim.params().rpm);
+  for (int i = 0; i < 3000; ++i) sim.next();
+  TEST_ASSERT_FLOAT_WITHIN(0.1f, 1150.0f, sim.trueRpm());
+  // POST drift=0: pysyy 1150:ssä, ja GET näyttää sen.
+  q = sim.params();
+  q.rpm_drift = 0.0f;
+  sim.configure(q, sp);
+  TEST_ASSERT_FLOAT_WITHIN(0.1f, 1150.0f, sim.trueRpm());
+  TEST_ASSERT_EQUAL_FLOAT(sim.trueRpm(), sim.params().rpm);
+  // GET + POST ilman muutoksia (esim. toisen avaimen POST) ei siirrä kierroslukua.
+  sim.configure(sim.params(), sp);
+  for (int i = 0; i < 1000; ++i) sim.next();
+  TEST_ASSERT_FLOAT_WITHIN(0.1f, 1150.0f, sim.trueRpm());
+  // POST rpm=850: alkuperäinen arvo on nyt muutos ja tulee voimaan heti.
+  q = sim.params();
+  q.rpm = 850.0f;
+  sim.configure(q, sp);
+  TEST_ASSERT_EQUAL_FLOAT(850.0f, sim.trueRpm());
+  TEST_ASSERT_EQUAL_FLOAT(850.0f, sim.params().rpm);
+  // Ja signaali todella pyörii 850:llä, ei vain totuusarvo.
+  Rec r;
+  record(sim, 3000, sp, r);
+  float mean = 0.0f, sd = 0.0f;
+  std::vector<float> t = cycleStarts(r.kpa[0], 9);
+  t.erase(t.begin());  // ensimmäinen reuna voi kuulua kuoppaan, joka alkoi ennen muutosta
+  periodStats(t, mean, sd);
+  TEST_ASSERT_FLOAT_WITHIN(0.1f, periodSamples(850.0f), mean);
+
+  // Yhdistetty POST kesken driftin: "drift=0&rpm=850", kun params().rpm on yhä
+  // driftin lähtöarvo 850. Ilman rpm_set:iä se on sama kuin pelkkä drift=0.
+  q = sim.params();
+  q.rpm_drift = 100.0f;
+  sim.configure(q, sp);
+  for (int i = 0; i < 2000; ++i) sim.next();
+  TEST_ASSERT_FLOAT_WITHIN(0.1f, 1050.0f, sim.trueRpm());
+  q = sim.params();
+  TEST_ASSERT_EQUAL_FLOAT(850.0f, q.rpm);
+  q.rpm_drift = 0.0f;
+  q.rpm = 850.0f;
+  EngineSim held = sim;
+  held.configure(q, sp);
+  TEST_ASSERT_FLOAT_WITHIN(0.1f, 1050.0f, held.trueRpm());
+  // rpm-avain mukana -> rpm_set: palaa 850:een.
+  sim.configure(q, sp, true);
+  TEST_ASSERT_EQUAL_FLOAT(850.0f, sim.trueRpm());
+  for (int i = 0; i < 1000; ++i) sim.next();
+  TEST_ASSERT_EQUAL_FLOAT(850.0f, sim.trueRpm());
+  // POST rpm=850&drift=80 tasaisesta 850:stä: drift lähtee 850:stä.
+  q = sim.params();
+  q.rpm_drift = 80.0f;
+  sim.configure(q, sp, true);
+  for (int i = 0; i < 1000; ++i) sim.next();
+  TEST_ASSERT_FLOAT_WITHIN(0.1f, 930.0f, sim.trueRpm());
 }
 
 // ---------------------------------------------------------------------------
@@ -521,6 +597,11 @@ void test_engine_restart_resumes_without_reset() {
 void test_hose_off_channel_sees_atmosphere_others_pulse() {
   SimParams p;
   p.fault[1] = SimFault::HoseOff;
+  // Ristivuoto ja resonanssi päällä: irti olevan letkun anturi ei näe niitäkään,
+  // koska tasauskanavat ja letku ovat moottorin puolella (rivi 6).
+  p.xtalk = 0.3f;
+  p.res_kpa = 3.0f;
+  p.peak_kpa = 5.0f;
   EngineSim sim;
   const SensorParams sp;
   sim.configure(p, sp);
@@ -529,6 +610,8 @@ void test_hose_off_channel_sees_atmosphere_others_pulse() {
   TEST_ASSERT_EQUAL_FLOAT(0.0f, sim.trueMeanKpa(1));
   TEST_ASSERT_EQUAL_FLOAT(p.base_kpa, sim.trueMeanKpa(0));
   TEST_ASSERT_FLOAT_WITHIN(0.3f, 2700.0f, meanMv(r.mv[1]));
+  // Pelkkä 2 mV:n ADC-kohina; 0.3·20 kPa:n vuotokuoppa olisi 150 mV.
+  TEST_ASSERT_FLOAT_WITHIN(0.3f, 2.0f, sdMv(r.mv[1]));
   for (uint16_t v : r.mv[1]) TEST_ASSERT_INT_WITHIN(7, 2700, v);
   for (int c = 0; c < kChannels; c += 2) {
     uint16_t lo = 0xFFFF, hi = 0;
@@ -758,6 +841,20 @@ void test_configure_with_identical_params_keeps_stream() {
     if (!sameFrame(a.next(), b.next())) TEST_FAIL_MESSAGE("configure() katkaisi virran");
   }
   TEST_ASSERT_EQUAL_FLOAT(b.trueRpm(), a.trueRpm());
+  // UI:n esiasetusnapit lähettävät aina rpm:n (rpm_set). Ilman driftiä sama arvo
+  // ei saa muuttaa virtaa bittiäkään.
+  p.rpm_drift = 0.0f;
+  EngineSim c, d;
+  c.configure(p, sp);
+  d.configure(p, sp);
+  for (int i = 0; i < 1234; ++i) {
+    c.next();
+    d.next();
+  }
+  c.configure(p, sp, true);
+  for (int i = 0; i < 5000; ++i) {
+    if (!sameFrame(c.next(), d.next())) TEST_FAIL_MESSAGE("rpm_set samalla rpm:llä katkaisi virran");
+  }
 }
 
 void test_configure_rpm_change_keeps_phase() {
@@ -766,19 +863,27 @@ void test_configure_rpm_change_keeps_phase() {
   EngineSim sim;
   sim.configure(p, sp);
   Rec r;
-  record(sim, 1070, sp, r);  // keskellä sykliä
-  uint16_t prev = r.mv[0].back();
+  // Muutos SYL 1:n kuopan pohjalla: viimeinen näyte 1005 on vaiheessa
+  // 1005/141.18 = 7.119 -> psi 0.119 (pohja 0.125), noin -72.4 kPa = 891 mV.
+  // Jos vaihe nollautuisi, seuraava näyte olisi kuoppien välisellä tasolla
+  // -52.5 kPa = 1388 mV, eli ~500 mV:n hyppy.
+  record(sim, 1006, sp, r);
+  TEST_ASSERT_INT_WITHIN(5, 891, r.mv[0].back());  // testikohta on herkkä
   p.rpm = 870.0f;
   sim.configure(p, sp);
   const RawFrame f = sim.next();
-  // Normaali näytteiden välinen muutos: suurin kuopan reunalla
-  // depth·π/w / T ≈ 20·π/0.25/141 ≈ 1.8 kPa ≈ 45 mV.
-  int max_step = 0;
-  for (size_t i = 1; i < r.mv[0].size(); ++i) {
-    const int s = std::abs(static_cast<int>(r.mv[0][i]) - static_cast<int>(r.mv[0][i - 1]));
-    max_step = s > max_step ? s : max_step;
+  for (int c = 0; c < kChannels; ++c) {
+    // Normaali näytteiden välinen muutos: suurin kuopan reunalla
+    // depth·π/w / T ≈ 20·π/0.25/141 ≈ 1.8 kPa ≈ 45 mV.
+    int max_step = 0;
+    for (size_t i = 1; i < r.mv[c].size(); ++i) {
+      const int s = std::abs(static_cast<int>(r.mv[c][i]) - static_cast<int>(r.mv[c][i - 1]));
+      max_step = s > max_step ? s : max_step;
+    }
+    TEST_ASSERT_INT_WITHIN(5, 45, max_step);
+    const int step = std::abs(static_cast<int>(f.mv[c]) - static_cast<int>(r.mv[c].back()));
+    TEST_ASSERT_LESS_OR_EQUAL(max_step + 1, step);
   }
-  TEST_ASSERT_LESS_OR_EQUAL(max_step + 1, std::abs(static_cast<int>(f.mv[0]) - static_cast<int>(prev)));
   r.mv[0].push_back(f.mv[0]);
   r.kpa[0].push_back(toKpa(f.mv[0], sp));
   record(sim, 3000, sp, r);
@@ -842,6 +947,54 @@ void test_extreme_params_stay_in_range() {
   TEST_ASSERT_GREATER_THAN(200, hi - lo);
 }
 
+void test_resonator_survives_extreme_decay() {
+  const float inf = std::numeric_limits<float>::infinity();
+  const SensorParams sp;
+  // Vaimentamaton ja lähes nollataajuinen resonaattori: ilman decay-rajaa
+  // |1 - ρ| = 0 -> heräte 0/0 = NaN, joka jäisi tilaan configure():n yli.
+  SimParams p;
+  p.res_decay_s = inf;
+  p.res_hz[0] = 1e-30f;
+  p.res_hz[1] = 100.0f;
+  p.res_hz[2] = std::numeric_limits<float>::denorm_min();
+  EngineSim sim;
+  sim.configure(p, sp);
+  for (int i = 0; i < 3000; ++i) sim.next();
+  // Takaisin oletuksiin (UI ei edes pysty asettamaan decayta): kanavat pulssaavat
+  // normaalisti. Alkuun mahdollinen vaimeneva jälkisoitto (τ 20 ms) saa mennä.
+  sim.configure(SimParams(), sp);
+  for (int i = 0; i < 500; ++i) sim.next();
+  Rec r;
+  record(sim, 3000, sp, r);
+  for (int c = 0; c < kChannels; ++c) {
+    uint16_t lo = 0xFFFF, hi = 0;
+    for (uint16_t v : r.mv[c]) {
+      lo = v < lo ? v : lo;
+      hi = v > hi ? v : hi;
+    }
+    // Oletuksilla -55 kPa, kuoppa 20, resonanssi ±3: noin 800…1470 mV.
+    TEST_ASSERT_GREATER_THAN(700, lo);
+    TEST_ASSERT_LESS_THAN(1550, hi);
+    TEST_ASSERT_GREATER_THAN(15 * 25, hi - lo);
+  }
+  // Valtava decay resonanssiin osuvalla taajuudella (100 Hz = 20 × 600 rpm:n
+  // syklitaajuus 5 Hz): herätteet kertyvät, mutta 1 s:n raja pitää kertymän
+  // amp/(1 - e^-0.2) ≈ 16.5 kPa:ssa, joten ulostulo ei leikkaudu kummastakaan
+  // päästä: -55 - 17.5 - 16.5 = -89 kPa = 475 mV ... -55 + 2.5 + 16.5 = -36 kPa = 1800 mV.
+  SimParams q;
+  q.rpm = 600.0f;
+  q.rpm_jitter = 0.0f;
+  q.res_decay_s = 1e30f;
+  q.res_hz[0] = q.res_hz[1] = q.res_hz[2] = 100.0f;
+  const Rec g = run(q, 20000, sp);
+  for (int c = 0; c < kChannels; ++c) {
+    for (uint16_t v : g.mv[c]) {
+      TEST_ASSERT_GREATER_THAN(440, v);
+      TEST_ASSERT_LESS_THAN(1840, v);
+    }
+  }
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_same_seed_gives_identical_stream);
@@ -854,6 +1007,7 @@ int main() {
   RUN_TEST(test_cylinders_are_one_third_cycle_apart);
   RUN_TEST(test_jitter_sets_period_sd_on_every_channel);
   RUN_TEST(test_drift_changes_true_rpm_and_period);
+  RUN_TEST(test_rpm_returns_to_original_after_drift);
   RUN_TEST(test_engine_off_reads_atmosphere);
   RUN_TEST(test_engine_restart_resumes_without_reset);
   RUN_TEST(test_hose_off_channel_sees_atmosphere_others_pulse);
@@ -865,5 +1019,6 @@ int main() {
   RUN_TEST(test_configure_with_identical_params_keeps_stream);
   RUN_TEST(test_configure_rpm_change_keeps_phase);
   RUN_TEST(test_extreme_params_stay_in_range);
+  RUN_TEST(test_resonator_survives_extreme_decay);
   return UNITY_END();
 }
