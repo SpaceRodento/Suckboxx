@@ -7,6 +7,7 @@ kehittää ja testata PC:llä ilman ESP32:ta. Pelkkä Pythonin standardikirjasto
 
     python3 tools/mock_server.py                 # http://localhost:8000
     python3 tools/mock_server.py --port 8080 --sensor-err
+    python3 tools/mock_server.py --minified      # sama minimoitu sivu kuin laitteella
     python3 tools/mock_server.py --check-config  # rekisteri vs. config.h/types.h
 
 Mock ajaa pienen moottorisimulaation 1 kHz:llä (sama malli kuin
@@ -87,8 +88,8 @@ CONFIG_FIELDS = [
     ("rpm_hist", "u8", 2, 64, 16, G_SIG, "", "Jaksoja kierroslukuhajontaan"),
     ("v_zero_mv", "float", 1000.0, 3300.0, 2700.0, G_SENS, "mV", "Anturin jännite 0 kPa:ssa"),
     ("mv_per_kpa", "float", 5.0, 50.0, 25.0, G_SENS, "mV/kPa", "Anturin herkkyys"),
-    ("fault_lo_mv", "u16", 0, 500, 100, G_SENS, "mV", "Anturivika: jännite alle"),
-    ("fault_hi_mv", "u16", 2500, 3300, 3150, G_SENS, "mV", "Anturivika: jännite yli"),
+    ("fault_lo_mv", "u16", 50, 500, 100, G_SENS, "mV", "Anturivika: jännite alle"),
+    ("fault_hi_mv", "u16", 2500, 3250, 3150, G_SENS, "mV", "Anturivika: jännite yli"),
     ("fault_hold_s", "float", 0.1, 10.0, 1.0, G_SENS, "s", "Anturivika: kesto ennen hälytystä"),
     ("sat_mv", "u16", 1000, 3300, 2680, G_SENS, "mV", "Saturaatiovaroitus: jännite vähintään"),
     ("rail_comp", "bool", 0, 1, False, G_SENS, "", "Kiskojännitteen korjaus (R6)"),
@@ -1167,6 +1168,21 @@ class Device:
 # ---------------------------------------------------------------------------
 # HTTP
 # ---------------------------------------------------------------------------
+_EMBED = []
+
+
+def _embed_web():
+    """tools/embed_web.py tiedostopolusta (ei riipu sys.pathista)."""
+    if not _EMBED:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "embed_web", os.path.join(ROOT, "tools", "embed_web.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _EMBED.append(mod)
+    return _EMBED[0]
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "SuckboxxMock/1"
     dev = None  # asetetaan main():ssa
@@ -1202,11 +1218,17 @@ class Handler(BaseHTTPRequestHandler):
         if dev.rebooting() and path != "/":
             return self._send(503, "laite käynnistyy uudelleen", "text/plain; charset=utf-8")
         if path in ("/", "/index.html"):
+            # Luetaan joka kerta: muokkaa + päivitä selain. --minified tarjoilee
+            # täsmälleen saman minimoidun sivun, jonka embed_web.py upottaa
+            # laitteelle (web_page.h), jotta testit ajetaan oikeaa versiota vastaan.
             try:
-                with open(INDEX_HTML, "rb") as f:  # luetaan joka kerta: muokkaa + päivitä selain
-                    body = f.read()
-            except OSError as e:
-                return self._send(500, "web/index.html puuttuu: %s" % e, "text/plain; charset=utf-8")
+                if self.server.minified:
+                    body = _embed_web().page_html(INDEX_HTML).encode("utf-8")
+                else:
+                    with open(INDEX_HTML, "rb") as f:
+                        body = f.read()
+            except Exception as e:  # OSError tai embed_web.EmbedError
+                return self._send(500, "web/index.html: %s" % e, "text/plain; charset=utf-8")
             return self._send(200, body, "text/html; charset=utf-8")
         if path == "/events":
             return self._sse()
@@ -1336,6 +1358,8 @@ def main():
                     help="anturien R4-virheet (offset < 1 kPa, gain ±2,5 %%) simulaattoriin")
     ap.add_argument("--calibrated", action="store_true",
                     help="käynnisty nollattuna ja vahvistuskalibroituna")
+    ap.add_argument("--minified", action="store_true",
+                    help="tarjoile web/index.html minimoituna kuten laitteella (tools/embed_web.py)")
     ap.add_argument("--verbose", action="store_true", help="HTTP-loki")
     ap.add_argument("--check-config", action="store_true",
                     help="vertaa rekisteriä config.h/types.h:hon ja lopeta")
@@ -1350,6 +1374,7 @@ def main():
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
     srv.daemon_threads = True
     srv.verbose = args.verbose
+    srv.minified = args.minified
     print("Suckboxx mock: http://localhost:%d  (Ctrl+C lopettaa)" % args.port, flush=True)
     try:
         srv.serve_forever(poll_interval=0.2)
