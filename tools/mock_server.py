@@ -87,8 +87,8 @@ CONFIG_FIELDS = [
     ("rpm_hist", "u8", 2, 64, 16, G_SIG, "", "Jaksoja kierroslukuhajontaan"),
     ("v_zero_mv", "float", 1000.0, 3300.0, 2700.0, G_SENS, "mV", "Anturin jännite 0 kPa:ssa"),
     ("mv_per_kpa", "float", 5.0, 50.0, 25.0, G_SENS, "mV/kPa", "Anturin herkkyys"),
-    ("fault_lo_mv", "u16", 0, 500, 100, G_SENS, "mV", "Anturivika: jännite alle"),
-    ("fault_hi_mv", "u16", 2500, 3300, 3150, G_SENS, "mV", "Anturivika: jännite yli"),
+    ("fault_lo_mv", "u16", 50, 500, 100, G_SENS, "mV", "Anturivika: jännite alle"),
+    ("fault_hi_mv", "u16", 2500, 3250, 3150, G_SENS, "mV", "Anturivika: jännite yli"),
     ("fault_hold_s", "float", 0.1, 10.0, 1.0, G_SENS, "s", "Anturivika: kesto ennen hälytystä"),
     ("sat_mv", "u16", 1000, 3300, 2680, G_SENS, "mV", "Saturaatiovaroitus: jännite vähintään"),
     ("rail_comp", "bool", 0, 1, False, G_SENS, "", "Kiskojännitteen korjaus (R6)"),
@@ -339,7 +339,10 @@ class Engine:
             self.anchor = self._clamp_rpm(p["rpm"])
             self.n = 0
         elif drift_changed:
+            # engine_sim.h configure(): uusi asetusarvo = kierrosluku, jossa ollaan nyt
+            # (p_.rpm = rpm_now). Device.api_sim_set vie saman arvon dev.sim['rpm']:ään.
             self.anchor = rpm_now
+            self.p["rpm"] = rpm_now
             self.n = 0
 
     @staticmethod
@@ -1058,6 +1061,11 @@ class Device:
             if err:
                 return {"ok": False, "err": err}
             self.engine.configure(self.sim, rpm_posted=any(k == "rpm" for k, _ in pairs))
+            # Moottorisimulaattori on parametrien omistaja (laitteella: /api/sim yhdistää POSTin
+            # sim.params():iin). Driftin muutos kirjaa nykyisen rpm:n engine.p['rpm']:ään, joten se
+            # vie dev.sim:iin: muuten GET /api/sim näyttäisi vanhan arvon ja seuraava POST hyppäisi
+            # takaisin siihen (docs/firmware.md §4.1).
+            self.sim["rpm"] = self.engine.p["rpm"]
             return {"ok": True}
 
     # --- snapshot ------------------------------------------------------------
