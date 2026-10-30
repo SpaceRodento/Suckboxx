@@ -1,0 +1,5 @@
+# Rivinvaihdot: kaikki tekstitiedostot LF:nä kaikilla koneilla. Windowsin
+# core.autocrlf=true kirjoittaisi checkoutissa CRLF:n, jolloin WSL:n bash kaatuu
+# (`$'\r': command not found`, todettu tools/run_native_tests.sh:lla 30.10.2026)
+# ja tools/embed_web.py upottaisi eri tavut eri koneilla. Malli PlantMeisteristä.
+* text=auto eol=lf

@@ -357,6 +357,12 @@ Sim-avaimet: `engine_on` (0/1), `rpm`, `jitter`, `drift`, `base`, `err1`, `err2`
 - **Native:** `tools/run_native_tests.sh [test_x …]` (g++, ASan/UBSan, `-Werror`), tai
   PlatformIOlla `pio test -e native`. Sallitut Unity-makrot: ks.
   [tools/native_test/unity.h](../tools/native_test/unity.h) — käytä vain niitä.
+  Windowsilla molemmat ajetaan WSL:ssä (MinGW-g++:sta puuttuu ASan), Git Bashista
+  `wsl --cd "$(pwd -W)" -- bash tools/run_native_tests.sh`.
+- **GCC 8.4:** `tools/check_core_gcc84.sh [x.h …]` kääntää jokaisen core-headerin yksinään
+  ESP32:n omalla kääntäjällä samoilla varoituksilla. Native-g++ on uudempi eikä huomaa
+  §1:n kohdan 6 rajoituksia (esim. liukulukujen `std::to_chars`). Vaatii PlatformIOn
+  ESP32-työkaluketjun, eli toimii kehittäjän koneella.
 - **UI:** `python3 tools/mock_server.py` → selain `http://localhost:8000`.
 - **ESP32-käännös** tehdään kehittäjän koneella (`pio run`). Pilviympäristössä
   PlatformIO-rekisteri ei ole saatavilla.
