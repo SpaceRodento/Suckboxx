@@ -107,8 +107,8 @@ SET_RESULT_TEXT = {
 
 CAL_TEXT = {  # calibration.h calResultText
     "Ok": "Kalibrointi onnistui",
-    "NotAtmosphere": "Nollaus hylätty: kanavassa on alipainetta. Sammuta moottori tai irrota "
-                     "letkut ja yritä uudelleen",
+    "NotAtmosphere": "Nollaus hylätty: kanava ei näytä ilmanpainetta. Sammuta moottori ja "
+                     "päästä alipaine letkuista; jos se ei auta, tarkista v_zero_mv ja mv_per_kpa",
     "NotStable": "Paine vaihteli mittauksen aikana. Tarkista ettei pumppu tai T-haara vuoda ja "
                  "pidä alipaine tasaisena",
     "TooSmall": "Alipaine liian pieni. Pumppaa vähintään 15 kPa (mieluiten 40–60 kPa) ja "
@@ -117,6 +117,8 @@ CAL_TEXT = {  # calibration.h calResultText
                 "T-haarassa eikä mikään vuoda",
     "GainOutOfRange": "Anturin herkkyys poikkeaa yli 15 %. Tarkista anturityyppi (GN/GPN, "
                       "3,3 V / 5 V) ja anturiasetukset v_zero_mv ja mv_per_kpa",
+    "NoZero": "Nollaus puuttuu. Päästä alipaine pois (letkut ilmanpaineeseen), tee vaihe 1 "
+              "Nollaa ja toista sitten vahvistuskalibrointi",
 }
 
 
@@ -966,6 +968,10 @@ class Device:
             self.cal_msg = CAL_TEXT[self._compute_gain(cap["mean"], sd)]
 
     def _compute_gain(self, mean, sd):
+        # Sama järjestys kuin calibration.h computeGain: NoZero, TooSmall, NotStable,
+        # Mismatch, GainOutOfRange.
+        if not self.zero_valid:
+            return "NoZero"
         z = []
         cc = []
         for i in range(KCH):
@@ -977,7 +983,8 @@ class Device:
             return "TooSmall"
         if not all(s < 0.5 for s in sd):
             return "NotStable"
-        if not all(abs(c - ref) <= 0.15 * abs(ref) for c in cc):
+        # Pareittainen ehto: max − min ≤ 15 % · min |c|.
+        if not max(cc) - min(cc) <= 0.15 * min(abs(c) for c in cc):
             return "Mismatch"
         g_new = [ref / c for c in cc]
         if not all(0.85 <= g <= 1.15 for g in g_new):

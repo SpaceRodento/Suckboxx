@@ -472,14 +472,17 @@ class StatusMachine {
     for (int i = 0; i < kChannels; ++i) {
       if (cond[i] == c1 || cond[i] == c2) idx[n++] = i;
     }
+    // Numerot merkkeinä (%c): GCC ei näe, että idx < kChannels, ja varoittaisi
+    // %d:n mahdollisesta katkeamisesta (-Wformat-truncation).
+    char d[kChannels];
+    for (int i = 0; i < n; ++i) d[i] = static_cast<char>('1' + idx[i]);
     out[0] = '\0';
     if (n == 1) {
-      std::snprintf(out, sizeof(out), "SYL %d", idx[0] + 1);
+      std::snprintf(out, sizeof(out), "SYL %c", d[0]);
     } else if (n == 2) {
-      std::snprintf(out, sizeof(out), "SYL %d ja SYL %d", idx[0] + 1, idx[1] + 1);
+      std::snprintf(out, sizeof(out), "SYL %c ja SYL %c", d[0], d[1]);
     } else if (n == 3) {
-      std::snprintf(out, sizeof(out), "SYL %d, SYL %d ja SYL %d", idx[0] + 1, idx[1] + 1,
-                    idx[2] + 1);
+      std::snprintf(out, sizeof(out), "SYL %c, SYL %c ja SYL %c", d[0], d[1], d[2]);
     }
   }
 

@@ -123,6 +123,10 @@ class EngineSim {
 }
 ```
 
+`/api/sim`-käsittelijä yhdistää POSTin `sim.params()`:iin ja välittää
+`rpm_set = (POST sisältää rpm-avaimen)`, jotta lomakkeen uudelleenlähetys palauttaa
+drift-kokeen jälkeen pyydetyn rpm:n (sama logiikka `tools/mock_server.py`:ssä).
+
 Vaatimukset: deterministinen (sama seed → samat näytteet), sylinterit 240° kampikulman
 (= ⅓ syklin) välein, pulssimuoto sellainen että sen keskiarvo syklin yli on **täsmälleen**
 `base + sync_err` (ennen anturivirheitä ja leikkautumista), ulostulo leikataan anturin
@@ -141,16 +145,23 @@ class Dsp {
   void push(const float (&kpa)[kChannels], const RawFrame& raw);
   const ChannelState& channel(int i) const;
   RpmEstimate rpm() const;
+  float lpGain(float f_hz) const;     // alipäästön |H(f)| (bilineaarinen Butterworth)
 };
 }
 ```
 
 - Syklintunnistus alipäästösuodatetusta signaalista (`lp_cutoff_hz`, resonanssi pois),
-  hystereesi `max(hyst_min_kpa, hyst_frac × p2p)`. Yksi sykli = yksi imupulssi = 2 kierrosta,
+  hystereesi `max(hyst_min_kpa, hyst_frac × A)` suhteellisena laukaisuna edellisestä
+  huipusta (A = pulssin amplitudi; lukittuna min(nousu, lasku), jotta painehyppy ei paisuta
+  sitä). Amplitudiportti `3 × hyst_min_kpa × |H(f_sykli)|` + jaksonpituuden johdonmukaisuus.
+  Sykli kirjataan vasta, kun sen päättänyt pulssi on nähty pohjaan asti (~10–35 ms
+  syklirajan jälkeen). Yksi sykli = yksi imupulssi = 2 kierrosta,
   **rpm = 120 / T**.
 - `mean_kpa` (D1) lasketaan **kalibroiduista suodattamattomista** näytteistä täsmälleen yhden
   syklin yli (resonanssi keskiarvoistuu pois kokonaisessa syklissä), sitten keskiarvo
-  `avg_cycles` viimeisimmän syklin yli. `min_kpa`/`p2p_kpa` suodatetusta signaalista.
+  `avg_cycles` viimeisimmän syklin yli. `min_kpa`/`p2p_kpa` suodatetusta signaalista;
+  `p2p_kpa` on pulssin nousu (lukittuna min(nousu, lasku)), tasaisessa käynnissä sama kuin
+  ikkunan p2p.
 - `xtalk` 0,3:een asti ei saa kolminkertaistaa rpm:ää (vuotopulssit ovat pienempiä).
 - `sensor_fault`: mV ulkona `[fault_lo_mv, fault_hi_mv]` yhtäjaksoisesti `fault_hold_s`.
   `saturated`: `mv ≥ sat_mv` havaittu viimeisen 1 s aikana.
@@ -166,12 +177,14 @@ float nominalKpa(uint16_t mv, uint16_t rail_mv, const SensorParams& sp);
 // nimellinen -> kalibroitu: gain * nominal + offset
 float applyCal(float nominal_kpa, int ch, const Calibration& cal);
 
-enum class CalResult : uint8_t { Ok, NotAtmosphere, NotStable, TooSmall, Mismatch, GainOutOfRange };
+enum class CalResult : uint8_t { Ok, NotAtmosphere, NotStable, TooSmall, Mismatch, GainOutOfRange,
+                                 NoZero };
 
 // Nollapiste: kanavat ilmanpaineessa -> offset niin että kalibroitu = 0. Säilyttää gainin.
 CalResult computeZero(const float (&nominal_level)[kChannels], float max_abs_kpa, Calibration& cal);
 // Vahvistus: kaikki kanavat samassa alipaineessa (T-haara) -> gain niin että kanavat täsmäävät
-// toisiinsa (referenssi = kanavien keskiarvo). Säilyttää nollapisteen.
+// toisiinsa (referenssi = kanavien keskiarvo). Säilyttää nollapisteen. Vaatii voimassa olevan
+// nollauksen (muuten NoZero), koska anturien omat offsetit menisivät muuten gainiin.
 CalResult computeGain(const float (&nominal_mean)[kChannels], const float (&nominal_sd)[kChannels],
                       Calibration& cal);
 const char* calResultText(CalResult r);   // suomeksi, UI:hin
@@ -183,7 +196,9 @@ class CalCapture { public: void reset(); void add(const float (&nominal)[kChanne
 ```
 
 Hyväksymisrajat (vakioina, perustelut kommentteihin): vahvistus vaatii |referenssi| ≥ 15 kPa,
-jokaisen kanavan sd < 0,5 kPa, kanavat 15 %:n sisällä toisistaan ja tuloksena gain 0,85…1,15.
+jokaisen kanavan sd < 0,5 kPa, kanavat 15 %:n sisällä toisistaan (pareittain:
+max − min ≤ 0,15 · min |c|) ja tuloksena gain 0,85…1,15. Tarkistusjärjestys: NoZero, TooSmall,
+NotStable, Mismatch, GainOutOfRange.
 
 ### 4.4 `config.h` (WP-3)
 
@@ -252,7 +267,8 @@ class RawRing {
  public:
   RawRing(RawSample* storage, size_t capacity);   // muisti kutsujalta (ESP32: staattinen)
   void push(const RawFrame& f);                   // ei-op jos jäädytetty
-  void freeze(); void unfreeze(); bool frozen() const;
+  void freeze(); void unfreeze(); bool frozen() const;   // viitelaskettu
+  uint32_t version() const;                       // kasvaa jokaisesta tallennetusta pushista ja clear()ista
   size_t size() const; size_t capacity() const;
   uint32_t newestSeq() const;
   uint32_t gaps() const;                          // havaitut seq-aukot (pudonneet näytteet)
@@ -263,6 +279,8 @@ class CsvWriter {
  public:
   CsvWriter(const RawRing& ring, const Config& cfg, const Calibration& cal);
   size_t fill(char* buf, size_t max_len);         // 0 = valmis
+  bool aborted() const;                           // rengas muuttui kesken: viimeinen rivi
+                                                  // '# aborted=ring_changed rows=K/N'
 };
 }
 ```
@@ -270,6 +288,10 @@ class CsvWriter {
 CSV: `#`-alkuiset metatietorivit (fs, anturiparametrit, kalibrointikertoimet, seq-aukot),
 sitten `seq,t_ms,ch1_mv,ch2_mv,ch3_mv,ch1_kpa,ch2_kpa,ch3_kpa`. Desimaalipiste, ei pilkku.
 Kapasiteetti ESP32:lla 8192 näytettä ≈ 8,2 s (64 kt).
+
+Jokaista `freeze()`-kutsua vastaa täsmälleen yksi `unfreeze()`, myös silloin kun asiakas
+katkaisee latauksen kesken (AsyncWebServerin disconnect-käsittelijä). Ylimääräinen
+`unfreeze()` ei tee mitään.
 
 ### 4.6 `json_writer.h` (WP-3)
 

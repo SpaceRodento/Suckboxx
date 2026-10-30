@@ -28,6 +28,10 @@
 //     nopeutta). Sylinterin jakso = 3 peräkkäistä segmenttiä, joten jokaisella
 //     kanavalla on sama jaksohajonta; segmentin hajonta = jitter * sqrt(3),
 //     jolloin 720 asteen jakson suhteellinen hajonta = jitter. N rajattu +-3 sigmaan.
+//   - Toteutuneet imuhetket tallennetaan sylinterikohtaisesti (eventTime).
+//     Jitterillä nimellis-rpm ei ole DSP:n totuus: 8 syklin keskiarvon oma
+//     otantavaihtelu on 1 %:n jitterillä jo ~0,35 % (1 sigma). Testit
+//     vertaavat siksi toteutuneisiin jaksoihin (realisedRpm).
 
 #include <cmath>
 #include <complex>
@@ -66,6 +70,7 @@ class SynthSignal {
   void reset(const SynthParams& p) {
     p_ = p;
     n_ = 0;
+    for (int c = 0; c < sbx::kChannels; ++c) hist_count_[c] = 0;
     rng_ = p.seed ? p.seed : 1u;
     spare_valid_ = false;
     for (int c = 0; c < sbx::kChannels; ++c) z_[c] = std::complex<double>(0.0, 0.0);
@@ -108,6 +113,8 @@ class SynthSignal {
           if (tau > t) break;
           cur_[m] += 3;
           if (m == 0) ++cycles_started_;
+          hist_[m][hist_count_[m] % kHist] = tau;
+          ++hist_count_[m];
           for (int c = 0; c < sbx::kChannels; ++c) {
             const double g = (m == c) ? 1.0 : x;
             z_[c] += g * static_cast<double>(p_.res_kpa) * std::exp(lambda_[c] * (t - tau));
@@ -155,9 +162,24 @@ class SynthSignal {
   uint64_t sampleIndex() const { return n_; }
   // Sylinterin 1 alkaneet imut (= moottorisyklit) generaattorin alusta.
   uint32_t cyclesStarted() const { return cycles_started_; }
+
+  // Sylinterin cyl toteutuneet imuhetket (s): back = 0 viimeisin, 1 sitä
+  // edellinen... Vain generaattorin aikana alkaneet (ei ankkurin menneitä).
+  int eventCount(int cyl) const { return hist_count_[cyl] < kHist ? hist_count_[cyl] : kHist; }
+  double eventTime(int cyl, int back) const {
+    return hist_[cyl][(hist_count_[cyl] - 1 - back + 4 * kHist) % kHist];
+  }
+  // rpm n viimeisimmän toteutuneen jakson yli: 120 / (jaksojen keskiarvo).
+  // 0, jos imuja ei ole vielä n + 1.
+  float realisedRpm(int cyl, int n) const {
+    if (n < 1 || eventCount(cyl) < n + 1) return 0.0f;
+    const double span = eventTime(cyl, 0) - eventTime(cyl, n);
+    return static_cast<float>(120.0 * static_cast<double>(n) / span);
+  }
  private:
   static constexpr double kPi = 3.14159265358979323846;
   static constexpr int kRing = 32;
+  static constexpr int kHist = 64;
 
   static int ring(int j) { return ((j % kRing) + kRing) % kRing; }
 
@@ -241,6 +263,8 @@ class SynthSignal {
   std::complex<double> rot_[sbx::kChannels];
   std::complex<double> lambda_[sbx::kChannels];
   double res_int_[sbx::kChannels] = {0.0, 0.0, 0.0};
+  double hist_[sbx::kChannels][kHist] = {};
+  int hist_count_[sbx::kChannels] = {0, 0, 0};
 };
 
 }  // namespace sbxtest

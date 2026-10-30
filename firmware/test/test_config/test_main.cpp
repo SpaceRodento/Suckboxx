@@ -14,7 +14,7 @@
 #include <utility>
 
 #include "core/config.h"
-#include "../test_json_writer/json_validate.h"
+#include <json_validate.h>
 
 using sbx::Config;
 using sbx::FieldInfo;
