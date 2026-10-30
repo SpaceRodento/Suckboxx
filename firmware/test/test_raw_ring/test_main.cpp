@@ -470,8 +470,8 @@ void test_csv_parses_back_to_ring_contents() {
   TEST_ASSERT_NOT_NULL(std::strstr(g_out, "# samples=8192\n"));
   // Kertyvät: 1 -> 5, 5 -> 60000 ja +3-hyppy; ikkunassa vain viimeinen.
   TEST_ASSERT_NOT_NULL(std::strstr(g_out, "# gaps=1\n# gaps_total=3\n"));
-  RawSample first;
-  r.at(0, first);
+  RawSample first{};
+  TEST_ASSERT_TRUE(r.at(0, first));
   const uint32_t first_seq = r.seqOf(first);
   char fs[48];
   std::snprintf(fs, sizeof(fs), "# first_seq=%lu\n", static_cast<unsigned long>(first_seq));
