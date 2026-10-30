@@ -87,11 +87,23 @@ class EngineSim {
   // näytettä, aloitetaan puhtaalta pöydältä uusilla parametreilla (seed mukaan
   // lukien), jolloin "luo + configure" tuottaa saman datan kuin
   // "luo + configure + reset". Muuten uusi seed tulee voimaan vasta reset():ssä.
-  void configure(const SimParams& p, const SensorParams& s) {
+  //
+  // Kierrosluku ja drift (rivi 5): params().rpm on asetusarvo, josta drift
+  // lähtee; hetkellinen arvo on trueRpm(). p.rpm on uusi asetusarvo, jos se
+  // poikkeaa params().rpm:stä tai rpm_set = true. Pelkkä driftin muutos jatkaa
+  // nykyisestä kierrosluvusta ja kirjaa sen myös params().rpm:ään: driftin
+  // pysäytyksen jälkeen GET /api/sim näyttää kierrosluvun, jossa simulaattori
+  // oikeasti pysyy, ja paluu alkuperäiseen (esim. 850) on muutos eikä ohitu
+  // hiljaa. Ohjelmallinen kutsuja, joka haluaa pitää pysäytetyn kierrosluvun,
+  // lähtee siksi params():sta eikä omasta vanhasta kopiostaan.
+  // rpm_set on UI:n POSTia varten, kun rpm-avain on mukana (vrt. mock_server.py
+  // rpm_posted): kesken driftin "drift=0&rpm=850" ei muuten erottuisi pelkästä
+  // "drift=0":sta, koska params().rpm on yhä driftin lähtöarvo 850.
+  void configure(const SimParams& p, const SensorParams& s, bool rpm_set = false) {
     // Kierrosluku lasketaan vanhoilla parametreilla ennen vaihtoa, jotta pelkkä
     // driftin muutos jatkaa nykyisestä kierrosluvusta eikä hyppää.
     const float rpm_now = rpmAt(rpm_n_);
-    const bool rpm_changed = !(p.rpm == p_.rpm);
+    const bool rpm_changed = rpm_set || !(p.rpm == p_.rpm);
     const bool drift_changed = !(p.rpm_drift == p_.rpm_drift);
     p_ = p;
     s_ = s;
@@ -105,6 +117,7 @@ class EngineSim {
       rpm_n_ = 0;
     } else if (drift_changed) {
       anchor_rpm_ = rpm_now;
+      p_.rpm = rpm_now;  // uusi asetusarvo = kierrosluku, jossa ollaan nyt
       rpm_n_ = 0;
     }
   }
@@ -193,8 +206,9 @@ class EngineSim {
     return p_.base_kpa + p_.sync_err_kpa[ch];
   }
 
-  // Seuraavan näytteen nimellis-rpm (drift huomioiden, ilman jitteriä).
-  // N näytteen jälkeen: rpm + rpm_drift * N / 1000. 0 kun moottori on sammuksissa.
+  // Seuraavan näytteen nimellis-rpm (drift huomioiden, ilman jitteriä). N näytteen
+  // jälkeen viimeisestä ankkuroinnista: params().rpm + rpm_drift * N / 1000,
+  // rajattuna kRpmMin..kRpmMax. 0 kun moottori on sammuksissa.
   float trueRpm() const { return p_.engine_on ? rpmAt(rpm_n_) : 0.0f; }
 
  private:
@@ -212,8 +226,18 @@ class EngineSim {
   static constexpr int kMaxBoundariesPerSample = 8;
   static constexpr float kResHzMax = 490.0f;  // Nyquistin alapuolella (fs = 1 kHz)
   static constexpr float kResKpaMax = 50.0f;
+  // Letkun soiminen vaimenee millisekunneissa (oletus 20 ms). 1 s:n yläraja pitää
+  // |ρ| ≤ e^-0.001, jolloin herätteen normitus |1 - ρ| ≥ 0.001 ei voi olla 0/0,
+  // ja resonanssiin osuvakin herätesarja kertyy enintään amp/(1 - |ρ|):ään.
+  static constexpr float kResDecayMaxS = 1.0f;
+  static constexpr float kResMagMin = 1e-6f;
   static constexpr float kNoiseMvMax = 1000.0f;
   static constexpr float kResFlush = 1e-6f;   // denormaalien välttämiseksi
+  // Turvaverkko: rajatuilla parametreilla tila jää alle amp/(1 - |ρ|) ≈ 5e4 kPa,
+  // vaikka heräte tulisi joka näytteellä. Tätä suurempi, inf tai NaN nollataan,
+  // ettei yksi huono arvo jää kiertämään, koska configure() ei koske
+  // resonaattorien tilaan.
+  static constexpr float kResStateMax = 1e6f;
   // Sytytysvälien rajat vaiheessa. Sama float-vakio sekä rajana että sylinterin
   // vaihesiirtona, jotta paikallinen vaihe on tasan 0 imun alussa.
   static constexpr float kSegStart[kChannels] = {0.0f, 1.0f / 3.0f, 2.0f / 3.0f};
@@ -305,7 +329,9 @@ class EngineSim {
     for (int c = 0; c < kChannels; ++c) {
       const float re = res_re_[c] * rot_re_[c] - res_im_[c] * rot_im_[c];
       const float im = res_re_[c] * rot_im_[c] + res_im_[c] * rot_re_[c];
-      if (std::fabs(re) + std::fabs(im) < kResFlush) {
+      const float m = std::fabs(re) + std::fabs(im);
+      // Käänteinen vertailu: NaN ei läpäise kumpaakaan ehtoa, joten se nollautuu.
+      if (!(m >= kResFlush && m <= kResStateMax)) {
         res_re_[c] = 0.0f;
         res_im_[c] = 0.0f;
       } else {
@@ -360,27 +386,31 @@ class EngineSim {
     seg_half_var_ = 0.5f * seg_sigma_ * seg_sigma_;
 
     const float amp = clampf(p_.res_kpa, 0.0f, kResKpaMax);
+    const float decay = clampf(p_.res_decay_s, 0.0f, kResDecayMaxS);
     for (int c = 0; c < kChannels; ++c) {
       const float hz = clampf(p_.res_hz[c], 0.0f, kResHzMax);
-      if (hz > 0.0f && p_.res_decay_s > 0.0f && amp > 0.0f) {
-        const float r = std::exp(-kSamplePeriodS / p_.res_decay_s);
+      rot_re_[c] = 0.0f;
+      rot_im_[c] = 0.0f;
+      exc_re_[c] = 0.0f;
+      exc_im_[c] = 0.0f;
+      if (hz > 0.0f && decay > 0.0f && amp > 0.0f) {
+        const float r = std::exp(-kSamplePeriodS / decay);
         const float wt = 2.0f * kPi * hz * kSamplePeriodS;
-        rot_re_[c] = r * std::cos(wt);
-        rot_im_[c] = r * std::sin(wt);
         // Herätteen vaihe θ = arg(1 - ρ): silloin yhden herätteen koko vaste
         // Σ Im(E·ρ^k) = Im(E / (1 - ρ)) = 0, eli resonanssi ei siirrä syklin
         // keskiarvoa edes diskreetissä ajassa. Samalla ensimmäinen näyte on
         // negatiivinen (~ -0.9·amp): paine putoaa, kun imuventtiili aukeaa.
-        const float dre = 1.0f - rot_re_[c];
-        const float dim = -rot_im_[c];
+        const float rre = r * std::cos(wt);
+        const float rim = r * std::sin(wt);
+        const float dre = 1.0f - rre;
+        const float dim = -rim;
         const float mag = std::sqrt(dre * dre + dim * dim);
-        exc_re_[c] = amp * dre / mag;
-        exc_im_[c] = amp * dim / mag;
-      } else {
-        rot_re_[c] = 0.0f;
-        rot_im_[c] = 0.0f;
-        exc_re_[c] = 0.0f;
-        exc_im_[c] = 0.0f;
+        if (mag > kResMagMin) {  // decay-rajan ansiosta aina; vain varmistus
+          rot_re_[c] = rre;
+          rot_im_[c] = rim;
+          exc_re_[c] = amp * dre / mag;
+          exc_im_[c] = amp * dim / mag;
+        }
       }
       gain_[c] = 1.0f + p_.sensor_gain_err[c];
       offset_[c] = p_.sensor_offset_kpa[c];
