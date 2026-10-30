@@ -41,6 +41,19 @@ toimii suoraan MSYS2:n g++:lla.
 - ADC:n eFuse-karakterisointi: Vref 1121 mV, raw 0 → 142 mV, raw 4095 → 3150 mV.
 - Puhallus ja imu letkuun näkyvät kanavilla ilman ylikuulumista lämmittelyluvun jälkeen.
 
+Penkkitesti 31.10.2026 (`tools/serial_record.py`, 60 s, puhelin yhdistettynä, imu suulla SYL 1:een
+ja SYL 2:een yhtä aikaa, alle 20 cm:n letkut, ei vahvistuskalibrointia):
+- Yhtäpitävyys tasaisessa imussa (70 × 100 ms): SYL 1 − SYL 2 = +0,012 kPa, hajonta 0,033,
+  suurin 0,16 kPa. Vahvistusero −0,27 % alueella −25…−3 kPa (−55 kPa:ssa ~0,15 kPa).
+  Kanavien välinen viive ~2 ms (letku tai suu), merkityksetön keskiarvolle.
+- Kohina puhelimen kanssa 3,8–4,1 mV RMS (ilman 3,5–3,7), piikkejä ~1/s kuten ennenkin.
+- Letkun soimista ei näkynyt: suulla päästetty imu on liian hidas herättämään sitä.
+  Resonanssi selviää moottorilta (imuventtiilin sulkeutuminen on terävä).
+- GN-anturi ei leikkaudu tiukasti 2,7 V:iin: ylipaine nosti SYL 1:n 2726 mV:iin (+1,2 kPa).
+  Pieni positiivinen offset siis näkyy (H1 lievempi kuin oletettu); varsinainen leikkausraja
+  mittaamatta.
+- SYL 3 ei ollut mukana (levossa koko ajan): toistettava kolmella letkulla.
+
 Protolevyn kytkentä poikkeaa suunnitelmasta (docs/rauta.md §2.2): SYL 3 on GPIO32:ssa,
 kiskomonitoria (GPIO39) ja pinnien 100 nF:n kondensaattoreita ei ole.
 
