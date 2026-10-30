@@ -14,7 +14,13 @@ python tools/embed_web.py --check                         # web/index.html == sr
 python tools/mock_server.py --check-config
 python tools/mock_server.py                               # UI simulaattoria vasten, localhost:8000
 python tools/cycle_profile.py --url http://192.168.4.1/api/raw.csv --open   # imusyklin profiili
+python tools/serial_record.py --seconds 60 --profile --open                  # USB: pitkä tallennus
 ```
+
+`tools/serial_record.py` tallentaa USB-sarjaportin kautta jokaisen 1 kHz:n näytteen niin
+pitkään kuin halutaan (laite: `hal/serial_stream.*`, komento `stream <s> <baud>`, 921600 baud).
+Ei vaadi Wi-Fi-yhteyttä laitteeseen. Mitattu levossa 10 s: 0 pudonnutta näytettä,
+kohina 3,5 mV RMS (0,14 kPa) per näyte, satunnaisia ±80–90 mV:n piikkejä (ei kondensaattoreita).
 
 `tools/cycle_profile.py` tekee laitteen raakadatasta (8 s, 1 kHz) HTML-raportin: syklit
 päällekkäin kampiasteina, keskiprofiili ja hajonta sylintereittäin, syklikohtainen

@@ -4,7 +4,8 @@
 //                                                   | (Processorin mutex)
 //   async_tcp (ydin 0): GET /, /diag, §5:n /api-reitit <---+
 //   sbx_push  (ydin 0): SSE /events "snap" 15 Hz, "diag" 5 Hz
-//   loopTask  (ydin 1): NVS-tallennus dirty-lipuista + sarjaloki 10 s välein
+//   loopTask  (ydin 1): sarjakomennot + raakadatavirta (hal/serial_stream.*) 10 ms
+//                       välein, NVS-tallennus dirty-lipuista + sarjaloki 10 s välein
 //
 // Bring-up-firmwaren opetus (b838911): ei pitkiä keskeytyskieltoja eikä
 // busy-waitia - tässä tiedostossa ei ole kumpaakaan, ja loop() vain odottaa.
@@ -23,10 +24,14 @@
 #include "hal/nvs_store.h"
 #include "hal/proc_task.h"
 #include "hal/sampler.h"
+#include "hal/serial_stream.h"
 #include "hal/web.h"
 #include "hal/wifi_ap.h"
 
 namespace {
+
+// loopTaskin herätysväli: sarjavirran 1 s:n puskurista tyhjennetään ~10 näytettä kerralla.
+constexpr uint32_t kPollMs = 10;
 
 void fail(const char* what) {
   // Jatketaan silti: loki ja muut osat kertovat enemmän kuin pysähtynyt laite.
@@ -83,10 +88,16 @@ void setup() {
 }
 
 void loop() {
-  // loopTask (ydin 1, prio 1) vain kirjoittaa sarjalokin. vTaskDelayUntil estää
-  // vain tämän taskin; kaikki muu työ on omissa taskeissaan.
+  // loopTask (ydin 1, prio 1): sarjaportin komennot ja raakadatavirta 10 ms
+  // välein, NVS-tallennus ja sarjaloki kLogPeriodMs välein. vTaskDelayUntil
+  // estää vain tämän taskin; kaikki muu työ on omissa taskeissaan.
   static TickType_t wake = xTaskGetTickCount();
-  vTaskDelayUntil(&wake, pdMS_TO_TICKS(sbx::hal::kLogPeriodMs));
+  static uint32_t last_log_ms = millis();
+  vTaskDelayUntil(&wake, pdMS_TO_TICKS(kPollMs));
+  sbx::hal::streamPoll();
+  if (millis() - last_log_ms < sbx::hal::kLogPeriodMs) return;
+  last_log_ms += sbx::hal::kLogPeriodMs;
   saveDirty();
-  sbx::hal::diagLogPeriodic();
+  // Virran aikana ei lokia: rivit sotkisivat CSV:n (ja baud on eri).
+  if (!sbx::hal::streamActive()) sbx::hal::diagLogPeriodic();
 }

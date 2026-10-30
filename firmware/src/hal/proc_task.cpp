@@ -9,6 +9,7 @@
 
 #include "hal/hal_config.h"
 #include "hal/sampler.h"
+#include "hal/serial_stream.h"
 
 namespace sbx {
 namespace hal {
@@ -114,6 +115,7 @@ void onSample(const SampleMsg& m) {
   ++g_acc.n;
 
   proc().push(m.frame);  // procLoop pitää g_proc_mutexia koko erän ajan
+  streamPush(m.frame);   // sarjavirta (tools/serial_record.py), ei-op kun pois päältä
 
   for (int i = 0; i < kStatSlots; ++i) {
     const uint16_t mv = i < kChannels ? m.frame.mv[i] : m.frame.rail_mv;
