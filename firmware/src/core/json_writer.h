@@ -89,7 +89,7 @@ class JsonWriter {
 
   JsonWriter& key(const char* k) {
     // Avain kuuluu vain objektin sisään, eikä kahta avainta saa olla peräkkäin.
-    if (depth_ == 0 || !bit(obj_bits_, depth_) || after_key_) misuse_ = true;
+    if (depth_ == 0 || !testBit(obj_bits_, depth_) || after_key_) misuse_ = true;
     separator();
     writeString(k != nullptr ? k : "");
     put(':');
@@ -142,7 +142,7 @@ class JsonWriter {
   const char* c_str() const { return cap_ > 0 ? buf_ : ""; }
 
  private:
-  static bool bit(uint32_t bits, int d) { return ((bits >> d) & 1u) != 0; }
+  static bool testBit(uint32_t bits, int d) { return ((bits >> d) & 1u) != 0; }
   static void setBit(uint32_t& bits, int d, bool on) {
     if (on) {
       bits |= (1u << d);
@@ -165,7 +165,7 @@ class JsonWriter {
   }
 
   void close(char c, bool is_object) {
-    if (depth_ == 0 || bit(obj_bits_, depth_) != is_object || after_key_) {
+    if (depth_ == 0 || testBit(obj_bits_, depth_) != is_object || after_key_) {
       misuse_ = true;
       return;
     }
@@ -180,13 +180,13 @@ class JsonWriter {
       after_key_ = false;
       return;
     }
-    if (depth_ > 0 && bit(obj_bits_, depth_)) misuse_ = true;
-    if (depth_ == 0 && bit(comma_bits_, 0)) misuse_ = true;  // vain yksi juuriarvo
+    if (depth_ > 0 && testBit(obj_bits_, depth_)) misuse_ = true;
+    if (depth_ == 0 && testBit(comma_bits_, 0)) misuse_ = true;  // vain yksi juuriarvo
     separator();
   }
 
   void separator() {
-    if (bit(comma_bits_, depth_)) put(',');
+    if (testBit(comma_bits_, depth_)) put(',');
     setBit(comma_bits_, depth_, true);
   }
 

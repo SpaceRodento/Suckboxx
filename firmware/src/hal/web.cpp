@@ -44,9 +44,17 @@
 #include <esp_timer.h>
 
 #include <atomic>
+#include <memory>
 
+#include "core/form.h"
+#include "core/json_writer.h"
+#include "core/sim_api.h"
+#include "core/snapshot.h"
 #include "hal/diag_page.h"
 #include "hal/hal_config.h"
+#include "hal/proc_task.h"
+#include "hal/sampler.h"
+#include "web/web_page.h"
 
 // Yllä oleva analyysi koskee täsmälleen näitä versioita (SUUNNITTELU.md D9).
 static_assert(ASYNCWEBSERVER_VERSION_MAJOR == 3 && ASYNCWEBSERVER_VERSION_MINOR == 6 &&
@@ -72,7 +80,11 @@ AsyncWebServer* g_server = nullptr;
 AsyncEventSource* g_events = nullptr;
 JsonBuilder g_diag_json = nullptr;
 TaskHandle_t g_push_task = nullptr;
-char g_push_buf[kJsonBufLen];  // vain sbx_push käyttää
+char g_push_buf[kJsonBufLen];       // vain sbx_push käyttää (diag)
+char g_snap_buf[kSnapshotJsonSize];  // vain sbx_push käyttää (snap)
+// Diagnostiikkasivun "diag" lähetetään joka kolmas kierros (5 Hz): /diag on
+// huoltonäkymä, ja pääsivun snap on tärkeämpi kaistalle.
+constexpr uint32_t kDiagEvery = 3;
 
 std::atomic<uint32_t> g_clients{0};
 std::atomic<uint32_t> g_sent{0};
@@ -86,12 +98,196 @@ std::atomic<uint32_t> g_push_us_max{0};
 // Eivät kutsu g_eventsiä eivätkä odota mitään pitkää: async_tcp on task
 // watchdogin alla (AsyncTCP.cpp:299-310, 5 s).
 
-void handleRoot(AsyncWebServerRequest* req) {
+void sendPage(AsyncWebServerRequest* req, const char* page, size_t len) {
   // AsyncProgmemResponse lukee suoraan flashista, ei kopiota RAMiin.
-  AsyncWebServerResponse* r =
-      req->beginResponse(200, "text/html; charset=utf-8", reinterpret_cast<const uint8_t*>(kDiagPage),
-                         sizeof(kDiagPage) - 1);
+  AsyncWebServerResponse* r = req->beginResponse(200, "text/html; charset=utf-8",
+                                                 reinterpret_cast<const uint8_t*>(page), len);
   r->addHeader("Cache-Control", "no-store");
+  req->send(r);
+}
+
+void handleRoot(AsyncWebServerRequest* req) { sendPage(req, WEB_PAGE_HTML, sizeof(WEB_PAGE_HTML) - 1); }
+void handleDiagPage(AsyncWebServerRequest* req) { sendPage(req, kDiagPage, sizeof(kDiagPage) - 1); }
+
+void sendJson(AsyncWebServerRequest* req, const char* json) {
+  // AsyncBasicResponse kopioi sisällön omaan Stringiinsä (WebResponses.cpp:254-264).
+  AsyncWebServerResponse* r = req->beginResponse(200, "application/json", json);
+  r->addHeader("Cache-Control", "no-store");
+  req->send(r);
+}
+
+// {"ok":ok,"err":err} tai {"ok":ok,"msg":msg} (§5, mock_server.py). text = nullptr -> pelkkä ok.
+void sendOk(AsyncWebServerRequest* req, bool ok, const char* key = nullptr, const char* text = nullptr) {
+  char buf[512];
+  JsonWriter w(buf, sizeof(buf));
+  w.beginObject();
+  w.key("ok").value(ok);
+  if (key != nullptr) w.key(key).value(text != nullptr ? text : "");
+  w.endObject();
+  sendJson(req, w.ok() ? buf : "{\"ok\":false,\"err\":\"vastaus ei mahtunut\"}");
+}
+
+// Lomakkeen parit (POST-runko, form-urlencoded) coren FormPair-muotoon. Merkkijonot
+// ovat pyynnön omia ja elävät käsittelijän ajan.
+constexpr int kMaxPairs = 64;
+int collectForm(AsyncWebServerRequest* req, FormPair* out) {
+  int n = 0;
+  const size_t count = req->params();
+  for (size_t i = 0; i < count && n < kMaxPairs; ++i) {
+    const AsyncWebParameter* p = req->getParam(i);
+    if (p == nullptr || !p->isPost() || p->isFile()) continue;
+    out[n].key = p->name().c_str();
+    out[n].value = p->value().c_str();
+    ++n;
+  }
+  return n;
+}
+
+void handleConfigGet(AsyncWebServerRequest* req) {
+  std::unique_ptr<char[]> buf(new (std::nothrow) char[kConfigJsonSize]);
+  if (!buf) {
+    req->send(503, "text/plain; charset=utf-8", "muisti loppui");
+    return;
+  }
+  procLock();
+  const size_t n = processor().configJson(buf.get(), kConfigJsonSize);
+  procUnlock();
+  if (n == 0) {
+    req->send(500, "text/plain; charset=utf-8", "konfiguraatio ei mahtunut puskuriin");
+    return;
+  }
+  sendJson(req, buf.get());
+}
+
+void handleConfigSet(AsyncWebServerRequest* req) {
+  FormPair pairs[kMaxPairs];
+  const int n = collectForm(req, pairs);
+  char err[kFormErrLen];
+  procLock();
+  const bool ok = processor().applyConfigForm(pairs, n, err, sizeof(err));
+  procUnlock();
+  sendOk(req, ok, ok ? nullptr : "err", err);
+}
+
+void handleConfigReset(AsyncWebServerRequest* req) {
+  // resetConfig palauttaa myös lähteen simulaattoriksi. Laitteella lähteen
+  // oletus on käännöksen (SBX_SAMPLE_SOURCE), jotta asetusten nollaus ei
+  // vaihda oikeita antureita simulaattoriin.
+  char src[4];
+  snprintf(src, sizeof(src), "%d", SBX_SAMPLE_SOURCE);
+  const FormPair keep[1] = {{"source", src}};
+  procLock();
+  processor().resetConfig();
+  processor().applyConfigForm(keep, 1, nullptr, 0);
+  procUnlock();
+  sendOk(req, true);
+}
+
+void handleMaster(AsyncWebServerRequest* req) {
+  FormPair pairs[kMaxPairs];
+  const int n = collectForm(req, pairs);
+  char err[kFormErrLen];
+  procLock();
+  const bool ok = processor().applyMasterForm(pairs, n, err, sizeof(err));
+  procUnlock();
+  sendOk(req, ok, ok ? nullptr : "err", err);
+}
+
+void handleCalZero(AsyncWebServerRequest* req) {
+  procLock();
+  const bool ok = processor().zeroNow() == CalResult::Ok;
+  const char* msg = processor().calStatus().msg;  // staattinen teksti (processor.h)
+  procUnlock();
+  sendOk(req, ok, "msg", msg);
+}
+
+void handleCalGain(AsyncWebServerRequest* req) {
+  procLock();
+  const bool ok = processor().startGainCapture();
+  const char* msg = processor().calStatus().msg;
+  procUnlock();
+  sendOk(req, ok, "msg", msg);
+}
+
+void handleCalReset(AsyncWebServerRequest* req) {
+  procLock();
+  processor().resetGain();
+  const char* msg = processor().calStatus().msg;
+  procUnlock();
+  sendOk(req, true, "msg", msg);
+}
+
+void handleSimGet(AsyncWebServerRequest* req) {
+  SimParams p;
+  samplerGetSim(p);
+  char buf[kSimJsonSize];
+  if (simToJson(p, buf, sizeof(buf)) == 0) {
+    req->send(500, "text/plain; charset=utf-8", "sim-JSON ei mahtunut puskuriin");
+    return;
+  }
+  sendJson(req, buf);
+}
+
+void handleSimSet(AsyncWebServerRequest* req) {
+  FormPair pairs[kMaxPairs];
+  const int n = collectForm(req, pairs);
+  SimParams p;
+  samplerGetSim(p);
+  bool rpm_set = false;
+  char err[kFormErrLen];
+  if (!simApplyForm(p, pairs, n, rpm_set, err, sizeof(err))) {
+    sendOk(req, false, "err", err);
+    return;
+  }
+  procLock();
+  const SensorParams sensor = processor().config().sensor;
+  procUnlock();
+  samplerSetSim(p, sensor, rpm_set);
+  sendOk(req, true);
+}
+
+// GET /api/raw.csv: rengas jäädytetään koko latauksen ajaksi (§4.5). Jokaista
+// freeze()a vastaa täsmälleen yksi unfreeze(): latauksen lopussa tai, jos
+// asiakas katkaisee, onDisconnectissa - kumpi tahansa ensin.
+struct CsvState {
+  std::unique_ptr<CsvWriter> writer;
+  bool frozen = false;
+  void release() {
+    if (!frozen) return;
+    frozen = false;
+    procLock();
+    processor().ring().unfreeze();
+    procUnlock();
+  }
+  ~CsvState() { release(); }
+};
+
+void handleRawCsv(AsyncWebServerRequest* req) {
+  std::shared_ptr<CsvState> st = std::make_shared<CsvState>();
+  procLock();
+  Processor& p = processor();
+  p.ring().freeze();
+  st->frozen = true;
+  // CsvWriter kopioi anturiparametrit; kalibrointiviite pysyy Processorissa.
+  st->writer.reset(new (std::nothrow) CsvWriter(p.ring(), p.config(), p.calibration()));
+  procUnlock();
+  if (!st->writer) {
+    st->release();
+    req->send(503, "text/plain; charset=utf-8", "muisti loppui");
+    return;
+  }
+  AsyncWebServerResponse* r = req->beginChunkedResponse(
+      "text/csv; charset=utf-8", [st](uint8_t* buf, size_t max_len, size_t) -> size_t {
+        if (!st->frozen) return 0;
+        procLock();
+        const size_t n = st->writer->fill(reinterpret_cast<char*>(buf), max_len);
+        procUnlock();
+        if (n == 0) st->release();
+        return n;
+      });
+  r->addHeader("Content-Disposition", "attachment; filename=\"suckboxx_raw.csv\"");
+  r->addHeader("Cache-Control", "no-store");
+  req->onDisconnect([st]() { st->release(); });
   req->send(r);
 }
 
@@ -115,9 +311,21 @@ void handleNotFound(AsyncWebServerRequest* req) {
 // Reitit rekisteröidään ennen begin()iä: palvelimen käsittelijälistaa ei saa
 // muokata, kun async_tcp jo käy sitä läpi (WebServer.cpp:149-158).
 void registerRoutes(AsyncWebServer& s) {
-  s.on("/", HTTP_GET, handleRoot);
+  // Tarkemmat polut ensin: AsyncCallbackWebHandler vertaa myös etuliitettä
+  // ("/api/config" osuisi muuten "/api/config/reset"iin).
+  s.on("/api/config/reset", HTTP_POST, handleConfigReset);
+  s.on("/api/config", HTTP_GET, handleConfigGet);
+  s.on("/api/config", HTTP_POST, handleConfigSet);
+  s.on("/api/master", HTTP_POST, handleMaster);
+  s.on("/api/cal/zero", HTTP_POST, handleCalZero);
+  s.on("/api/cal/gain", HTTP_POST, handleCalGain);
+  s.on("/api/cal/reset", HTTP_POST, handleCalReset);
+  s.on("/api/sim", HTTP_GET, handleSimGet);
+  s.on("/api/sim", HTTP_POST, handleSimSet);
+  s.on("/api/raw.csv", HTTP_GET, handleRawCsv);
   s.on("/api/diag", HTTP_GET, handleDiag);
-  // 7b: §5:n reitit tähän (/api/config, /api/master, /api/cal/*, /api/raw.csv, /api/sim).
+  s.on("/diag", HTTP_GET, handleDiagPage);
+  s.on("/", HTTP_GET, handleRoot);
   s.onNotFound(handleNotFound);
 }
 
@@ -139,14 +347,29 @@ void pushLoop(void*) {
     const uint32_t clients = static_cast<uint32_t>(g_events->count());
     g_clients.store(clients, std::memory_order_relaxed);
     if (clients == 0) continue;  // ei rakenneta JSONia kenellekään
-    // 7b: tilalle snapshotJson(processor, meta, ...) Processorin mutexin alla
-    // juuri ennen lähetystä, jotta aaltojono tyhjenee täsmälleen kerran per viesti.
-    const size_t n = g_diag_json(g_push_buf, sizeof(g_push_buf));
+
+    // Diagnostiikkasivulle harvemmin (kDiagEvery). Epäonnistuminen ei estä snapia.
+    static uint32_t diag_round = 0;
+    if (++diag_round % kDiagEvery == 0 && g_diag_json(g_push_buf, sizeof(g_push_buf)) > 0) {
+      g_events->send(g_push_buf, "diag", 0, 0);
+    }
+
+    // Snapshot Processorin mutexin alla juuri ennen lähetystä, jotta aaltojono
+    // tyhjenee täsmälleen kerran per viesti (§4.8).
+    ProcWindow win;
+    procWindow(win);
+    SnapshotMeta meta;
+    meta.t_ms = millis();
+    meta.fs_hz = win.fs_hz;
+    meta.heap = ESP.getFreeHeap();
+    procLock();
+    const size_t n = snapshotJson(processor(), meta, g_snap_buf, sizeof(g_snap_buf));
+    procUnlock();
     if (n == 0) {
       g_build_fail.fetch_add(1, std::memory_order_relaxed);
       continue;
     }
-    switch (g_events->send(g_push_buf, "diag", 0, 0)) {
+    switch (g_events->send(g_snap_buf, "snap", 0, 0)) {
       case AsyncEventSource::ENQUEUED:
         g_sent.fetch_add(1, std::memory_order_relaxed);
         break;

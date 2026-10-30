@@ -66,10 +66,11 @@ const AdcInfo& samplerAdcInfo();  // voimassa samplerStartin jälkeen
 // "sim" | "adc" | "hx710b" (SnapshotMeta::src)
 const char* sourceName(SourceKind s);
 
-// Simulaattorin parametrit (7b: POST /api/sim). Säieturvallinen mistä tahansa
+// Simulaattorin parametrit (POST /api/sim). Säieturvallinen mistä tahansa
 // taskista; tulee voimaan seuraavalla jaksolla. Sampler ei koskaan odota lukkoa:
-// jos asettaja pitää sitä, muutos siirtyy yhdellä jaksolla.
-void samplerSetSim(const SimParams& p, const SensorParams& s);
+// jos asettaja pitää sitä, muutos siirtyy yhdellä jaksolla. rpm_set kuten
+// EngineSim::configure (docs/firmware.md §4.1).
+void samplerSetSim(const SimParams& p, const SensorParams& s, bool rpm_set = false);
 void samplerGetSim(SimParams& out);  // viimeisin asetettu (myös vielä soveltamaton)
 
 }  // namespace hal

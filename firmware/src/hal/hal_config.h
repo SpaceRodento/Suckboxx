@@ -25,6 +25,14 @@
 
 #include "core/types.h"
 
+// Lähteen käännösaikainen oletus (platformio.ini: esp32dev_adc, esp32dev_hx).
+// Käytössä, kun NVS:ssä ei ole konfiguraatiota, ja asetusten nollauksessa.
+#ifndef SBX_SAMPLE_SOURCE
+#define SBX_SAMPLE_SOURCE 0
+#endif
+static_assert(SBX_SAMPLE_SOURCE >= 0 && SBX_SAMPLE_SOURCE <= 2,
+              "SBX_SAMPLE_SOURCE: 0 = sim, 1 = ADC, 2 = HX710B (SourceKind)");
+
 namespace sbx {
 namespace hal {
 

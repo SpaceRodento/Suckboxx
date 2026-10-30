@@ -42,7 +42,9 @@ class SimSource {
     static EngineSim s;
     return s;
   }
-  void configure(const SimParams& p, const SensorParams& s) { sim().configure(p, s); }
+  void configure(const SimParams& p, const SensorParams& s, bool rpm_set) {
+    sim().configure(p, s, rpm_set);
+  }
   void read(RawFrame& f) {
     const RawFrame s = sim().next();  // simulaattorin oma seq ohitetaan: seq on samplerin
     for (int c = 0; c < kChannels; ++c) f.mv[c] = s.mv[c];
@@ -214,12 +216,13 @@ std::atomic<uint32_t> g_sim_pending{0};
 SimParams g_sim_next;           // mutexin alla
 SensorParams g_sim_next_sensor;  // mutexin alla
 SimParams g_sim_current;        // mutexin alla: viimeisin sovellettu
+bool g_sim_next_rpm_set = false;  // mutexin alla
 
 void applyPendingSim() {
   if (g_sim_pending.load(std::memory_order_acquire) == 0) return;
   if (xSemaphoreTake(g_sim_mutex, 0) != pdTRUE) return;  // seuraavalla jaksolla
-  g_sim.configure(g_sim_next, g_sim_next_sensor);
-  g_sim_current = g_sim_next;
+  g_sim.configure(g_sim_next, g_sim_next_sensor, g_sim_next_rpm_set);
+  g_sim_current = SimSource::sim().params();  // drift-muutos kirjaa nykyisen rpm:n (§4.1)
   g_sim_pending.store(0, std::memory_order_release);
   xSemaphoreGive(g_sim_mutex);
 }
@@ -337,11 +340,12 @@ const char* sourceName(SourceKind s) {
   }
 }
 
-void samplerSetSim(const SimParams& p, const SensorParams& s) {
+void samplerSetSim(const SimParams& p, const SensorParams& s, bool rpm_set) {
   if (g_sim_mutex == nullptr) return;
   xSemaphoreTake(g_sim_mutex, portMAX_DELAY);
   g_sim_next = p;
   g_sim_next_sensor = s;
+  g_sim_next_rpm_set = rpm_set;
   g_sim_pending.store(1, std::memory_order_release);
   xSemaphoreGive(g_sim_mutex);
 }

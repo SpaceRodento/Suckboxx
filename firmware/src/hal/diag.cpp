@@ -128,7 +128,7 @@ size_t diagJson(char* buf, size_t n) {
 void diagLogBoot() {
   g_async_tcp = xTaskGetHandle("async_tcp");  // luotu AsyncServer::begin()issä
 
-  Serial.printf("[INFO] Suckboxx WP-7a alustatesti: sampler + AP + SSE (docs/firmware.md 4.9)\n");
+  Serial.printf("[INFO] Suckboxx WP-7b: sampler + Processor + AP + web/SSE (docs/firmware.md 4.9)\n");
   Serial.printf("[INFO] Arduino %d.%d.%d / IDF %s, CPU %lu MHz, FreeRTOS %d Hz\n",
                 ESP_ARDUINO_VERSION_MAJOR, ESP_ARDUINO_VERSION_MINOR, ESP_ARDUINO_VERSION_PATCH,
                 esp_get_idf_version(), ul(getCpuFrequencyMhz()), configTICK_RATE_HZ);

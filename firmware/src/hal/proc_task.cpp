@@ -61,6 +61,19 @@ void keepMax(T& m, T v) {
 
 TaskHandle_t g_task = nullptr;
 SemaphoreHandle_t g_mutex = nullptr;
+SemaphoreHandle_t g_proc_mutex = nullptr;
+
+// Raakadatan rengas staattisena (§4.5: 8192 näytettä = 64 kt, ~8,2 s).
+constexpr size_t kRingCapacity = 8192;
+RawSample g_ring[kRingCapacity];
+
+// Processor luodaan ensimmäisellä käytöllä taskissa (procStart setupista), ei
+// globaalina konstruktorina: DSP:n ja simulaattorin alustus laskee liukulukuja.
+Processor& proc() {
+  static Processor p(g_ring, kRingCapacity);
+  return p;
+}
+constexpr uint32_t kTickMs = 50;  // §4.9: tick 20 Hz
 ProcWindow g_window;  // mutexin alla
 PeriodAcc g_period;   // mutexin alla
 
@@ -100,7 +113,8 @@ void onSample(const SampleMsg& m) {
   g_acc.read_sum_us += m.read_us;
   ++g_acc.n;
 
-  // 7b: tämä lohko korvautuu kutsulla processor.push(m.frame) (mutex otettu erää varten).
+  proc().push(m.frame);  // procLoop pitää g_proc_mutexia koko erän ajan
+
   for (int i = 0; i < kStatSlots; ++i) {
     const uint16_t mv = i < kChannels ? m.frame.mv[i] : m.frame.rail_mv;
     if (mv < g_acc.mv_min[i]) g_acc.mv_min[i] = mv;
@@ -158,6 +172,7 @@ void procLoop(void*) {
   QueueHandle_t q = samplerQueue();
   g_acc.reset();
   uint32_t win_start_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+  uint32_t last_tick_ms = win_start_ms;
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(kProcPollMs));
 
@@ -165,12 +180,16 @@ void procLoop(void*) {
     const UBaseType_t waiting = uxQueueMessagesWaiting(q);
     keepMax(g_acc.q_peak, static_cast<uint16_t>(waiting));
 
-    // 7b: xSemaphoreTake(processor_mutex) tähän - yksi lukitus per erä (~4 kehystä).
+    const uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    xSemaphoreTake(g_proc_mutex, portMAX_DELAY);  // yksi lukitus per erä (~4 kehystä)
     SampleMsg m;
     while (xQueueReceive(q, &m, 0) == pdTRUE) onSample(m);
-    // 7b: processor.tick(now_s) 20 Hz:n välein ja vapautus tähän.
+    if (now_ms - last_tick_ms >= kTickMs) {
+      last_tick_ms = now_ms;
+      proc().tick(static_cast<float>(esp_timer_get_time() / 1000) * 0.001f);
+    }
+    xSemaphoreGive(g_proc_mutex);
 
-    const uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
     if (now_ms - win_start_ms >= kWindowMs) {
       closeWindow(now_ms);
       win_start_ms += kWindowMs;
@@ -181,10 +200,14 @@ void procLoop(void*) {
 
 }  // namespace
 
-bool procStart() {
+bool procStart(const Config& cfg, const Calibration& cal) {
   if (g_task != nullptr || samplerQueue() == nullptr) return false;
   g_mutex = xSemaphoreCreateMutex();
-  if (g_mutex == nullptr) return false;
+  g_proc_mutex = xSemaphoreCreateMutex();
+  if (g_mutex == nullptr || g_proc_mutex == nullptr) return false;
+  // Rikkinäinen NVS-konfiguraatio hylätään (configure -> false), jolloin oletukset jäävät.
+  if (!proc().configure(cfg)) Serial.println("[VAROITUS] NVS-konfiguraatio hylatty, oletukset kayttoon");
+  proc().setCalibration(cal);
   pinMode(kPinLed, OUTPUT);
   digitalWrite(kPinLed, LOW);
   return xTaskCreatePinnedToCore(procLoop, "sbx_proc", kProcStack, nullptr, kProcPrio, &g_task,
@@ -223,6 +246,10 @@ void procTakePeriod(ProcPeriod& out) {
 }
 
 TaskHandle_t procTask() { return g_task; }
+
+Processor& processor() { return proc(); }
+void procLock() { xSemaphoreTake(g_proc_mutex, portMAX_DELAY); }
+void procUnlock() { xSemaphoreGive(g_proc_mutex); }
 
 }  // namespace hal
 }  // namespace sbx

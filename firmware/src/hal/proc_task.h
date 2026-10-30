@@ -4,17 +4,22 @@
 // Herää kProcPollMs välein ytimellä 1, tyhjentää samplerin jonon erissä ja laskee
 //  - ajoitustilastot: mitattu näytetaajuus, jitter, myöhästyneet, seq-aukot,
 //    jonon täyttöhuippu. Nämä jäävät WP-7b:hen (SnapshotMeta::fs_hz, diag).
-//  - WP-7a: kanavakohtaiset mV-tilastot 100 ms:n ikkunoissa. WP-7b korvaa ne
-//    Processor::push- ja tick-kutsuilla Processorin mutexin takana; kytkentä-
-//    kohdat on merkitty proc_task.cpp:hen tunnisteella "7b:".
+//  - kanavakohtaiset mV-tilastot 100 ms:n ikkunoissa (diagnostiikkasivu /diag)
+//  - WP-7b: Processor::push jokaiselle kehykselle ja tick 20 Hz:llä, kaikki
+//    Processorin mutexin alla (yksi lukitus per erä).
 //
 // Julkaistu tila luetaan mutexin takaa kopiona (web-käsittelijät ytimellä 0).
+// Processoria käyttävät muut taskit (web, NVS-tallennus) lukitsevat procLock()illa
+// lyhyesti: käsittelytaski odottaa sillä välin, ja sampler-jonossa on 128 ms varaa.
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
 #include <cstdint>
 
+#include "core/calibration.h"
+#include "core/config.h"
+#include "core/processor.h"
 #include "core/types.h"
 
 namespace sbx {
@@ -54,8 +59,14 @@ struct ProcPeriod {
   uint16_t q_peak = 0;
 };
 
-bool procStart();  // samplerStartin jälkeen
+// samplerStartin jälkeen. cfg ja cal NVS:stä (setCalibration: zero_valid = false, D11).
+bool procStart(const Config& cfg, const Calibration& cal);
 void procWindow(ProcWindow& out);
+
+// Processor mutexin takana (§4.8). Lukitse, käytä, vapauta - ei odotuksia välissä.
+Processor& processor();
+void procLock();
+void procUnlock();
 void procTakePeriod(ProcPeriod& out);  // kopioi ja nollaa jakson
 TaskHandle_t procTask();
 
