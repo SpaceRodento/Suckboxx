@@ -203,6 +203,8 @@ struct FieldInfo {
   const char* group;  // "Synkronointi", "Signaali", "Anturi", "Järjestelmä"
   FieldType type;
   float min, max;
+  const char* options;  // U8-valintakentälle "|"-eroteltu suomenkielinen lista
+                        // (indeksi = arvo), esim. "Simulaattori|ADC|HX710B"; muuten nullptr
 };
 int configFieldCount();
 const FieldInfo& configField(int i);
@@ -219,6 +221,26 @@ size_t configToJson(const Config& c, char* buf, size_t n);  // 0 = ei mahtunut
 Kaikki `SensorParams`/`DspParams`/`StatusParams`-kentät, `source` ja `push_rate_hz` ovat
 rekisterissä. NVS-liima tallentaa kentät avain kerrallaan rekisterin kautta, joten uusi kenttä
 ei vaadi muutoksia liimaan.
+
+`configToJson` on huoltosivun ainoa tietolähde: UI rakentaa lomakkeen kenttärekisteristä
+eikä tunne yhtään kenttää nimeltä. Muoto (lisätty 30.10.2026, WP-3 ja WP-5 nojaavat tähän):
+
+```json
+{"v": 1, "schema": 1, "fields": [
+  {"key": "tol_green", "label": "Vihreän raja", "unit": "kPa", "group": "Synkronointi",
+   "type": "float", "min": 0.1, "max": 10, "value": 1.5},
+  {"key": "source", "label": "Signaalilähde", "unit": "", "group": "Järjestelmä",
+   "type": "u8", "min": 0, "max": 2, "value": 0, "options": ["Simulaattori", "ADC", "HX710B"]}
+]}
+```
+
+- `schema` = `kConfigSchemaVersion`. `type` ∈ `float`, `u8`, `u16`, `bool`; bool-kentän
+  `value` on `true`/`false`, `min`/`max` silloin 0/1. `options` vain kun `FieldInfo::options`.
+- Kentät rekisterin järjestyksessä; UI ryhmittelee `group`in mukaan ensiesiintymän järjestyksessä.
+- Liukuluvut lyhyimmässä muodossa enintään neljällä desimaalilla (`1.5`, ei `1.5000`).
+- `POST /api/config` -virhevastaus kertoo kentän: `{"ok":false,"key":"tol_green","err":"…"}`;
+  ristiintarkistuksen (`configValidate`) virheessä `key` puuttuu. Pyyntö on atominen: jos yksikin
+  kenttä hylätään, mitään ei muuteta.
 
 ### 4.5 `raw_ring.h` (WP-3)
 
@@ -308,7 +330,7 @@ yhdistää automaattisesti uudelleen ja on mockattavissa pelkällä Pythonin sta
 | GET | `/` | `web/index.html` |
 | GET | `/events` | SSE, tapahtuma `snap`, data = snapshot-JSON yhdellä rivillä, `push_rate_hz` |
 | GET | `/api/config` | `configToJson` |
-| POST | `/api/config` | form-urlencoded `key=value[&…]` → `{"ok":true}` / `{"ok":false,"err":"…"}` |
+| POST | `/api/config` | form-urlencoded `key=value[&…]` → `{"ok":true}` / `{"ok":false,"key":"…","err":"…"}` (§4.4) |
 | POST | `/api/config/reset` | oletukset |
 | POST | `/api/master` | `ch=0..2` |
 | POST | `/api/cal/zero` | `{"ok":…,"msg":"…"}` |
