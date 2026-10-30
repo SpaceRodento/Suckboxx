@@ -1,14 +1,16 @@
 # SUCKBOXX — suunnitteludokumentti
 
-> Tila: **suunnittelu käynnissä**. Mikään ei ole lukittu ennen kuin se on merkitty päätöslokiin
-> (§5) tunnuksella ja päivämäärällä. Rauta on suunniteltu ja tilattavissa; **D2, D6 ja D7 ovat
-> yhä auki**, ja niistä D6 estää letkuadapterien hankinnan.
+> Tila: **firmware-toteutus käynnissä simulaattori edellä** (roadmap §11). Mikään ei ole lukittu
+> ennen kuin se on merkitty päätöslokiin (§5) tunnuksella ja päivämäärällä. Kaikki päätökset ovat
+> kiinni paitsi **D6 (kohdemoottori)**, joka estää letkuadapterien hankinnan — mutta ei
+> firmware-työtä, koska simulaattori korvaa moottorin vaiheissa M1–M4.
 >
 > | dokumentti | sisältö |
 > |-----|-----|
 > | tämä | päätökset, perustelut, käytösmatriisi, vaiheistus |
 > | [docs/rauta.md](docs/rauta.md) | anturivalinta, kytkentä, mitoitus, pinnijako, PCB |
 > | [docs/hankinnat.md](docs/hankinnat.md) | osaluettelo, tilauskoodit, mitä *ei* kannata ostaa |
+> | [docs/firmware.md](docs/firmware.md) | firmware-arkkitehtuuri, moduulit, rajapinnat, web-API |
 > | [Suckboxx.md](Suckboxx.md) | lähtöaineisto: vapaamuotoinen spec + Geminin luonnos |
 > | [tools/](tools/) | mitoituslaskennat — kaikki luvut näissä dokumenteissa tulevat näistä |
 
@@ -286,6 +288,75 @@ juuri sillä hetkellä kun hän kääntää ruuvia. Sama ansa kuin §3.4:ssä, e
 *Seuraus:* jos master itse on vialla (letku irti, anturivika), erotusnäkymä on merkityksetön →
 käytösmatriisin rivi 12.
 
+
+### D9 — Web-transport ✅ PÄÄTETTY 30.10.2026
+
+**Server-Sent Events (push, 15 Hz) + REST-komennot**, kirjastona `ESPAsyncWebServer`
+(esp32async 3.6.0) + `AsyncTCP` 3.3.2.
+
+*Perustelu:* bring-up-firmwaren 2 Hz:n kysely on liian hidas säätämiseen — ruuvin kääntäjä
+tarvitsee 10–20 Hz. Data kulkee lähes pelkästään laitteelta puhelimeen, joten WebSocketin
+kaksisuuntaisuutta ei tarvita; SSE yhdistää selaimessa automaattisesti uudelleen ja on
+mockattavissa PC:llä pelkällä Pythonin standardikirjastolla. Asynkroninen palvelin ei pysäytä
+pääsilmukkaa yhden asiakkaan ajaksi kuten Arduinon `WebServer`.
+
+### D10 — Rivit 1 ja 8 yhdistetään ✅ PÄÄTETTY 30.10.2026
+
+**"Moottori sammuksissa" ja "kaikki letkut irti" ovat sama tila** (`NoSignal`): *"Ei
+alipainesignaalia — moottori sammuksissa tai letkut irti."*
+
+*Perustelu:* ne ovat mittauksen kannalta erottamattomat. Irrotettu letku näkee ilmanpaineen
+eikä pulssia, täsmälleen kuten sammunut moottori — laitteella ei ole muuta tietoa siitä, käykö
+moottori. Automaattinen nollaus (rivi 1) on turvallinen molemmissa, koska molemmissa anturi
+näkee ilmanpaineen.
+
+*Kynnys:* `off_kpa` = **5 kPa** (ei 2 kPa), koska tila on tunnistettava myös **ennen**
+nollausta, jolloin anturin oma ±2 kPa virhe on vielä mukana. Käyvä moottori on −55 kPa:ssa, joten
+marginaali on reilu. Rivin 6 letkuvika käyttää omaa kynnystään `hose_off_kpa` = 2 kPa
+(kalibroitu arvo) — §8:n huomautus kahdesta eri merkityksestä on näin ratkaistu.
+
+### D11 — Kalibroinnin portitus ✅ PÄÄTETTY 30.10.2026
+
+**Ilman tämän käynnistyksen nollausta laite ei koskaan näytä vihreää** (enintään 🟡 +
+"kalibroimaton"). **Puuttuva vahvistuskalibrointi** näytetään vain varoituksena (rivi 11).
+
+*Perustelu:* R4:n ±2 kPa:n virhe on pääosin offsetia, jonka automaattinen nollaus poistaa.
+Nollauksen jälkeen jäljelle jää vahvistusero; 1 %:n gain-ero −55 kPa:ssa on 0,55 kPa, eli alle
+D2:n vihreän rajan. Jos vihreä kiellettäisiin myös ilman vahvistuskalibrointia, laite olisi
+käyttökelvoton ennen T-haara-kalibrointia — ja se vaatii tarvikkeita, joita laiturilla ei ole.
+
+### D12 — Synkronointiarvion kierroslukuikkuna ✅ PÄÄTETTY 30.10.2026
+
+**Arvio (🟢🟡🔴) annetaan välillä 500–3000 rpm**, kun käynti on ollut vakaa ≥ 3 s.
+
+*Perustelu:* §8 määritteli rivit 3–4 välille 600–1200 rpm ja rivin 9 yli 3000 rpm:lle, jolloin
+väli 1200–3000 jäi määrittelemättä. Osa huolto-ohjeista synkronoi korotetulla joutokäynnillä,
+joten väliä ei kannata kieltää. Alle 500 rpm käynti on sammumassa → `Unstable`. Molemmat rajat
+ovat S5a:n mukaan säädettävissä.
+
+### D13 — MVP:n käyttötapa ja RPM ✅ PÄÄTETTY 30.10.2026
+
+**Satunnainen huoltotyökalu, virta USB-virtapankista. RPM kuuluu MVP:hen.**
+
+*Perustelu:* käyttäjän päätös. Pysyvä veneasennus arvioidaan uudelleen raudan kehittyessä.
+Seuraukset: [docs/rauta.md](docs/rauta.md) §5:n 12 V:n suojausketju (sulake, TVS,
+napaisuussuoja, buck) siirtyy pysyvän asennuksen vaiheeseen; protolevyn 5 V tulee
+devkitin USB:stä, ja anturi-LDO (R6) syötetään devkitin 5 V -pinnistä. RPM lasketaan
+jaksonajasta, mikä toimii yhtä hyvin 3,3 V:n ja 5 V:n anturiversiolla — rauta.md §1.6:n
+perustelu "pulssin muotoa ei tarvita RPM:ää varten" pitää siis paikkansa vain siltä osin, että
+jakson*aika* riittää; RPM ei ole pois MVP:stä.
+
+### D14 — Simulaattori ensin ✅ PÄÄTETTY 30.10.2026
+
+**Firmware rakennetaan moottorisimulaattorin varaan**, joka tuottaa samaa mV-dataa kuin oikea
+rauta (pulssit, resonanssi, kohina, ristivuoto, anturivirheet, vikatilat). Laite käynnistyy
+simulaattorilähteellä, kunnes XGZP-anturit on kytketty; lähde vaihdetaan huoltosivulta.
+
+*Perustelu:* käyttäjän päätös. Koko signaalinkäsittely, käytösmatriisi, kalibrointi ja UI
+voidaan toteuttaa ja testata ilman antureita ja ilman moottoria (D6). Simulaattorin totuusarvot
+(todellinen keskiarvo, rpm) tekevät jokaisesta käytösmatriisin rivistä automaattisen testin.
+HX710B-lähde säilyy penkkitestiin, mutta se ei tuota syklejä (10 SPS, §3.1).
+
 ---
 
 ## 6. Vaatimukset (kertyvä lista)
@@ -312,6 +383,9 @@ käytösmatriisin rivi 12.
 ---
 
 ## 7. Etenemisjärjestys
+
+> **Päivitys 30.10.2026:** toteutusjärjestys on nyt §11:n roadmap (D14: simulaattori ensin).
+> Tämä luku säilyy alkuperäisenä vaiheistuksena.
 
 D5:n mukaisesti mennään suoraan synkronointinäyttöön. Nauhoitinvaihetta ei ole, mutta S5b
 (rengaspuskuri) tuo saman tiedollisen hyödyn ensimmäisestä moottorikäynnistä.
@@ -408,3 +482,35 @@ merkityksessä (nollan tunnistus vs. letkuvian tunnistus); ne saattavat tarvita 
 | 9.8.2026 | Anturi valittu (`XGZP6847A100KPGN33`) datasheetin pohjalta; D8 (ESP32 classic) päätetty. Rautasuunnitelma ja BOM laadittu. R5, R6 lisätty. §7 kirjoitettu D5:n mukaan, §8 käytösmatriisi täytetty. |
 | 9.8.2026 | D2 (1,5 / 3,0 kPa) ja D7 (master valittavissa, oletus SYL 1) päätetty. Vaihe 1 = protolevy. **Kaikki päätökset kiinni paitsi D6.** |
 | 18.8.2026 | Ensimmäinen firmware ([firmware/](firmware/)): ESP32-WROOM-32 (ESP32-D0WD-V3, MAC 48:9d:31:c0:1f:18, varmistettu esptoolilla COM5:stä) + 3× HX710B bittisarjaluku, Wi-Fi AP + web-UI kolmella palkilla. Tietoisesti väliaikainen: HX710B ei ole D4:n XGZP6847A, luvut ovat raakoja eikä kalibroituja. OTA, rengaspuskuri (S5b), kalibrointi (R4) ja käytösmatriisi (§8) rajattu pois — tulevat kun XGZP6847A-anturit saapuvat. |
+| 30.10.2026 | D9–D14 päätetty (SSE-transport, rivit 1+8 yhdistetty, kalibroinnin portitus, rpm-ikkuna 500–3000, MVP = satunnainen työkalu + RPM, simulaattori ensin). Firmware-arkkitehtuuri [docs/firmware.md](docs/firmware.md). Roadmap §11. |
+
+---
+
+## 11. Roadmap (30.10.2026)
+
+**Lopputulos v1.0:** mekaanikko kytkee kolme letkua, liittyy puhelimella `Suckboxx`-verkkoon
+ja näkee yhdellä silmäyksellä, mitä ruuvia pitää kääntää ja mihin suuntaan.
+
+Hyväksymiskriteerit:
+
+- poikkeama masterista kPa:na (D3), iso RPM ± hajonta, tilaväri ja sanallinen säätöohje,
+  päivitys ≥ 10 Hz (D9)
+- käytösmatriisin kaikki rivit toteutettu; ei koskaan vihreää epäluotettavalla kanavalla
+- automaattinen nollaus + ohjattu vahvistuskalibrointi, kertoimet NVS:ssä (R4, D11)
+- raakadata CSV:nä yhdellä napilla (S5b), kaikki vakiot huoltosivulla (S5a)
+- penkkitesti: kolme anturia samassa alipaineessa → `spread` < 0,3 kPa kalibroinnin jälkeen
+- moottoritesti: synkronointi onnistuu ja on vähintään yhtä hyvä kuin mekaanisella mittarilla
+
+Pivotit (dataloggeri, NMEA 2000, EFI) ovat tietoisesti ulkona.
+
+| # | vaihe | vaatii | tila |
+|---|---|---|---|
+| M0 | Päätökset D9–D14, arkkitehtuuri ([docs/firmware.md](docs/firmware.md)), testiympäristö | — | ✅ |
+| M1 | Simulaattori, DSP (syklit, D1-luvut, RPM), kalibrointi, konfiguraatio, rengaspuskuri, käytösmatriisi — kaikki native-testein | — | käynnissä |
+| M2 | Web-UI + PC-mock-palvelin (sama API kuin laitteella) | — | käynnissä |
+| M3 | Processor + integraatiotestit simulaattorilla (jokainen §8:n rivi testinä) + ESP32-liima (1 kHz näytteenotto, NVS, SSE) | ESP32 | |
+| M4 | Laitteella simulaattorilla: UI puhelimessa, suorituskyky (näytteenoton jitter, heap, Wi-Fi) | ESP32 | |
+| M5 | XGZP-anturit protolevylle (rauta.md §6.6), ADC-lähde, penkkitesti T-haaralla | anturit | |
+| M6 | Ensimmäinen moottorikäynti, raakadata talteen | **D6** | |
+| M7 | Viritys nauhoitetulla datalla, nauhoitukset regressiotesteiksi, D2:n lopulliset luvut | data | |
+| M8 | Kotelo (R5), mahdollinen PCB, sateenkaarimaali | H1–H5 | |
