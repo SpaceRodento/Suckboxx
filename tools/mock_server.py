@@ -340,7 +340,10 @@ class Engine:
             self.anchor = self._clamp_rpm(p["rpm"])
             self.n = 0
         elif drift_changed:
+            # Kuten EngineSim::configure(rpm_set=false): params().rpm = nykyinen rpm,
+            # jotta seuraava POST ei hyppää takaisin vanhaan ankkuriin.
             self.anchor = rpm_now
+            self.p["rpm"] = rpm_now
             self.n = 0
 
     @staticmethod
@@ -1059,6 +1062,7 @@ class Device:
             if err:
                 return {"ok": False, "err": err}
             self.engine.configure(self.sim, rpm_posted=any(k == "rpm" for k, _ in pairs))
+            self.sim["rpm"] = self.engine.p["rpm"]
             return {"ok": True}
 
     # --- snapshot ------------------------------------------------------------

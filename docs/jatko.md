@@ -25,9 +25,9 @@ Jokainen paketti kulki: toteutus → vastakkainen katselmointi → korjaus → t
 |---|---|---|
 | WP-1 simulaattori | `core/engine_sim.h`, `test_engine_sim` | ✅ katselmoitu, korjattu, tarkistettu |
 | WP-2 DSP | `core/dsp.h`, `test_dsp` | ⚠️ korjaus **keskeytyi kesken**; 1 testi punaisena |
-| WP-3 sovelluslogiikka | `core/calibration.h`, `config.h`, `json_writer.h`, `raw_ring.h` + testit | ✅ korjattu, tarkistus jäi ajamatta |
+| WP-3 sovelluslogiikka | `core/calibration.h`, `config.h`, `json_writer.h`, `raw_ring.h` + testit | ✅ korjattu ja tarkistettu |
 | WP-4 status | `core/status.h`, `test_status` | ✅ hyväksytty (vain minor-havaintoja) |
-| WP-5 UI | `web/index.html`, `src/web/web_page.h`, `tools/mock_server.py`, `tools/embed_web.py`, `tools/ui_screenshots.js` | ⚠️ katselmoitu, korjaus ei ehtinyt alkaa |
+| WP-5 UI | `web/index.html`, `src/web/web_page.h`, `tools/mock_server.py`, `tools/embed_web.py`, `tools/ui_screenshots.js` | ✅ korjattu ja tarkistettu (Playwright 126/126 lähde, 131/131 minimoitu) |
 
 `tools/run_native_tests.sh` commit-hetkellä: 8 testikokonaisuutta, 196 testiä, 1 virhe:
 `test_dsp: test_avg_cycles_sets_response_and_noise` (rivi 663, `n1` = 3, odotettu ≤ 2).
@@ -48,21 +48,21 @@ keskenään epäjohdonmukaisia.
    `reset()` rakentaa pinoon noin 1 kt:n väliaikaisen `Chan`-olion; lukitusviive on testattu
    vain 850 rpm:llä; rpm-tarkkuustestit toimivat vain epärealistisen pienellä jitterillä (0,2 %).
 
-### WP-5 UI (major)
-1. **Palkin väri lasketaan |d|:stä tilasta riippumatta** (`web/index.html` ~rivi 374), joten
-   kalibroimaton laite näyttää vihreää. Tämä rikkoo D11:n. Värin pitää tulla tilasta tai tuomiosta.
-2. **Tilassa 'Lähellä – kalibroimaton' näytetään silti AVAA/SULJE-neuvo ja worst-kehys** (~rivi 392),
-   vaikka status.h ei tarkoituksella anna ruuvineuvoa.
-3. Minor-havainnot:
-   - 'Palauta oletukset' ei varoita uudelleenkäynnistyksestä, kun lähde vaihtuu.
-   - `WEB_PAGE_HTML[]` kopioituu flashiin jokaiseen käännösyksikköön. Korjaus: `inline`/`extern`.
-   - Kosketusalueet ovat alle 44 px.
-   - SATUROITUU-merkki käyttää koristeväriä.
-   - Asteikon tekstit pyöristyvät.
-   - `hose_off_kpa` on kovakoodattu arvoon 2.
-   - CSS ja JS on pakattu tiheiksi riveiksi (sivu on noin 100 tavua alle 40 KiB:n).
-4. `tools/mock_server.py`: kun drift asetetaan nollaan, `dev.sim['rpm']` on päivitettävä arvosta
-   `engine.p['rpm']`. Muuten seuraava POST hyppää takaisin vanhaan rpm:ään (vrt. WP-1-korjaus).
+### WP-5 UI (korjattu)
+Molemmat major-havainnot ja minor-havainnot on korjattu ja tarkistettu: palkin väri tulee
+laitteen tuomiosta (D11), kalibroimattomana ei näytetä ruuvineuvoa, kosketusalueet ≥ 44 px,
+`WEB_PAGE_HTML` on `inline constexpr`, ja `embed_web.py` minimoi sivun (37 896 t < 40 000 t)
+ja tarkistaa, että minimoitu DOM, CSSOM ja JS-AST vastaavat lähdettä. `mock_server.py --minified`
+tarjoilee täsmälleen laitteen tavut.
+
+Jatkoon (M3):
+- Snapshotiin eksplisiittiset kentät `ch[i].cond` (ok/idle/sensor/hose/blocked/lost) sekä `act_ch`
+  ja `act_dir`, jotta UI ei johda status.h:n päätöksiä itse (`adjCh()`, letku vs. tukos).
+  Snapshot-serialisoijan pitää pyöristää `spread` vähintään kahteen desimaaliin.
+- Vanha `firmware/src/web_page.h` määrittelee yhä globaalin `WEB_PAGE_HTML`:n, ja `main.cpp`
+  käyttää sitä. Poista se, kun `main.cpp` vaihdetaan uuteen `src/web/web_page.h`:hon.
+- CI:hin: `embed_web.py --check`, `embed_web.py --selftest`, `mock_server.py --check-config`.
+- Ei testattu oikeilla iOS Safari- tai Android Chrome -selaimilla.
 
 ### WP-4 status (minor, ei estä)
 - `channelList()` aiheuttaa `-Wformat-truncation`-varoituksen ilman sanitizereita. **`pio test -e native` voi
