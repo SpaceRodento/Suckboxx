@@ -2,8 +2,8 @@
 
 > Tila: **firmware-toteutus käynnissä simulaattori edellä** (roadmap §11). Mikään ei ole lukittu
 > ennen kuin se on merkitty päätöslokiin (§5) tunnuksella ja päivämäärällä. Kaikki päätökset ovat
-> kiinni paitsi **D6 (kohdemoottori)**, joka estää letkuadapterien hankinnan — mutta ei
-> firmware-työtä, koska simulaattori korvaa moottorin vaiheissa M1–M4.
+> kiinni. Kohdemoottori on Honda BF50A (D6); ennen letkuadapterien tilausta on vielä
+> varmistettava synkronointitulppien kierre.
 >
 > | dokumentti | sisältö |
 > |-----|-----|
@@ -268,11 +268,27 @@ oletukseen signaalin muodosta (§2), ei mitattuun. Se on hyvin perusteltu oletus
   hyödyn, joka erillisestä nauhoitinvaiheesta olisi saatu. **Ilman tätä ensimmäinen moottorikäynti
   ei tuota mitään pysyvää tietoa signaalista.**
 
-### D6 — Kohdemoottori 🔴 AVOIN
+### D6 — Kohdemoottori ✅ PÄÄTETTY 30.10.2026 (kierre varmistettava)
 
-Merkki, malli, kaasutin vai ITB. Vaikuttaa letkuliitosten tyyppiin (kierre vs. tulppa vs.
-T-haara) ja siihen, onko sylinterien välillä tasauskanavia (balance tubes) — ne vaimentavat
-kanavien välisiä eroja ja muuttavat signaalin muotoa merkittävästi.
+**Honda BF50A, n. 2004.** Kolme erillistä kaasutinta, imusarjassa valmiit synkronointitulpat,
+kierre todennäköisesti **M6** — *varmistettava ennen adapterien tilausta* (ks. alla).
+
+*Seuraukset:*
+
+- **Letkuliitos:** tulppa auki → messinkinen letkunippa (kierre × ⌀3 mm letkulle) tilalle.
+  T-haaraa tai porausta ei tarvita. → [docs/hankinnat.md](docs/hankinnat.md) A5.
+- **Kierteen varmistus:** irrota yksi tulppa ja mittaa (kierretulkki tai kokeile M6×1,0-
+  ja M5×0,8-muttereita). Moottoripyörä-Hondoissa vastaavat tulpat ovat usein M5×0,8, joten
+  "M6 ehkä" kannattaa todentaa ennen kuin tilaa kolme nippaa. Tiivisteet (kuparialuslevyt)
+  samaan kokoon.
+- **Kaasuttimet, ei ITB:** yksi synkronointiruuvi per säädettävä kaasutin. Huolto-ohjeesta
+  tarkistettava, **mikä kaasutin on kiinteä perus** (= master, D7) — oletus SYL 1 säilyy,
+  kunnes se on tarkistettu. Säätöruuvin kiertosuunta tarkistetaan samalla, jolloin
+  säätöohje voi myöhemmin sanoa "myötäpäivään/vastapäivään" eikä vain "avaa/sulje".
+- **Tasauskanavat:** ei tiedossa. Simulaattorin `xtalk`-parametri kattaa molemmat
+  vaihtoehdot; ensimmäinen nauhoitus (M6) näyttää, onko vuotopulsseja.
+- **Joutokäynti:** tarkka ohjearvo huolto-ohjeesta; se osuu joka tapauksessa D12:n
+  500–3000 rpm -ikkunaan.
 
 ### D7 — Master-kanava ✅ PÄÄTETTY 9.8.2026
 
@@ -482,6 +498,7 @@ merkityksessä (nollan tunnistus vs. letkuvian tunnistus); ne saattavat tarvita 
 | 9.8.2026 | Anturi valittu (`XGZP6847A100KPGN33`) datasheetin pohjalta; D8 (ESP32 classic) päätetty. Rautasuunnitelma ja BOM laadittu. R5, R6 lisätty. §7 kirjoitettu D5:n mukaan, §8 käytösmatriisi täytetty. |
 | 9.8.2026 | D2 (1,5 / 3,0 kPa) ja D7 (master valittavissa, oletus SYL 1) päätetty. Vaihe 1 = protolevy. **Kaikki päätökset kiinni paitsi D6.** |
 | 18.8.2026 | Ensimmäinen firmware ([firmware/](firmware/)): ESP32-WROOM-32 (ESP32-D0WD-V3, MAC 48:9d:31:c0:1f:18, varmistettu esptoolilla COM5:stä) + 3× HX710B bittisarjaluku, Wi-Fi AP + web-UI kolmella palkilla. Tietoisesti väliaikainen: HX710B ei ole D4:n XGZP6847A, luvut ovat raakoja eikä kalibroituja. OTA, rengaspuskuri (S5b), kalibrointi (R4) ja käytösmatriisi (§8) rajattu pois — tulevat kun XGZP6847A-anturit saapuvat. |
+| 30.10.2026 | D6: Honda BF50A (~2004), 3 kaasutinta, synkronointitulpat valmiina, kierre todennäköisesti M6 (varmistettava). |
 | 30.10.2026 | D9–D14 päätetty (SSE-transport, rivit 1+8 yhdistetty, kalibroinnin portitus, rpm-ikkuna 500–3000, MVP = satunnainen työkalu + RPM, simulaattori ensin). Firmware-arkkitehtuuri [docs/firmware.md](docs/firmware.md). Roadmap §11. |
 
 ---
@@ -511,6 +528,6 @@ Pivotit (dataloggeri, NMEA 2000, EFI) ovat tietoisesti ulkona.
 | M3 | Processor + integraatiotestit simulaattorilla (jokainen §8:n rivi testinä) + ESP32-liima (1 kHz näytteenotto, NVS, SSE) | ESP32 | |
 | M4 | Laitteella simulaattorilla: UI puhelimessa, suorituskyky (näytteenoton jitter, heap, Wi-Fi) | ESP32 | |
 | M5 | XGZP-anturit protolevylle (rauta.md §6.6), ADC-lähde, penkkitesti T-haaralla | anturit | |
-| M6 | Ensimmäinen moottorikäynti, raakadata talteen | **D6** | |
+| M6 | Ensimmäinen moottorikäynti (Honda BF50A), raakadata talteen | adapterit (D6: kierre varmistettava) | |
 | M7 | Viritys nauhoitetulla datalla, nauhoitukset regressiotesteiksi, D2:n lopulliset luvut | data | |
 | M8 | Kotelo (R5), mahdollinen PCB, sateenkaarimaali | H1–H5 | |
