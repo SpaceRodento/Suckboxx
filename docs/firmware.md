@@ -163,6 +163,14 @@ class Dsp {
   `p2p_kpa` on pulssin nousu (lukittuna min(nousu, lasku)), tasaisessa käynnissä sama kuin
   ikkunan p2p.
 - `xtalk` 0,3:een asti ei saa kolminkertaistaa rpm:ää (vuotopulssit ovat pienempiä).
+- Kaasun muutokset (WP-2c, 30.10.2026): lukitus puretaan kahden peräkkäisen vanhenemisen
+  jälkeen (`kMaxStaleRolls`, rpm-pudotus yli 1,8-kertaisesti), ja viitteestä poikkeava jakso,
+  joka toistaa edellisen raja-raja-välin, on uusi viite (kaasun lisäys). Odotetun rajan
+  puuttuessa Schmittin amplitudi lasketaan kuluvasta segmentistä (kutistuva pulssi), ja
+  vahvistuksen askeltarkistus ohitetaan, kun jakso jatkaa kiihdytyksen tai hidastuksen
+  trendiä. Hiljaisuudesta herääminen (käynnistys) aloittaa suotimen asettumisen alusta.
+  Mitattu EngineSimillä: rpm-pudotus ja kaasun katkaisu ≤ 0,55 s ilman syklejä, blippaus
+  850 → 3000 rpm ≤ 0,65 s, käynnistys 6000 rpm:iin 147 ms (`test_integration`: `test_wp2c_*`).
 - `sensor_fault`: mV ulkona `[fault_lo_mv, fault_hi_mv]` yhtäjaksoisesti `fault_hold_s`.
   `saturated`: `mv ≥ sat_mv` havaittu viimeisen 1 s aikana.
 - `RpmEstimate`: kanavien rpm:ien mediaani; `sd_rpm`/`cv` viimeisten `rpm_hist` jakson yli.
@@ -344,6 +352,18 @@ Ruuvin kiertosuunta riippuu moottorista (D6) eikä sitä kerrota.
 pulssin huippua, ja GN-anturi on ilmanpaineessa leikkausrajallaan (docs/rauta.md §1.2), joten
 pelkkä `saturated` olisi päällä jokaisella sammutuksella (tarkennettu 30.10.2026).
 
+Pitoajat ja yhteismuotoinen muutos (WP-2c, 30.10.2026):
+- `HoseOff` (rivi 6) vasta `kHoseHoldS` = 0,5 s pulssittomuuden jälkeen. Käynnistyksessä ja
+  sammutuksessa kanavat saavat ja menettävät pulssin eri sykleillä. Masterin vaihto nollaa
+  ajastimet, joten pitoaika alkaa alusta.
+- `flag_saturation` vasta, kun ehto on jatkunut `kSatHoldS` = 1,2 s (DSP:n `saturated`- ja
+  `has_pulse`-muistit ovat 1 s, joten käynnistys ja sammutus eivät välähdä).
+- Rivi 5: kun taso-EMA karkaa syklikeskiarvosta tai keskiarvot siirtyvät 0,3–0,6 s:ssa
+  kaikissa kanavissa samaan suuntaan yli `kCommonMoveKpa` = 1 kPa, tila on `Unstable`
+  ("Alipaine muuttuu kaikissa sylintereissä"). Kanavien liukuvat keskiarvot päivittyvät eri
+  hetkinä, joten yhteismuotoinen muutos näkyisi muuten hetkellisenä spreadinä (20 kPa →
+  1,7–2,5 kPa). Vakausajastin ei nollaudu. Yhden ruuvin säätö ei laukaise tätä.
+
 ### 4.8 `processor.h`, `snapshot.h`, `sim_api.h` (WP-6)
 
 Processor kokoaa coren yhdeksi olioksi, jota ESP32-liima kutsuu mutexin takaa. Kaikki
@@ -417,7 +437,9 @@ Tiedostot `src/main.cpp` ja `src/hal/*` (Arduino-ESP32 2.0.17, ESPAsyncWebServer
 
 - **Näytteenotto:** oma FreeRTOS-taski ytimellä 1, `vTaskDelayUntil` 1 ms:n välein
   (`CONFIG_FREERTOS_HZ` = 1000). Lähde `Config::source`n mukaan: `EngineSim::next()`, ADC1
-  (GPIO34/35/36 + kisko GPIO39, docs/rauta.md §2.2) tai HX710B (penkkitesti, D14). Kehykset
+  tai HX710B (penkkitesti, D14). ADC: protolevyllä GPIO34/35/32 ilman kiskoa (`rail_mv` = 0)
+  ja hylättävä lämmittelyluku per kanava (S&H-ylikuuluminen ilman pinnien 100 nF:ää,
+  docs/rauta.md §2.2). Suunnitelman levyllä GPIO34/35/36 + kisko GPIO39. Kehykset
   jonoon, josta käsittelytaski vie ne `Processor::push`iin. Täysi jono pudottaa kehyksen, ja
   pudotus näkyy seq-aukkona (`diag.gaps`).
 - **Ei pitkiä keskeytyskieltoja eikä busy-waitia.** Bring-up-firmwaressa `noInterrupts()`
@@ -443,14 +465,18 @@ Tiedostot `src/main.cpp` ja `src/hal/*` (Arduino-ESP32 2.0.17, ESPAsyncWebServer
 - **Käännösliput:** `SBX_SAMPLE_SOURCE` valitsee oletuslähteen (`esp32dev_adc`,
   `esp32dev_hx`), `SSE_MAX_QUEUED_MESSAGES=8` (hitaalle asiakkaalle enintään ~0,5 s vanhaa
   dataa) ja `CORE_DEBUG_LEVEL=0` (kirjaston loki odottaisi sarjaporttia).
-- **NVS** (`Preferences`, nimiavaruus `sbx`): konfiguraatio kenttä kerrallaan rekisterin
-  kautta (§4.4) ja skeemaversio; kalibroinnista vain gainit ja `gain_valid` (D11: nollaus ei
-  ole pysyvä). Tallennus dirty-lipuista viiveellä, jotta flash ei kulu.
-- **Web:** §5:n reitit, sivu `src/web/web_page.h`:n `WEB_PAGE_HTML`ista raakana (ei gzip:iä,
-  `inline constexpr`, yksi kopio flashissa). Bring-up-firmwaren `src/web_page.h` määrittelee
-  saman symbolin, joten se poistetaan, kun liima otetaan käyttöön. `/api/raw.csv`
-  jäädyttää renkaan ja striimaa `CsvWriter`illa chunked-vastauksena. Rengas vapautetaan
-  myös, jos asiakas katkaisee yhteyden (aikakatkaisu).
+- **NVS** (`Preferences`, nimiavaruus `sbx`, `hal/nvs_store.*`): konfiguraatio kenttä
+  kerrallaan rekisterin avaimilla (§4.4) ja skeemaversio `_v`; kalibroinnista vain gainit
+  `_g0`…`_g2` ja `_gv` (D11: nollaus ei ole pysyvä). `loopTask` tallentaa dirty-lipuista
+  10 s välein, jotta flash ei kulu (kirjoitus näkyy samplerin aukkoina). Lähteen vaihto
+  tallentuu ja käynnistää laitteen uudelleen. Ilman tallennettua konfiguraatiota lähde on
+  käännöksen `SBX_SAMPLE_SOURCE`, ja asetusten nollaus (`/api/config/reset`) säilyttää sen.
+- **Web (WP-7b, 30.10.2026):** §5:n reitit, sivu `src/web/web_page.h`:n `WEB_PAGE_HTML`ista
+  raakana (ei gzip:iä, `inline constexpr`, yksi kopio flashissa). WP-7a:n diagnostiikkasivu
+  on `/diag`:ssa (`/api/diag`, SSE-tapahtuma `diag` 5 Hz). `/api/raw.csv` jäädyttää renkaan
+  ja striimaa `CsvWriter`illa chunked-vastauksena; rengas vapautetaan latauksen lopussa tai
+  `onDisconnect`issa, kumpi tahansa ensin. Snapshot rakennetaan `sbx_push`issa Processorin
+  mutexin alla juuri ennen lähetystä.
 
 ---
 
