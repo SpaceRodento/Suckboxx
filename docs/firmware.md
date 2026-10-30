@@ -110,7 +110,10 @@ struct SimParams {
 class EngineSim {
  public:
   EngineSim();
-  void configure(const SimParams& p, const SensorParams& s);  // ei nollaa vaihetta
+  // Ei nollaa vaihetta. rpm_set = true, kun POST /api/sim sisältää rpm-avaimen: pelkkä
+  // driftin muutos jatkaa nykyisestä kierrosluvusta ja kirjaa sen params().rpm:ään, joten
+  // /api/sim-käsittelijä yhdistää POSTin sim.params():iin (ks. engine_sim.h).
+  void configure(const SimParams& p, const SensorParams& s, bool rpm_set = false);
   const SimParams& params() const;
   void reset();                       // vaihe, aika ja PRNG alkuun
   RawFrame next();                    // seuraava 1 kHz näyte, seq kasvaa yhdellä
@@ -203,8 +206,6 @@ struct FieldInfo {
   const char* group;  // "Synkronointi", "Signaali", "Anturi", "Järjestelmä"
   FieldType type;
   float min, max;
-  const char* options;  // U8-valintakentälle "|"-eroteltu suomenkielinen lista
-                        // (indeksi = arvo), esim. "Simulaattori|ADC|HX710B"; muuten nullptr
 };
 int configFieldCount();
 const FieldInfo& configField(int i);
@@ -222,25 +223,25 @@ Kaikki `SensorParams`/`DspParams`/`StatusParams`-kentät, `source` ja `push_rate
 rekisterissä. NVS-liima tallentaa kentät avain kerrallaan rekisterin kautta, joten uusi kenttä
 ei vaadi muutoksia liimaan.
 
-`configToJson` on huoltosivun ainoa tietolähde: UI rakentaa lomakkeen kenttärekisteristä
-eikä tunne yhtään kenttää nimeltä. Muoto (lisätty 30.10.2026, WP-3 ja WP-5 nojaavat tähän):
+`configToJson` on huoltosivun tietolähde: UI rakentaa lomakkeen kenttärekisteristä.
+Muoto (WP-3:n toteutus, kirjattu 30.10.2026):
 
 ```json
-{"v": 1, "schema": 1, "fields": [
-  {"key": "tol_green", "label": "Vihreän raja", "unit": "kPa", "group": "Synkronointi",
-   "type": "float", "min": 0.1, "max": 10, "value": 1.5},
-  {"key": "source", "label": "Signaalilähde", "unit": "", "group": "Järjestelmä",
-   "type": "u8", "min": 0, "max": 2, "value": 0, "options": ["Simulaattori", "ADC", "HX710B"]}
+{"v": 1, "fields": [
+  {"key": "tol_green", "label": "…", "unit": "kPa", "group": "Synkronointi",
+   "type": "float", "min": 0.1, "max": 10, "def": 1.5, "value": 1.5}
 ]}
 ```
 
-- `schema` = `kConfigSchemaVersion`. `type` ∈ `float`, `u8`, `u16`, `bool`; bool-kentän
-  `value` on `true`/`false`, `min`/`max` silloin 0/1. `options` vain kun `FieldInfo::options`.
-- Kentät rekisterin järjestyksessä; UI ryhmittelee `group`in mukaan ensiesiintymän järjestyksessä.
-- Liukuluvut lyhyimmässä muodossa enintään neljällä desimaalilla (`1.5`, ei `1.5000`).
-- `POST /api/config` -virhevastaus kertoo kentän: `{"ok":false,"key":"tol_green","err":"…"}`;
-  ristiintarkistuksen (`configValidate`) virheessä `key` puuttuu. Pyyntö on atominen: jos yksikin
-  kenttä hylätään, mitään ei muuteta.
+- `v` = `kConfigSchemaVersion`. `type` ∈ `float`, `u8`, `u16`, `bool`; bool-kentän `def` ja
+  `value` ovat `true`/`false`, `min`/`max` silloin 0/1. Kentät rekisterin järjestyksessä, ja
+  UI ryhmittelee `group`in mukaan. Puskuri: `kConfigJsonSize`.
+- UI tuntee nimeltä vain kaksi valintakenttää, `source` ja `master`, joiden vaihtoehtojen
+  nimet ovat UI:ssa.
+- `POST /api/config` on atominen: kaikki kentät sovelletaan Configin kopioon, sitten
+  `configValidate`, ja vasta sitten kopio otetaan käyttöön. Virhe on yksi teksti, jonka UI
+  näyttää sellaisenaan: `{"ok":false,"err":"Nimi (avain): syy"}`. Viitetoteutus on
+  `tools/mock_server.py`:n `api_config_set`, ja laitteen pitää vastata samoin (§4.8).
 
 ### 4.5 `raw_ring.h` (WP-3)
 
@@ -423,7 +424,7 @@ yhdistää automaattisesti uudelleen ja on mockattavissa pelkällä Pythonin sta
 | GET | `/` | `web/index.html` |
 | GET | `/events` | SSE, tapahtuma `snap`, data = snapshot-JSON yhdellä rivillä, `push_rate_hz` |
 | GET | `/api/config` | `configToJson` |
-| POST | `/api/config` | form-urlencoded `key=value[&…]` → `{"ok":true}` / `{"ok":false,"key":"…","err":"…"}` (§4.4) |
+| POST | `/api/config` | form-urlencoded `key=value[&…]` → `{"ok":true}` / `{"ok":false,"err":"…"}`, atominen (§4.4) |
 | POST | `/api/config/reset` | oletukset |
 | POST | `/api/master` | `ch=0..2` |
 | POST | `/api/cal/zero` | `{"ok":…,"msg":"…"}` |
