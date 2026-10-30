@@ -690,9 +690,15 @@ void checkChange(const Change& ch, int offset_ms = 0, bool verbose = true) {
   p.xtalk = ch.xtalk;
   p.jitter = 0.01f;
   g_rig.begin(p);
-  g_rig.run(2.5f + 0.001f * static_cast<float>(offset_ms));
+  g_rig.run(1.5f + 0.001f * static_cast<float>(offset_ms));
+  // Seuranta alkaa jo ennen muutosta, jotta muutoksen yli ulottuva väli
+  // mitataan edellisestä hyväksytystä syklistä asti.
   Watch w;
   w.start(g_rig, 8);
+  for (int i = 0; i < 1000; ++i) {
+    g_rig.step();
+    w.sample(g_rig);
+  }
   const int ramp = ch.ramp_ms > 0 ? ch.ramp_ms : 1;
   for (int i = 1; i <= ramp; ++i) {
     const float a = static_cast<float>(i) / static_cast<float>(ramp);
@@ -791,9 +797,13 @@ void test_throttle_blip_tracks_rpm_and_vacuum() {
   SynthParams p = idleParams();
   p.jitter = 0.01f;
   g_rig.begin(p);
-  g_rig.run(3.0f);
+  g_rig.run(2.0f);
   Watch w;
   w.start(g_rig, 8);
+  for (int i = 0; i < 1000; ++i) {
+    g_rig.step();
+    w.sample(g_rig);
+  }
   for (int i = 1; i <= 300; ++i) {
     const float a = static_cast<float>(i) / 300.0f;
     p.rpm = 850.0f + 1650.0f * a;
