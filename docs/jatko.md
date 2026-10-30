@@ -13,7 +13,13 @@ cd firmware && pio run -e esp32dev_adc -t upload          # protolevy, oikeat an
 python tools/embed_web.py --check                         # web/index.html == src/web/web_page.h
 python tools/mock_server.py --check-config
 python tools/mock_server.py                               # UI simulaattoria vasten, localhost:8000
+python tools/cycle_profile.py --url http://192.168.4.1/api/raw.csv --open   # imusyklin profiili
 ```
+
+`tools/cycle_profile.py` tekee laitteen raakadatasta (8 s, 1 kHz) HTML-raportin: syklit
+päällekkäin kampiasteina, keskiprofiili ja hajonta sylintereittäin, syklikohtainen
+muotopoikkeama, kierrosluku sykleittäin ja kanavien erot. Ilman moottoria (letkut T-haarassa)
+raportti näyttää kanavien yhtäpitävyyden. `--lp 100` suodattaa letkun resonanssin profiileista.
 
 Windowsilla `tools/run_native_tests.sh` (ASan/UBSan) ajetaan WSL:ssä. `pio test -e native`
 toimii suoraan MSYS2:n g++:lla.
@@ -51,7 +57,9 @@ DSP EngineSim-penkissä (16 siementä, ennen → nyt): rpm-pudotus 3000 → 850 
 1. **Oikea moottori (M5).** Kaikki DSP-luvut on mitattu simulaattorilla. Ensimmäisellä
    ajolla: lataa `/api/raw.csv` tyhjäkäynnillä ja kaasua blipaten, ja vertaa EngineSimin
    oletuksiin (pulssin syvyys, letkuresonanssi, ristivuoto tasauskanavien kautta, D6).
-2. **Rauta**, ks. "Raudan arvio" alla ja docs/rauta.md.
+2. **Rauta**, ks. "Raudan arvio" alla ja docs/rauta.md. Letkut tehdään mahdollisimman lyhyiksi
+   (profiilitutkimus, rauta.md §4.1:n päivitys): alle ~20 cm:n letkuilla 100 nF on tarpeen
+   anti-alias-suodattimena.
 3. **H1/R4, väärä vihreä.** GN-anturi leikkaa ilmanpaineessa (2700 mV). Positiivinen offset
    jää näkymättä, eikä automaattinen nollaus poista sitä. Vahvistuskalibrointi noin
    −50 kPa:ssa T-haarassa kompensoi; tai GPN-anturi.

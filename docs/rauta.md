@@ -285,6 +285,30 @@ Kaikki ovat reilusti hyötysignaalin (6,7–50 Hz) yläpuolella ja Nyquistin (50
 eli oikein näytteistettävissä ja digitaalisesti poistettavissa. **Pituuseron vaikutus:** 10 cm ero
 1 m:n letkussa siirtää resonanssia 9 %, mikä näkyy kanavien välisenä erona jota ei ole olemassa.
 
+#### Päivitys 30.10.2026: letkut mahdollisimman lyhyiksi (imusyklin profiili)
+
+Päätetty: anturit asennetaan mahdollisimman lähelle synkronointitulppia, koska imusyklin
+muodon tutkiminen (`tools/cycle_profile.py`) vaatii lyhyen letkun. Pitkä letku soi omalla
+taajuudellaan ja pyöristää käyrää. Synkronointiin (syklin keskiarvo, D1) letkun pituudella ei
+ole vaikutusta, kunhan kaikki kolme ovat samanpituiset.
+
+Seuraus: resonanssi nousee. ¼-aalto ≈ 343 / (4 · L), sisäletku kotelossa mukaan lukien:
+
+| pituus | ¼-aaltoresonanssi | suhteessa 1 kHz:n näytteistykseen |
+|-----|-----|-----|
+| 0,3 m | ~290 Hz | Nyquistin (500 Hz) alla, DSP poistaa |
+| 0,2 m | ~430 Hz | rajalla |
+| 0,15 m | ~570 Hz | **yli Nyquistin: taittuu ~430 Hz:iin** |
+| 0,1 m | ~860 Hz | taittuu ~140 Hz:iin |
+| 0,05 m | ~1,7 kHz | anturin oma vaste (~150 Hz) vaimentaa jo ~−21 dB |
+
+Alle ~20 cm:n letkuilla **§3.1:n 10 kΩ + 100 nF on tarpeen anti-alias-suodattimena**. Synkronoinnin
+keskiarvoon taittunut resonanssi vaikuttaa vähän: anturin oma vaste vaimentaa sen, eikä se ole
+tahdissa syklin kanssa. Pahin tapaus on resonanssi lähellä 1 kHz:ä (~9 cm), jolloin taittunut
+soiminen näkyy hitaana poikkeamana. Arvio on alle 0,1 kPa per kanava ilman kondensaattoria,
+mutta profiilikäyrään taittunut resonanssi piirtää olemattoman värähtelyn. Tarkistus:
+puhalla T-haaraan, lataa CSV ja katso aikasarjasta letkun soimisen taajuus.
+
 ### 4.2 Kotelon läpiviennit ottavat vedon, ei anturi
 
 Datasheet varoittaa: *"avoiding excessive external force operation"*. Anturin nippa on
