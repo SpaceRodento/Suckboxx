@@ -276,6 +276,10 @@ kierre todennäköisesti **M6** — *varmistettava ennen adapterien tilausta* (k
 
 *Seuraukset:*
 
+- **Tyhjäkäynti 850–950 rpm** (omistajan tieto 30.10.2026; tarkistettava huolto-ohjeesta).
+  Synkronointi tehdään tyhjäkäynnillä, joka on D12:n arvioikkunan (500–3000 rpm) sisällä.
+  Simulaattorin oletus 850 rpm on alueen alalaidassa. DSP:n testit kattavat 600–3000 rpm,
+  ja lukitus 850 rpm:llä vie noin 0,45 s.
 - **Letkuliitos:** tulppa auki → messinkinen letkunippa (kierre × ⌀3 mm letkulle) tilalle.
   T-haaraa tai porausta ei tarvita. → [docs/hankinnat.md](docs/hankinnat.md) A5.
 - **Kierteen varmistus:** irrota yksi tulppa ja mittaa (kierretulkki tai kokeile M6×1,0-
@@ -500,6 +504,7 @@ merkityksessä (nollan tunnistus vs. letkuvian tunnistus); ne saattavat tarvita 
 | 9.8.2026 | D2 (1,5 / 3,0 kPa) ja D7 (master valittavissa, oletus SYL 1) päätetty. Vaihe 1 = protolevy. **Kaikki päätökset kiinni paitsi D6.** |
 | 18.8.2026 | Ensimmäinen firmware ([firmware/](firmware/)): ESP32-WROOM-32 (ESP32-D0WD-V3, MAC 48:9d:31:c0:1f:18, varmistettu esptoolilla COM5:stä) + 3× HX710B bittisarjaluku, Wi-Fi AP + web-UI kolmella palkilla. Tietoisesti väliaikainen: HX710B ei ole D4:n XGZP6847A, luvut ovat raakoja eikä kalibroituja. OTA, rengaspuskuri (S5b), kalibrointi (R4) ja käytösmatriisi (§8) rajattu pois — tulevat kun XGZP6847A-anturit saapuvat. |
 | 30.10.2026 | D6: Honda BF50A (~2004), 3 kaasutinta, synkronointitulpat valmiina, kierre todennäköisesti M6 (varmistettava). |
+| 30.10.2026 | D6: tyhjäkäynti 850–950 rpm (omistajan tieto, varmistettava huolto-ohjeesta). |
 | 30.10.2026 | D9–D14 päätetty (SSE-transport, rivit 1+8 yhdistetty, kalibroinnin portitus, rpm-ikkuna 500–3000, MVP = satunnainen työkalu + RPM, simulaattori ensin). Firmware-arkkitehtuuri [docs/firmware.md](docs/firmware.md). Roadmap §11. |
 
 ---
