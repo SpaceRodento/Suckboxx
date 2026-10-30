@@ -15,7 +15,7 @@
 //
 // Lähde valitaan väliaikaisesti käännösaikana (7b: Config::source NVS:stä):
 //   pio run -e esp32dev       simulaattori (oletus, D14)
-//   pio run -e esp32dev_adc   ADC1 GPIO34/35/36 + kisko GPIO39
+//   pio run -e esp32dev_adc   ADC1 GPIO34/35/32 (protolevy, ei kiskoa)
 //   pio run -e esp32dev_hx    HX710B-penkkitesti
 
 #include <Arduino.h>
