@@ -407,7 +407,9 @@ Tiedostot `src/main.cpp` ja `src/hal/*` (Arduino-ESP32 2.0.17, ESPAsyncWebServer
 - **NVS** (`Preferences`, nimiavaruus `sbx`): konfiguraatio kenttä kerrallaan rekisterin
   kautta (§4.4) ja skeemaversio; kalibroinnista vain gainit ja `gain_valid` (D11: nollaus ei
   ole pysyvä). Tallennus dirty-lipuista viiveellä, jotta flash ei kulu.
-- **Web:** §5:n reitit, sivu `src/web/web_page.h`:sta gzip-koodattuna. `/api/raw.csv`
+- **Web:** §5:n reitit, sivu `src/web/web_page.h`:n `WEB_PAGE_HTML`ista raakana (ei gzip:iä,
+  `inline constexpr`, yksi kopio flashissa). Bring-up-firmwaren `src/web_page.h` määrittelee
+  saman symbolin, joten se poistetaan, kun liima otetaan käyttöön. `/api/raw.csv`
   jäädyttää renkaan ja striimaa `CsvWriter`illa chunked-vastauksena. Rengas vapautetaan
   myös, jos asiakas katkaisee yhteyden (aikakatkaisu).
 
