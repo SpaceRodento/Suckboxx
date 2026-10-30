@@ -165,6 +165,11 @@ void assertNoVerdict(const StatusResult& r) {
 // Ajaa vakauden yli (stable_hold_s + marginaali).
 StatusResult settle(const StatusInput& in) { return g.run(in, 4.0f); }
 
+// Rivi 6: letkuvika vasta kHoseHoldS:n jälkeen (ks. test_row6_hose_off_needs_hold).
+StatusResult hoseHold(const StatusInput& in) {
+  return g.run(in, sbx::StatusMachine::kHoseHoldS + kDt);
+}
+
 }  // namespace
 
 void setUp() { g.begin(); }
@@ -691,7 +696,7 @@ void test_row5_drift_history_cleared_when_rpm_lost() {
 void test_row6_hose_off() {
   StatusInput in = idleSynced();
   dropPulse(in, 1, -0.5f);
-  StatusResult r = g.step(in);   // ei pitoaikaa: has_pulse + EMA viivästävät jo
+  StatusResult r = hoseHold(in);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::FaultHose), static_cast<int>(r.state));
   TEST_ASSERT_EQUAL_INT(1, r.fault_ch);
   TEST_ASSERT_EQUAL_STRING("VIKA: SYL 2 – ei alipainetta, tarkista letku", r.headline);
@@ -708,10 +713,59 @@ void test_row6_hose_off() {
   TEST_ASSERT_EQUAL_INT(0, g.zero_requests);
 }
 
+void test_row6_hose_off_needs_hold() {
+  // Käynnistyksessä ja sammutuksessa kanavat saavat ja menettävät pulssin
+  // eri sykleillä, ja matalalla alipaineella taso on jo nollan tuntumassa.
+  // Ensin "odota", letkuvika vasta kHoseHoldS:n jälkeen.
+  StatusInput in = idleSynced();
+  settle(in);
+  dropPulse(in, 1, -0.5f);
+  StatusResult r = g.step(in);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::Unstable), static_cast<int>(r.state));
+  assertNoVerdict(r);
+  r = g.run(in, sbx::StatusMachine::kHoseHoldS - 2.0f * kDt);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::Unstable), static_cast<int>(r.state));
+  r = g.run(in, 2.0f * kDt);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::FaultHose), static_cast<int>(r.state));
+  // Pulssi palaa ennen pitoaikaa: ei vikaa koskaan.
+  g.begin();
+  in = idleSynced();
+  settle(in);
+  StatusInput off = in;
+  dropPulse(off, 0, 0.5f);
+  for (int i = 0; i < 6; ++i) {
+    r = g.step(off);
+    TEST_ASSERT_TRUE(r.state != SyncState::FaultHose && r.state != SyncState::FaultMaster);
+  }
+}
+
+void test_row5_common_move_hides_verdict() {
+  // Kaasu: taso-EMA karkaa syklikeskiarvoista kaikissa kanavissa -> odota,
+  // ei tuomiota (keskiarvot päivittyvät porrastetusti). Vakausajastin säilyy,
+  // joten tuomio palaa heti liikkeen loputtua.
+  StatusInput in = idleSynced();
+  StatusResult r = settle(in);
+  TEST_ASSERT_TRUE(r.show_verdict);
+  StatusInput moving = in;
+  for (int i = 0; i < kChannels; ++i) moving.ch[i].level_kpa = in.ch[i].mean_kpa + 3.0f;
+  r = g.step(moving);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::Unstable), static_cast<int>(r.state));
+  TEST_ASSERT_EQUAL_STRING("Alipaine muuttuu kaikissa sylintereissä", r.advice);
+  assertNoVerdict(r);
+  assertTextSane(r);
+  r = g.step(in);
+  TEST_ASSERT_TRUE(r.show_verdict);
+  // Yhden kanavan ruuvin säätö liikuttaa vain sitä: tuomio pysyy.
+  StatusInput one = in;
+  one.ch[2].level_kpa = in.ch[2].mean_kpa + 3.0f;
+  r = g.step(one);
+  TEST_ASSERT_TRUE(r.show_verdict);
+}
+
 void test_row6_threshold_and_blocked_hose_extension() {
   StatusInput in = idleSynced();
   dropPulse(in, 1, -1.9f);   // |taso| < hose_off_kpa (2,0)
-  StatusResult r = g.step(in);
+  StatusResult r = hoseHold(in);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::FaultHose), static_cast<int>(r.state));
 
   // -2,1 kPa ilman pulssia: ei vielä rivin 6 ehto -> ohimenevä (Unstable).
@@ -767,7 +821,7 @@ void test_row6_two_hoses_off() {
   StatusInput in = idleSynced();
   dropPulse(in, 1, 0.2f);
   dropPulse(in, 2, -0.3f);
-  StatusResult r = g.step(in);
+  StatusResult r = hoseHold(in);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::FaultHose), static_cast<int>(r.state));
   TEST_ASSERT_EQUAL_INT(1, r.fault_ch);
   TEST_ASSERT_EQUAL_STRING("VIKA: SYL 2 ja SYL 3 – ei alipainetta, tarkista letkut", r.headline);
@@ -865,6 +919,22 @@ void test_row10_saturation_flag_is_independent_of_state() {
   TEST_ASSERT_TRUE(r.flag_saturation);
 }
 
+void test_row10_saturation_needs_hold() {
+  // Käynnistyksessä ja sammutuksessa DSP:n saturated (1 s muisti
+  // ilmanpaineesta) ja has_pulse ovat päällekkäin alle 1 s: ei varoitusta.
+  // Aito leikkautuminen jatkuu, ja lippu nousee kHoseHoldS:n tapaan viiveellä.
+  StatusInput in = idleSynced();
+  settle(in);
+  in.ch[1].saturated = true;
+  StatusResult r = g.run(in, 1.0f);
+  TEST_ASSERT_FALSE(r.flag_saturation);
+  r = g.run(in, sbx::StatusMachine::kSatHoldS);
+  TEST_ASSERT_TRUE(r.flag_saturation);
+  in.ch[1].saturated = false;
+  r = g.step(in);
+  TEST_ASSERT_FALSE(r.flag_saturation);
+}
+
 void test_row10_atmosphere_is_not_pulse_saturation() {
   // GN-anturi ilmanpaineessa = 2700 mV >= sat_mv (2680). Sammutetulla
   // moottorilla tämä ei ole rivin 10 "pulssin huippu leikkautuu".
@@ -960,15 +1030,16 @@ void test_row12_master_hose_off_depends_on_master_choice() {
   StatusParams p;
   p.master = 1;
   g.begin(p);
-  StatusResult r = g.step(in);
+  StatusResult r = hoseHold(in);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::FaultMaster), static_cast<int>(r.state));
   TEST_ASSERT_EQUAL_INT(1, r.fault_ch);
   TEST_ASSERT_EQUAL_STRING("Master (SYL 2) ei kelpaa viitteeksi – valitse toinen", r.headline);
   TEST_ASSERT_EQUAL_STRING("SYL 2: ei alipainetta – tarkista letku", r.advice);
   // Käyttäjä vaihtaa masterin (rivi 12): sama kanava on nyt tavallinen letkuvika.
+  // Vaihto nollaa ajastimet, joten pitoaika (kHoseHoldS) alkaa alusta.
   p.master = 0;
   g.sm.configure(p);
-  r = g.step(in);
+  r = hoseHold(in);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::FaultHose), static_cast<int>(r.state));
   TEST_ASSERT_EQUAL_INT(1, r.fault_ch);
 }
@@ -1005,7 +1076,7 @@ void test_priority_master_fault_beats_other_faults() {
   StatusInput in = idleSynced();
   dropPulse(in, 0, 0.0f);       // master letku irti
   sensorFault(in, 2, 3300);     // ja toisen kanavan anturi rikki
-  StatusResult r = g.step(in);
+  StatusResult r = hoseHold(in);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::FaultMaster), static_cast<int>(r.state));
   TEST_ASSERT_EQUAL_INT(0, r.fault_ch);
   TEST_ASSERT_EQUAL_STRING("SYL 1: ei alipainetta – tarkista letku", r.advice);
@@ -1023,7 +1094,7 @@ void test_priority_sensor_fault_beats_hose_fault() {
 void test_priority_fault_beats_rpm_too_high_and_unstable() {
   StatusInput in = running(-30.0f, -30.0f, -30.0f, 4000.0f);
   dropPulse(in, 2, 0.0f);
-  StatusResult r = g.step(in);
+  StatusResult r = hoseHold(in);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::FaultHose), static_cast<int>(r.state));
   in = running(-55.0f, -55.0f, -55.0f, 850.0f, 0.5f);
   dropPulse(in, 2, 0.0f);
@@ -1313,6 +1384,8 @@ int main() {
   RUN_TEST(test_row5_drift_step_needs_full_window_of_history);
   RUN_TEST(test_row5_drift_history_cleared_when_rpm_lost);
   RUN_TEST(test_row6_hose_off);
+  RUN_TEST(test_row6_hose_off_needs_hold);
+  RUN_TEST(test_row5_common_move_hides_verdict);
   RUN_TEST(test_row6_threshold_and_blocked_hose_extension);
   RUN_TEST(test_row6_realistic_disconnect_sequence);
   RUN_TEST(test_row6_two_hoses_off);
@@ -1323,6 +1396,7 @@ int main() {
   RUN_TEST(test_row7_sensor_fault_with_engine_off_beats_no_signal);
   RUN_TEST(test_row10_saturation_flag_is_independent_of_state);
   RUN_TEST(test_row10_atmosphere_is_not_pulse_saturation);
+  RUN_TEST(test_row10_saturation_needs_hold);
   RUN_TEST(test_row11_uncal_gain_is_warning_only);
   RUN_TEST(test_d11_never_green_without_zero);
   RUN_TEST(test_d11_manual_zero_advice_and_red_stays_red);

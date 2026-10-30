@@ -116,6 +116,17 @@ inline void fmt1(char (&out)[8], float v) {
 
 // Kokonaisluvuksi pyöristetty rpm, rajattu 0..99999 (5 numeroa riittää
 // sync_rpm_max:n 12000 rpm:n konfiguraatiorajalle).
+// Kaikki arvot samaan suuntaan yli rajan k (yhteismuotoinen siirtymä).
+inline bool allBeyond(const float (&v)[kChannels], float k) {
+  bool up = true;
+  bool down = true;
+  for (int i = 0; i < kChannels; ++i) {
+    if (!(v[i] > k)) up = false;
+    if (!(v[i] < -k)) down = false;
+  }
+  return up || down;
+}
+
 inline int rpmInt(float rpm) {
   if (!std::isfinite(rpm) || rpm < 0.0f) return 0;
   if (rpm > 99999.0f) return 99999;
@@ -141,6 +152,9 @@ class StatusMachine {
     last_t_ = 0.0f;
     stable_run_ = false;
     stable_since_ = 0.0f;
+    sat_run_ = false;
+    sat_since_ = 0.0f;
+    cm_count_ = 0;
     for (int i = 0; i < kChannels; ++i) {
       lost_run_[i] = false;
       lost_since_[i] = 0.0f;
@@ -199,8 +213,14 @@ class StatusMachine {
         cond[i] = Cond::Ok;
       } else if (!others) {
         cond[i] = Cond::Idle;                      // rivit 1+8: kaikki hiljaa
-      } else if (std::fabs(c.level_kpa) < p_.hose_off_kpa) {
-        cond[i] = Cond::HoseOff;                   // rivi 6
+      } else if (std::fabs(c.level_kpa) < p_.hose_off_kpa && now - lost_since_[i] >= kHoseHoldS) {
+        // Rivi 6. Viive, koska käynnistyksessä ja sammutuksessa kanavat saavat
+        // ja menettävät pulssin eri sykleillä: matalalla alipaineella (täysi
+        // kaasu, -8 kPa) taso on jo hose_off_kpa:n alla, kun ensimmäinen
+        // kanava menettää pulssin, ja VIKA välähti (sammutuksessa master
+        // ensin -> FaultMaster). Oikealla irronneella letkulla taso-EMA
+        // tarvitsee joka tapauksessa ~1,7 s, joten viive ei hidasta vikaa.
+        cond[i] = Cond::HoseOff;
       } else if (now - lost_since_[i] >= p_.off_hold_s) {
         // Rivin 6 laajennus: ei pulssia, mutta taso ei ole nollassa. Tukossa
         // tai taittunut letku pitää alipaineen loukussa, ja kalibroimaton
@@ -217,12 +237,24 @@ class StatusMachine {
     }
 
     // --- tilariippumattomat liput ----------------------------------------
+    // Rivi 10 koskee pulssin huippua. GN-anturi on ilmanpaineessa 2700 mV
+    // eli aina >= sat_mv, joten ilman pulssia lippu varoittaisi
+    // leikkautumisesta jokaisella sammutetulla moottorilla. DSP:n saturated
+    // muistaa havainnon 1 s ja has_pulse viimeisen syklin 1 s, joten
+    // käynnistyksessä ja sammutuksessa ne ovat päällekkäin alle 1 s
+    // (ilmanpaine juuri ennen tai jälkeen pulssien). Aito leikkautuminen
+    // toistuu joka syklillä, joten se jatkuu yli kSatHoldS:n.
+    bool sat_now = false;
     for (int i = 0; i < kChannels; ++i) {
-      // Rivi 10 koskee pulssin huippua. GN-anturi on ilmanpaineessa 2700 mV
-      // eli aina >= sat_mv, joten ilman pulssia lippu varoittaisi
-      // leikkautumisesta jokaisella sammutetulla moottorilla.
-      if (in.ch[i].saturated && pulse[i]) r.flag_saturation = true;
+      if (in.ch[i].saturated && pulse[i]) sat_now = true;
     }
+    if (!sat_now) {
+      sat_run_ = false;
+    } else if (!sat_run_) {
+      sat_run_ = true;
+      sat_since_ = now;
+    }
+    r.flag_saturation = sat_run_ && now - sat_since_ >= kSatHoldS;
     r.flag_uncal_zero = !in.zero_valid;   // D11
     r.flag_uncal_gain = !in.gain_valid;   // rivi 11
     r.flag_drift = updateDrift(in.rpm, now);   // rivi 5
@@ -295,6 +327,45 @@ class StatusMachine {
     }
     const float stable_for = stable_run_ ? now - stable_since_ : 0.0f;
     const bool stable = stable_run_ && stable_for >= p_.stable_hold_s;
+
+    // Rivi 5, yhteismuotoinen alipaineen muutos (kaasu): kanavien
+    // avg_cycles-keskiarvot päivittyvät eri hetkinä (sylinterit 240° välein),
+    // joten X kPa:n muutos näkyy hetken spreadinä ~X / avg_cycles (20 kPa ->
+    // 2,5 kPa = väärä säätöneuvo, vaikka mitään ei pidä kääntää). Taso-EMA
+    // seuraa muutosta näytteittäin, joten kun se karkaa keskiarvosta kaikissa
+    // kanavissa samaan suuntaan, keskiarvot ovat vielä kesken. Mitattu
+    // 20 kPa:n askeleessa: 1,9 kPa jo 50 ms:ssa, kun spread on vasta 0,03.
+    // Tasaisessa käynnissä ero <= 0,33 kPa (600-1500 rpm). Ruuvin säätö
+    // liikuttaa yhtä kanavaa (tai kahta eri suuntiin), joten ehto ei täyty.
+    // EMA ja liukuva keskiarvo lähestyvät uutta tasoa eri muotoisesti, ja
+    // niiden ero käy nollassa juuri ennen kuin keskiarvot ovat perillä
+    // (mitattu ~1 s:n kohdalla, spread yhä 1,7 kPa). Loppuosan kattaa
+    // keskiarvojen oma muutos kCommonWindowS...2x sitten (mediaani), joka
+    // kestää täsmälleen niin kauan kuin keskiarvot liikkuvat (taas kaikki
+    // samaan suuntaan).
+    // Vakausajastin ei nollaudu: tuomio palaa, kun keskiarvot ovat tasaantuneet.
+    bool common_move = false;
+    if (pulsing == kChannels) {
+      float lag[kChannels];
+      for (int i = 0; i < kChannels; ++i) lag[i] = in.ch[i].level_kpa - in.ch[i].mean_kpa;
+      common_move = allBeyond(lag, kCommonMoveKpa);
+      if (cm_count_ == 0 || now - cm_t_[1] >= kCommonWindowS) {
+        cm_t_[0] = cm_t_[1];
+        cm_t_[1] = now;
+        for (int i = 0; i < kChannels; ++i) {
+          cm_mean_[0][i] = cm_mean_[1][i];
+          cm_mean_[1][i] = in.ch[i].mean_kpa;
+        }
+        if (cm_count_ < 2) ++cm_count_;
+      }
+      if (cm_count_ >= 2) {
+        float moved[kChannels];
+        for (int i = 0; i < kChannels; ++i) moved[i] = in.ch[i].mean_kpa - cm_mean_[0][i];
+        if (allBeyond(moved, kCommonMoveKpa)) common_move = true;
+      }
+    } else {
+      cm_count_ = 0;   // keskiarvot eivät ole vertailukelpoisia pulssikatkon yli
+    }
 
     char a[8], b[8];   // fmt1-apupuskurit
     if (master_bad) {
@@ -383,6 +454,10 @@ class StatusMachine {
       writeText(r.headline, sizeof(r.headline), "Säädä joutokäynnillä");
       writeText(r.advice, sizeof(r.advice), "Kierrosluku %d rpm (raja %d) – laske kaasua",
                 rpmInt(std::ceil(e.rpm)), rpmInt(p_.sync_rpm_max));
+    } else if (common_move) {
+      r.state = SyncState::Unstable;
+      writeText(r.headline, sizeof(r.headline), "Odota, käynti tasaantuu");
+      writeText(r.advice, sizeof(r.advice), "Alipaine muuttuu kaikissa sylintereissä");
     } else if (!stable) {
       r.state = SyncState::Unstable;   // D12: vakaa >= stable_hold_s ennen tuomiota
       writeText(r.headline, sizeof(r.headline), "Odota, käynti tasaantuu");
@@ -443,6 +518,21 @@ class StatusMachine {
   // offsetiksi. 0,3 kPa = 1/5 D2:n vihreästä rajasta; level-EMA:n kohina
   // (tau 0,5 s) on tästä kertaluokkia pienempi.
   static constexpr float kAutoZeroBandKpa = 0.3f;
+
+  // Rivi 6: kanava ilman pulssia (muiden pulssiessa) näin kauan ennen
+  // letkuvikaa. Käynnistyksessä ja sammutuksessa kanavien ero on enintään
+  // muutama sykli (< 0,3 s joutokäynnillä).
+  static constexpr float kHoseHoldS = 0.5f;
+  // Rivi 10: leikkautuminen pulssin aikana näin kauan ennen varoitusta
+  // (DSP:n saturated- ja has_pulse-muistit ovat 1 s, ks. update()).
+  static constexpr float kSatHoldS = 1.2f;
+  // Rivi 5: taso - keskiarvo (tai keskiarvon muutos) kaikissa kanavissa
+  // samaan suuntaan yli tämän = yhteismuotoinen muutos (ks. update()).
+  // ~3 x tasaisen käynnin suurin arvo.
+  static constexpr float kCommonMoveKpa = 1.0f;
+  // Keskiarvojen muutoksen vertailuväli: verrataan 1-2 x tämän vanhaan
+  // tilaan, jotta jokainen kanava on ehtinyt päivittyä (600 rpm = 0,2 s/sykli).
+  static constexpr float kCommonWindowS = 0.3f;
 
   // Rivi 5: rpm-historia harvennetaan niin, että drift_window_s jakautuu
   // vähintään kDriftSlots väliin päivitystaajuudesta riippumatta (10-50 Hz,
@@ -582,6 +672,12 @@ class StatusMachine {
 
   bool stable_run_ = false;
   float stable_since_ = 0.0f;
+  bool sat_run_ = false;     // rivi 10: leikkautuminen pulssin aikana jatkuu
+  float sat_since_ = 0.0f;
+  // Rivi 5: keskiarvot kahdelta viimeisimmältä kCommonWindowS-rajalta, [0] vanhempi.
+  int cm_count_ = 0;
+  float cm_t_[2] = {0.0f, 0.0f};
+  float cm_mean_[2][kChannels] = {};
 
   bool lost_run_[kChannels] = {false, false, false};
   float lost_since_[kChannels] = {0.0f, 0.0f, 0.0f};

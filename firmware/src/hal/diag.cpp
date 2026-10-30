@@ -178,14 +178,16 @@ void diagLogPeriodic() {
       static_cast<unsigned>(p.read_max_us), ul(sc.hx_bad));
   Serial.printf(
       "[DIAG] heap=%lu min=%lu blk=%lu | ap=%lu sse=%lu tx=%lu(+%lu) osit=%lu hyl=%lu"
-      " push=%lu/%lu us | mv %u/%u/%u kisko %u\n",
+      " push=%lu/%lu us | mv %u/%u/%u (pp %u/%u/%u) kisko %u\n",
       ul(static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_8BIT))),
       ul(static_cast<uint32_t>(heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT))),
       ul(g_heap_block.load(std::memory_order_relaxed)), ul(wifiApStations()), ul(ws.sse_clients),
       ul(ws.sse_sent), ul(ws.sse_sent - g_prev_sent), ul(ws.sse_partial), ul(ws.sse_dropped),
       ul(ws.push_us_last), ul(push_max), static_cast<unsigned>(w.mv_mean[0]),
       static_cast<unsigned>(w.mv_mean[1]), static_cast<unsigned>(w.mv_mean[2]),
-      static_cast<unsigned>(w.mv_mean[kRailIndex]));
+      // Huippu-huippu viimeisessä 100 ms:n ikkunassa: levossa = ADC-kohina (raudan arvio).
+      static_cast<unsigned>(w.mv_max[0] - w.mv_min[0]), static_cast<unsigned>(w.mv_max[1] - w.mv_min[1]),
+      static_cast<unsigned>(w.mv_max[2] - w.mv_min[2]), static_cast<unsigned>(w.mv_mean[kRailIndex]));
   Serial.printf("[PINO] vapaa min: sample=%lu proc=%lu push=%lu async_tcp=%lu loop=%lu t\n",
                 ul(stackFree(samplerTask())), ul(stackFree(procTask())), ul(stackFree(webPushTask())),
                 ul(stackFree(g_async_tcp)), ul(stackFree(xTaskGetCurrentTaskHandle())));

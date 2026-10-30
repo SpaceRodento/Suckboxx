@@ -859,8 +859,10 @@ void test_row12_master_fault_then_switch_master() {
   TEST_ASSERT_EQUAL_INT(-1, r.worst_ch);
   for (int i = 0; i < kChannels; ++i) TEST_ASSERT_EQUAL_FLOAT(0.0f, r.vac_delta_kpa[i]);
   // Uusi master (D7): vika jää, mutta nyt tavallisena letkuvikana (rivi 6).
+  // Masterin vaihto nollaa statuksen ajastimet, joten letkuvian pitoaika
+  // (kHoseHoldS) alkaa alusta.
   TEST_ASSERT_TRUE(b.p.setMaster(1));
-  b.run(kTick);
+  b.run(sbx::StatusMachine::kHoseHoldS + kTick);
   TEST_ASSERT_EQUAL_INT(S(SyncState::FaultHose), S(b.st().state));
   TEST_ASSERT_EQUAL_INT(0, b.st().fault_ch);
   // Letku takaisin: tuomio uutta masteria vasten. SYL 3 imee 2 kPa vähemmän

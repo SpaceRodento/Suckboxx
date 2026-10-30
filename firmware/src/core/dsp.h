@@ -176,6 +176,10 @@ class Dsp {
   // viiveellä. 20 % = ~3 sigmaa peräkkäisten jaksojen suhteesta 5 %:n
   // jitterillä, joten tavallinen käynti ei odota lainkaan.
   static constexpr float kSplitSuspect = 0.20f;
+  // Jaksotrendin toleranssi (confirmPending): kiihdytyksessä ja
+  // hidastuksessa peräkkäisten jaksojen suhde muuttuu tasaisesti (mitattu
+  // blippauksessa 1,13 -> 1,16 -> 1,19), 1 %:n jitterillä suhde heiluu ~±0,02.
+  static constexpr float kTrendTol = 0.06f;
   // Peräkkäisten jaksojen suhde. Kampiakselin nopeus ei voi muuttua yhden
   // syklin aikana 1,8-kertaiseksi, joten sellainen jakso on puuttuva raja
   // (pulssi jäi kynnyksen alle) - ja 2T osuisi silti rpm-alueelle, jolloin
@@ -189,6 +193,23 @@ class Dsp {
   static constexpr float kMaxPeriodRatio = 1.8f;
   static constexpr float kMinPeriodRatio = 0.55f;
   static constexpr uint8_t kMaxRatioRejects = 2;
+  // Lukittuna vanheneminen (1,8 x viite) katkaisee jokaisen sitä pidemmän
+  // segmentin, joten pidempää jaksoa ei arvioida koskaan eikä viite voi
+  // päivittyä: kierrosluvun pudotus yli 1,8-kertaisesti (kaasun katkaisu
+  // 3000 -> 850) jätti kanavan odottamaan pulse_timeoutia (mitattu 1,2 s).
+  // Yksi vanheneminen on yksi puuttuva pulssi (seuraava sykli korjaa); toinen
+  // peräkkäinen ilman kirjattua sykliä tarkoittaa, että jakso on oikeasti
+  // pidentynyt. Silloin lukitus puretaan (viite pois), mutta has_pulse ja
+  // historia säilyvät, ja haku lukitsee uuteen jaksoon parissa syklissä.
+  static constexpr uint8_t kMaxStaleRolls = 2;
+  // Hiljaisuudesta herääminen (pushChannel): hiljaista = heilahdus kahden
+  // segmentin yli alle min_pulse_p2p_ yhtäjaksoisesti pisimmän jakson
+  // (window_n_) ajan; herääminen = ensimmäinen näyte, jolla heilahdus on
+  // sen yli. Kohinan aiheuttama herääminen on vaaraton (pulsseja ei ole).
+  // Uusi asettuminen on kStepSettleFactor x tavallinen, koska askeleen
+  // soiminen kestää pidempään kuin prime():n jättämä (alitus + paluu ~50 ms
+  // @ 40 Hz).
+  static constexpr uint32_t kStepSettleFactor = 2;
   // Rivi 10: saturaatio näkyy 1 s viimeisestä havainnosta.
   static constexpr uint32_t kSatWindowSamples = kSampleRateHz;
 
@@ -321,6 +342,9 @@ class Dsp {
     ChannelState pub;
     ButterLp4 lp;
     bool primed = false;
+    // Haussa: näytteitä ilman heilahdusta (ks. kWakeFactor). Hiljaista, kun
+    // tämä on window_n_ (pisin jakso): lyhyempi tauko on vain pulssien väli.
+    uint32_t quiet_run = 0;
     uint32_t settle = 0;  // näytteitä jäljellä suotimen asettumiseen
     float x_prev = 0.0f;  // edellinen kalibroitu näyte (trapetsi-integraaliin)
     float y_prev = 0.0f;  // edellinen suodatettu näyte (rajan interpolointiin)
@@ -341,12 +365,15 @@ class Dsp {
     float last_amp = 0.0f;       // edellisen raja-raja-välin amplitudi (yhtäpitävyys)
     float last_period = 0.0f;    // edellisen raja-raja-välin pituus, 0 = ei
     float ref_period = 0.0f;     // viimeisin hyväksytty jakso, 0 = ei viitettä
+    float prev_ref = 0.0f;       // sitä edeltävä hyväksytty jakso (trendi, confirmPending)
     uint8_t ratio_rejects = 0;
+    uint8_t stale_rolls = 0;     // lukittuna vanhentuneet segmentit viimeisen syklin jälkeen
     bool env_from_cycle = false; // kuluva väli alkoi ketjun toiselta tai myöhemmältä rajalta
 
     // Ehdokassykli, joka vahvistetaan kun sen päättänyt pulssi on nähty
     // pohjaan asti (ks. confirmPending).
     bool pending = false;
+    bool pend_rerate = false;    // uusi viite (jakso toistaa edellisen välin, ks. onBoundary)
     float pend_int = 0.0f, pend_per = 0.0f, pend_min = 0.0f, pend_amp = 0.0f;
     float fire_top = 0.0f;       // huippu ennen viimeisintä rajaa (pulssin syvyys virityksessä)
     uint32_t since_cycle = 0;    // näytteitä viimeisestä hyväksytystä syklistä
@@ -420,6 +447,7 @@ class Dsp {
     c.pub = ChannelState();
     c.lp = lp_proto_;
     c.primed = false;
+    c.quiet_run = 0;
     c.settle = 0;
     c.x_prev = c.y_prev = 0.0f;
     segReset(c.prev, 0.0f, false);
@@ -435,9 +463,12 @@ class Dsp {
     c.last_amp = 0.0f;
     c.last_period = 0.0f;
     c.ref_period = 0.0f;
+    c.prev_ref = 0.0f;
     c.ratio_rejects = 0;
+    c.stale_rolls = 0;
     c.env_from_cycle = false;
     c.pending = false;
+    c.pend_rerate = false;
     c.pend_int = c.pend_per = c.pend_min = c.pend_amp = 0.0f;
     c.fire_top = 0.0f;
     c.since_cycle = 0;
@@ -480,6 +511,42 @@ class Dsp {
     const float dd_x = c.prev.hi - c.cur.lo;
     if (dd_x > dd) dd = dd_x;
     return ru < dd ? ru : dd;
+  }
+
+  // Schmittin käyttämä A. amplitude() kahden segmentin yli, kahdella
+  // tarkennuksella kaasun liikkeitä varten (blippaus 850 -> 2500 rpm jätti
+  // 0,9 s:n aukon):
+  //  - Lukittuna, kun odotettua rajaa ei ole tullut (1 + kSplitSuspect) x
+  //    jaksossa, edellisen segmentin vanha pulssi on todennäköisesti isompi kuin
+  //    nykyiset: kaasua lisättäessä pulssi kutistuu (20 -> 12 kPa) samalla kun
+  //    kierrokset nousevat, ja tyhjäkäynnin lasku piti kynnyksen kutistuneen
+  //    pulssin ulottumattomissa vanhenemiseen asti. Silloin A = kuluvan
+  //    segmentin lasku, mutta vähintään kEnvLockFrac x A, jotta kohina tai
+  //    ristivuoto ei laukaise rajaa ennen oikeaa pulssia (vuotopulssi on
+  //    ~0,3 x A, raja vaatii (0,5 + 0,15) / 2 x A).
+  //  - Haussa pulssihistorian kanssa (lukitus purettu, has_pulse yhä päällä) A
+  //    = min(nousu, lasku) kuten lukittuna: taso liikkuu tyypillisesti juuri
+  //    silloin (kaasu), ja pelkkä nousu sisältäisi tason nousun koko
+  //    hakuikkunan (pisin jakso, ~0,44 s) ajan. Kylmäkäynnistyksessä haku
+  //    käyttää pelkkää nousua (ks. amplitude()).
+  float schmittAmplitude(const Chan& c) const {
+    const bool lock = locked(c);
+    const float amp = amplitude(c, lock || c.pub.has_pulse);
+    if (!lock || static_cast<float>(c.since_boundary) <= (1.0f + kSplitSuspect) * c.ref_period) {
+      return amp;
+    }
+    float recent = c.cur.dd < amp ? c.cur.dd : amp;
+    const float floor = kEnvLockFrac * amp;
+    return recent > floor ? recent : floor;
+  }
+
+  // Suurin heilahdus (nousu tai lasku) kahden segmentin yli.
+  static float swing(const Chan& c) {
+    float s = amplitude(c, false);
+    if (c.prev.dd > s) s = c.prev.dd;
+    if (c.cur.dd > s) s = c.cur.dd;
+    if (c.prev.hi - c.cur.lo > s) s = c.prev.hi - c.cur.lo;
+    return s;
   }
 
   static void roll(Chan& c, float y, bool at_boundary) {
@@ -564,6 +631,38 @@ class Dsp {
     ++c.seg_len;
     if (c.since_boundary < 0xFFFFFFFFu) ++c.since_boundary;
 
+    // Hiljaisuudesta herääminen (moottori käynnistyy, letku kytketään): ensimmäinen
+    // liike voi olla tason askel (0 -> -8 kPa kerralla täydellä kaasulla), ja
+    // suotimen soiminen sen jälkeen (alitus ja paluu, ~2 kPa) näkyy haun
+    // amplitudiarviossa nousuna, joka on suurempi kuin suodatettu pulssi
+    // (~1 kPa @ 6000 rpm). Kynnys pysyi pulssien ulottumattomissa kaksi
+    // hakuikkunaa (mitattu 0,95 s). Siksi ensimmäinen liike hiljaisuuden
+    // jälkeen käynnistää asettumisen uudelleen (kStepSettleFactor x), ja
+    // amplitudiarvio rakentuu vasta sen jälkeisistä pulsseista. Pulssivassa
+    // signaalissa hiljaisuutta ei ole, joten käynti ei koskaan laukaise tätä;
+    // tyhjäkäynnillä käynnistyessä se maksaa enintään ensimmäisen pulssin.
+    if (!c.pub.has_pulse) {
+      const float sw = swing(c);
+      if (c.quiet_run >= window_n_ && sw >= min_pulse_p2p_) {
+        c.quiet_run = 0;
+        c.settle = kStepSettleFactor * settle_n_;
+        c.armed = false;
+        c.chain = false;
+        c.pending = false;
+        c.acc = 0.0f;
+        c.x_prev = x;
+        c.y_prev = y;
+        return;
+      }
+      if (sw >= min_pulse_p2p_) {
+        c.quiet_run = 0;
+      } else if (c.quiet_run < window_n_) {
+        ++c.quiet_run;
+      }
+    } else {
+      c.quiet_run = 0;
+    }
+
     // Suhteellinen Schmitt: raja, kun signaali putoaa D = (A + h) / 2
     // viimeisimmän huipun alle, eli h/2 pulssin puolivälin (huippu - A/2)
     // alapuolelle; viritys, kun se on noussut pohjasta hystereesin
@@ -580,7 +679,7 @@ class Dsp {
     // Viritys h:lla eikä D:llä, koska alipaineen kasvu kesken pulssin
     // lyhentää seuraavaa nousua askeleen verran - D:n vaatimus ohitti silloin
     // koko seuraavan pulssin.
-    const float amp = amplitude(c, locked(c));
+    const float amp = schmittAmplitude(c);
     float h = dp_.hyst_frac * amp;
     if (h < dp_.hyst_min_kpa) h = dp_.hyst_min_kpa;
     const float d = 0.5f * (amp + h);
@@ -629,6 +728,11 @@ class Dsp {
       if (s < static_cast<float>(window_n_)) stale_n = static_cast<uint32_t>(s) + 1u;
     }
     if (c.seg_len >= stale_n) {
+      if (locked(c) && ++c.stale_rolls >= kMaxStaleRolls) {
+        c.ref_period = 0.0f;  // jakso pidentyi: haku (ks. kMaxStaleRolls)
+        c.ratio_rejects = 0;
+        c.stale_rolls = 0;
+      }
       roll(c, y, false);
       // Kuluvaa väliä ei arvioida (ei kokonainen raja-raja-segmentti). Jos
       // sykli odotti vahvistusta, sen päättänyt "pulssi" ei noussut takaisin
@@ -727,15 +831,25 @@ class Dsp {
       // sijaan). Liian pitkä jakso (puuttuva pulssi) päättyy oikeaan rajaan.
       const bool too_short = ref > 0.0f && period < kMinPeriodRatio * ref;
       const bool too_long = ref > 0.0f && period > kMaxPeriodRatio * ref;
-      if (lock && too_short && c.ratio_rejects < kMaxRatioRejects) next_trusted = false;
+      // Uudelleenreferointi: viitteestä poikkeava jakso, joka toistaa
+      // edellisen raja-raja-välin (±kSplitSuspect), on aito kierrosluvun
+      // muutos eikä väärä raja - vuotopulssin tai askeleen raja jakaa syklin
+      // eri mittaisiin osiin. Ilman tätä hylkäykset kertyivät vain joka
+      // toisella rajalla (too_short jättää seuraavan välin arvioimatta), ja
+      // kaasun lisäys 850 -> 2000 rpm oli lukossa vanhaan jaksoon koko pidon ajan.
+      const bool rerate = lock && (too_short || too_long) && c.last_period > 0.0f &&
+                          period <= (1.0f + kSplitSuspect) * c.last_period &&
+                          period >= (1.0f - kSplitSuspect) * c.last_period;
+      if (lock && too_short && !rerate && c.ratio_rejects < kMaxRatioRejects) next_trusted = false;
       if (ok_period && ok_amp && ok_env) {
         const bool ok_ratio = !too_short && !too_long;
-        if (ok_ratio || c.ratio_rejects >= kMaxRatioRejects) {
+        if (ok_ratio || rerate || c.ratio_rejects >= kMaxRatioRejects) {
           c.pending = true;
           c.pend_int = integral;
           c.pend_per = period;
           c.pend_min = cmin;
           c.pend_amp = amp;
+          c.pend_rerate = !ok_ratio;
         } else {
           ++c.ratio_rejects;
         }
@@ -776,12 +890,28 @@ class Dsp {
     const bool lock = locked(c);
     const float lo = lock ? kEnvLockFrac : kEnvStableFrac;
     bool ok = depth >= lo * c.pend_amp;
-    const bool on_time = lock && c.pend_per <= (1.0f + kLockPeriodWindow) * c.ref_period &&
-                         c.pend_per >= (1.0f - kLockPeriodWindow) * c.ref_period;
+    // Askeltarkistus (yläraja) ohitetaan, kun jakso on viitteen mukainen.
+    // Kiihdytys ja hidastus muuttavat jaksoa 10-20 % per sykli, ja samalla
+    // syvenevä tai laimeneva alipaine kasvattaa laskua ja pienentää nousua
+    // yhtä paljon, jolloin aidonkin pulssin suhde painuu alle 0,7:n (mitattu
+    // 17,70 / 25,36 blippauksen hidastuksen lopussa). Siksi myös
+    // kSplitSuspectin sisällä poikkeava jakso käy, jos se jatkaa edellisen
+    // jakson muutosta (kTrendTol): askeleen raja osuu satunnaiseen kohtaan
+    // sykliä eikä seuraa trendiä (test_vacuum_step_at_any_phase). Yli
+    // kSplitSuspectin poikkeava sykli menee tent-polulle. Uudelleenreferoitu
+    // jakso on jo todettu toistuvaksi (onBoundary): askeleen raja ei toista
+    // edellistä väliä.
+    const float r = c.ref_period > 0.0f ? c.pend_per / c.ref_period : 0.0f;
+    const float trend = c.prev_ref > 0.0f ? c.ref_period / c.prev_ref : 1.0f;
+    const bool on_time =
+        lock && (c.pend_rerate || (r <= 1.0f + kLockPeriodWindow && r >= 1.0f - kLockPeriodWindow) ||
+                 (r <= 1.0f + kSplitSuspect && r >= 1.0f - kSplitSuspect &&
+                  std::fabs(r - trend) <= kTrendTol && std::fabs(trend - 1.0f) > kTrendTol));
     if (!on_time) ok = ok && c.pend_amp >= kEnvStableFrac * depth;
     if (ok) {
-      const bool suspect = lock && (c.pend_per > (1.0f + kSplitSuspect) * c.ref_period ||
-                                    c.pend_per < (1.0f - kSplitSuspect) * c.ref_period);
+      const bool suspect = lock && !c.pend_rerate &&
+                           (c.pend_per > (1.0f + kSplitSuspect) * c.ref_period ||
+                            c.pend_per < (1.0f - kSplitSuspect) * c.ref_period);
       if (suspect) {
         c.tent = true;
         c.tent_int = c.pend_int;
@@ -798,8 +928,10 @@ class Dsp {
   }
 
   void recordCycle(Chan& c, float integral, float period, float cmin, float cp2p) {
+    c.prev_ref = c.ref_period;
     c.ref_period = period;
     c.ratio_rejects = 0;
+    c.stale_rolls = 0;
     c.cyc_int[c.cyc_head] = integral;
     c.cyc_per[c.cyc_head] = period;
     c.cyc_min[c.cyc_head] = cmin;
