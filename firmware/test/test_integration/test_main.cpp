@@ -12,14 +12,9 @@
 // tulostavat sen VIIVE-riveinä. Asettuminen = hetki, josta lähtien tila on
 // pysynyt odotettuna mittausikkunan loppuun (välkyntä ei lyhennä sitä).
 //
-// Tiedetyt punaiset (rinnakkaiset paketit korjaavat, docs/jatko.md):
-//   - test_row5_common_mode_step_no_wrong_advice: DSP major 1 (syklintunnistus
-//     painemuutoksen jälkeen) + AVOIN: kanavien keskiarvojen porrastus.
-//   - test_row6_start_and_stop_never_flash_hose_fault: WP-4 "HoseOff (rivi 6)
-//     luokitellaan ilman viivettä".
-//   - test_row9_full_throttle_start_locks_within_dsp_spec: DSP major 1 ja 2.
-//   - test_row10_no_saturation_flash_on_start_and_stop: WP-4 "Saturaatiolippu
-//     välähtää jokaisella sammutuksella ja käynnistyksellä".
+// Aiemmin tiedetyt punaiset (rivit 5, 6, 9, 10) korjattiin WP-2c:ssä (dsp.h)
+// ja statuksen pitoajoilla (status.h kHoseHoldS, kSatHoldS, rivin 5
+// yhteismuotoinen muutos).
 
 #include <unity.h>
 
@@ -506,16 +501,12 @@ void test_row5_common_mode_step_no_wrong_advice() {
   // kanavilla sama): totuus pysyy synkronoituna, joten väärä tuomio olisi
   // väärä säätöneuvo ("sulje läppää"), vaikka mitään ei pidä kääntää. Sallittu
   // on vihreä tai "odota". Rivi 5: yhteismuotoinen liike ei saa näkyä Δ:ssä.
-  // TIEDETTY PUNAINEN: docs/jatko.md "WP-2 DSP (major) 1": syklintunnistus
-  // jättää painemuutoksen jälkeen syklejä väliin, jolloin yhden kanavan
-  // keskiarvo jää jälkeen.
-  // AVOIN: virhettä on myös ilman DSP-vikaa. Kanavien 8 syklin liukuvat
-  // keskiarvot päivittyvät 1/3 syklin välein eri aikaan, joten X kPa:n
-  // muutos näkyy hetkellisenä spreadinä X / avg_cycles (20 kPa -> 2,5 kPa)
-  // avg_cycles syklin ajan. Suositus: DSP laskee kanavien keskiarvot samasta
-  // aikaikkunasta (N kokonaista jaksoa samaan hetkeen päättyen; jaksollisen
-  // signaalin keskiarvo ei riipu ikkunan vaiheesta), tai StatusMachine pitää
-  // tuomion "odota"-tilassa, kun tason EMA muuttuu nopeasti.
+  // Korjattu (WP-2c): kanavien 8 syklin liukuvat keskiarvot päivittyvät 1/3
+  // syklin välein eri aikaan, joten X kPa:n muutos näkyi hetkellisenä
+  // spreadinä ~X / avg_cycles (20 kPa -> 1,7-2,5 kPa) avg_cycles syklin ajan.
+  // status.h näyttää nyt "odota", kun alipaine muuttuu kaikissa kanavissa
+  // samaan suuntaan (kCommonMoveKpa). Vaihtoehto olisi laskea keskiarvot
+  // samasta aikaikkunasta DSP:ssä (vaatii näytetason historian).
   Bench b;
   settleSynced(b, withErr(0.0f, 0.0f, 0.0f));
   const uint32_t wrong = bit(SyncState::Near) | bit(SyncState::OutOfSync);
@@ -577,10 +568,10 @@ void test_row6_start_and_stop_never_flash_hose_fault() {
   // signaalia" (D10) tai "odota" (rivi 2). Matalalla alipaineella (-8 kPa) taso
   // on hose_off_kpa:n (2 kPa) tuntumassa, kun ensimmäinen kanava saa tai
   // menettää pulssin muiden vielä odottaessa.
-  // TIEDETTY PUNAINEN: docs/jatko.md "WP-4 status": HoseOff (rivi 6)
-  // luokitellaan ilman viivettä - matalalla alipaineella sammutus näyttää
-  // hetken väärää letkuvikaa (sammutuksessa FaultMaster, koska master menettää
-  // pulssin ensin; sama välähdys tulee käynnistyksessä täydellä kaasulla).
+  // Korjattu (WP-2c): HoseOff vaatii status.h:n kHoseHoldS-pitoajan. Ennen
+  // matalalla alipaineella sammutus näytti hetken väärää letkuvikaa
+  // (sammutuksessa FaultMaster, koska master menettää pulssin ensin; sama
+  // välähdys tuli käynnistyksessä täydellä kaasulla).
   const uint32_t false_fault = bit(SyncState::FaultHose) | bit(SyncState::FaultMaster);
   {
     Bench b;
@@ -742,9 +733,10 @@ void test_row9_full_throttle_start_locks_within_dsp_spec() {
   // Sama rivi 9, mutta moottori käynnistyy ilmanpaineesta suoraan täydelle
   // kaasulle: keskitaso hyppää 0 -> -8 kPa, ja pulssi (6 kPa @ 50 Hz) on
   // suodatettuna vain ~2,3 kPa. Odotus on sama DSP:n lukitusaika kuin yllä.
-  // TIEDETTY PUNAINEN: docs/jatko.md "WP-2 DSP (major)" 1 (syklintunnistus
-  // jumittuu painemuutoksen jälkeen) ja 2 (korkeilla kierroksilla pieni
-  // suodatettu pulssi): yksi kanava lukittuu vasta ~0,9 s:ssa.
+  // Korjattu (WP-2c): askeleen jälkeinen suotimen soiminen piti haun
+  // kynnyksen pienen suodatetun pulssin ulottumattomissa (yksi kanava
+  // lukittui ~0,9 s:ssa). dsp.h käynnistää asettumisen uudelleen, kun
+  // signaali herää hiljaisuudesta.
   Bench b;
   SimParams s;
   s.rpm = 6000.0f;
@@ -792,9 +784,9 @@ void test_row10_no_saturation_flash_on_start_and_stop() {
   // Normaali joutokäynti (-55 kPa) ei leikkaudu koskaan. GN-anturi on
   // ilmanpaineessa leikkausrajallaan (2700 mV), joten käynnistys ja sammutus
   // eivät saa näyttää saturaatiovaroitusta (§4.7: lippu vain pulssin huipusta).
-  // TIEDETTY PUNAINEN: docs/jatko.md "WP-4 status": saturaatiolippu välähtää
-  // jokaisella sammutuksella ja käynnistyksellä (saturated ja has_pulse
-  // pysyvät molemmat 1 s); sama välähdys tulee letkun irrotessa.
+  // Korjattu (WP-2c): saturaatiolippu välähti jokaisella sammutuksella ja
+  // käynnistyksellä (saturated ja has_pulse pysyvät molemmat 1 s). status.h
+  // vaatii nyt kSatHoldS:n jatkuneen leikkautumisen.
   Bench b;
   zeroThenStart(b, withErr(0.0f, 0.0f, 0.0f));
   const Watch start = b.watch(6.0f, SyncState::Synced);
@@ -1130,6 +1122,122 @@ void test_bench_three_sensors_same_vacuum_spread_below_0_3() {
 }
 
 // ---------------------------------------------------------------------------
+// WP-2c: syklintunnistus kaasun muutoksissa EngineSimillä (docs/jatko.md)
+// ---------------------------------------------------------------------------
+
+// Pisin väli kahden kirjatun syklin välillä (mikä tahansa kanava) ja putosiko
+// has_pulse, kun ctl(t_ms) ohjaa simulaattoria. Tick-tarkkuus (50 ms).
+struct Track {
+  float max_gap = 0.0f;
+  bool dropped = false;
+  float rpm_peak = 0.0f;
+  float true_peak = 0.0f;
+};
+
+template <typename Ctl>
+Track track(Bench& b, float seconds, Ctl ctl) {
+  Track tr;
+  uint32_t cyc[kChannels];
+  float last[kChannels];
+  for (int c = 0; c < kChannels; ++c) {
+    cyc[c] = b.p.channel(c).cycles;
+    last[c] = 0.0f;
+  }
+  const uint32_t n0 = b.n;
+  const uint32_t k = static_cast<uint32_t>(seconds * 1000.0f + 0.5f);
+  for (uint32_t i = 1; i <= k; ++i) {
+    ctl(static_cast<int>(i));
+    if (b.sim.trueRpm() > tr.true_peak) tr.true_peak = b.sim.trueRpm();
+    if (!b.step()) continue;
+    const float t = static_cast<float>(b.n - n0) / 1000.0f;
+    for (int c = 0; c < kChannels; ++c) {
+      const sbx::ChannelState& s = b.p.channel(c);
+      if (!s.has_pulse) tr.dropped = true;
+      if (s.cycles != cyc[c]) {
+        cyc[c] = s.cycles;
+        if (t - last[c] > tr.max_gap) tr.max_gap = t - last[c];
+        last[c] = t;
+      }
+    }
+    if (b.p.rpm().rpm > tr.rpm_peak) tr.rpm_peak = b.p.rpm().rpm;
+  }
+  return tr;
+}
+
+void test_wp2c_rpm_drop_keeps_pulse() {
+  // Kaasun katkaisu: kierrokset putoavat yli 1,8-kertaisesti. Lukittuna
+  // vanheneminen (1,8 x vanha jakso) katkaisi jokaisen uuden jakson, ja
+  // kanava odotti pulse_timeoutin (mitattu 1,2 s, has_pulse putosi aina).
+  // Nyt lukitus puretaan kahden vanhenemisen jälkeen: ~3,5 uutta sykliä.
+  const float from[] = {3000.0f, 2000.0f, 1700.0f};
+  for (float rpm : from) {
+    Bench b;
+    SimParams s;
+    s.rpm = rpm;
+    b.set(s);
+    b.run(3.0f);
+    s = b.params();
+    s.rpm = 850.0f;
+    b.sim.configure(s, b.p.config().sensor, true);
+    const Track tr = track(b, 3.0f, [](int) {});
+    char m[96];
+    std::snprintf(m, sizeof(m), "VIIVE rpm %.0f -> 850: pisin sykliväli %.2f s",
+                  static_cast<double>(rpm), static_cast<double>(tr.max_gap));
+    TEST_MESSAGE(m);
+    TEST_ASSERT_FALSE_MESSAGE(tr.dropped, "has_pulse putosi rpm-pudotuksessa");
+    atMost(0.7f, tr.max_gap, "rpm-pudotus: sykliväli");
+  }
+  // Kaasun katkaisu: kierrokset ja alipaine yhtä aikaa (3000/-15 -> 850/-55).
+  Bench b;
+  SimParams s;
+  s.rpm = 3000.0f;
+  s.base_kpa = -15.0f;
+  s.depth_kpa = 12.0f;
+  b.set(s);
+  b.run(3.0f);
+  s = b.params();
+  s.rpm = 850.0f;
+  s.base_kpa = -55.0f;
+  s.depth_kpa = 20.0f;
+  b.sim.configure(s, b.p.config().sensor, true);
+  const Track tr = track(b, 3.0f, [](int) {});
+  TEST_ASSERT_FALSE_MESSAGE(tr.dropped, "has_pulse putosi kaasun katkaisussa");
+  atMost(0.7f, tr.max_gap, "kaasun katkaisu: sykliväli");
+}
+
+void test_wp2c_throttle_blip_tracks_rpm() {
+  // Blippaus 850 -> X rpm, -55 -> -25 kPa, pulssi 20 -> 12 kPa: 300 ms ylös,
+  // 300 ms pito, 700 ms alas. Ennen: 0,9-1,1 s ilman syklejä ja rpm näytti
+  // huipusta 0,43-0,64 (lukko jäi tyhjäkäynnin jaksoon, kutistunut pulssi
+  // jäi kynnyksen alle).
+  const float tops[] = {2000.0f, 2500.0f, 3000.0f};
+  for (float top : tops) {
+    Bench b;
+    b.set(SimParams());
+    b.run(4.0f);
+    const Track tr = track(b, 3.0f, [&](int t) {
+      if (t % 10 != 0 || t > 1310) return;
+      float u = t <= 300 ? static_cast<float>(t) / 300.0f
+                         : (t <= 600 ? 1.0f : 1.0f - static_cast<float>(t - 600) / 700.0f);
+      if (u < 0.0f) u = 0.0f;
+      SimParams s = b.params();
+      s.rpm = 850.0f + (top - 850.0f) * u;
+      s.base_kpa = -55.0f + 30.0f * u;
+      s.depth_kpa = 20.0f - 8.0f * u;
+      b.sim.configure(s, b.p.config().sensor, true);
+    });
+    char m[96];
+    std::snprintf(m, sizeof(m), "VIIVE blippaus 850 -> %.0f: sykliväli %.2f s, rpm-huippu %.2f",
+                  static_cast<double>(top), static_cast<double>(tr.max_gap),
+                  static_cast<double>(tr.rpm_peak / tr.true_peak));
+    TEST_MESSAGE(m);
+    TEST_ASSERT_FALSE_MESSAGE(tr.dropped, "has_pulse putosi blippauksessa");
+    atMost(0.7f, tr.max_gap, "blippaus: sykliväli");
+    atLeast(0.85f, tr.rpm_peak / tr.true_peak, "blippaus: rpm-huippu");
+  }
+}
+
+// ---------------------------------------------------------------------------
 // H1/R4: positiivinen anturin offset
 // ---------------------------------------------------------------------------
 
@@ -1184,6 +1292,8 @@ int main() {
   RUN_TEST(test_D12_verdict_window_500_to_3000_rpm);
   RUN_TEST(test_R4_calibration_removes_sensor_errors);
   RUN_TEST(test_bench_three_sensors_same_vacuum_spread_below_0_3);
+  RUN_TEST(test_wp2c_rpm_drop_keeps_pulse);
+  RUN_TEST(test_wp2c_throttle_blip_tracks_rpm);
   RUN_TEST(test_H1_positive_offset_invisible_at_atmosphere);
   return UNITY_END();
 }
