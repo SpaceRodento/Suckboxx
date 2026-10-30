@@ -1,59 +1,61 @@
-// Suckboxx - ensimmäinen laiteohjelmisto (bring-up)
+// Suckboxx - XGZP6847A-arkkitehtuuri (virallinen nykyinen konfiguraatio)
 //
-// Tarkoitus: lukea kolme HX710B-painesensoria ja näyttää lukemat kolmena
-// palkkina + numerona puhelimen selaimessa laitteen omasta Wi-Fi AP:sta.
-// Ei muuta. Kalibrointi (R4), käytösmatriisi (§8), rengaspuskuri (S5b) ja
-// OTA on tietoisesti rajattu pois - ks. SUUNNITTELU.md.
+// Tämän firmware-version peruslinja on siivottu pois vanhasta HX710B-
+// bring-up -arkkitehtuurista. Vanha digitaalinen prototyyppi on hylätty ja
+// uusi analoginen anturiverkko on käytössä. Kaikki toimiva kehitys perustuu
+// nyt XGZP6847A -sensorien analogiseen ADC-reittiin, ei HX710B:n bititason
+// protokollaan.
 //
-// HUOM: HX710B on väliaikainen anturi. Lopullinen rauta käyttää analogista
-// XGZP6847A:ta ADC1-pinneissä GPIO34/35/36 (docs/rauta.md §2.2). HX710B on
-// digitaalinen (bittisarja), joten se ei istu noihin pinneihin sellaisenaan -
-// DOUT-linjat käyttävät samoja GPIO-numeroita jatkuvuuden vuoksi (samat
-// input-only-pinnit ovat turvallisia tähänkin), mutta SCK tarvitsee lisäksi
-// kolme erillistä lähtöpinniä, joita lopullisessa suunnitelmassa ei ole.
+// Kannettava konfiguraatio (virallinen pinni kartta):
+//   CH1 (SYL 1, pääkanava): GPIO34 (ADC1_CH6)
+//   CH2 (SYL 2):            GPIO39 "VN" (ADC1_CH3)
+//   CH3 (SYL 3):            GPIO32 (ADC1_CH4)
+//   Tila-LED:              GPIO2
 //
-// Pinnijako (protolevy/hyppylangat, ei sama kuin rauta.md:n lopullinen kytkentä):
-//   HX710B #1 (SYL 1): SCK = GPIO25, DOUT = GPIO34
-//   HX710B #2 (SYL 2): SCK = GPIO26, DOUT = GPIO35
-//   HX710B #3 (SYL 3): SCK = GPIO27, DOUT = GPIO36
-//   Tila-LED (sykkivä "elossa"-merkki): GPIO2
-//   Kaikki HX710B-moduulit: VCC -> 3V3, GND -> GND (ESP32-devkitin oma kisko
-//   käy tähän väliaikaiseen testiin - R6:n oma anturi-LDO koskee vasta
-//   XGZP6847A-lopputoteutusta).
+// Huomio: GPIO36 on devkitin silkkipainatuksessa "VP", ei "D36". Tämä oli
+// prototyypin alussa virheellinen valinta, ja CH3 päätyi lopulta GPIO32:een.
+// Tämä kanava on nyt virallinen käytössä oleva konfiguraatio.
+//
+// HUOM: GPIO25 EI KELPAA tähän - se on ADC2, joka ei toimi Wi-Fi AP:n kanssa.
+// Anturien VDD/GND-kytkentä: ks. docs/rauta.md §6.6 (3V3_SENS-kisko,
+// EI ESP32:n omaa 3V3-pinniä - ks. §3.3 miksi).
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
 
-#include "hx710b.h"
 #include "web_page.h"
 
 namespace {
 
 constexpr uint8_t CHANNEL_COUNT = 3;
-constexpr uint8_t PIN_SCK[CHANNEL_COUNT] = {25, 26, 27};
-constexpr uint8_t PIN_DOUT[CHANNEL_COUNT] = {34, 35, 36};
+constexpr uint8_t PIN_ADC[CHANNEL_COUNT] = {34, 39, 32};
 constexpr uint8_t PIN_LED = 2;
 constexpr unsigned long LED_BLINK_MS = 500;
 
-// HX710B tuottaa kiinteät 10 näytettä/s, joten 20 Hz kysely riittää reilusti.
-// Tämä katto on tärkeä: ilman sitä loop pyörittää readRaw():ta niin tiheään,
-// että noInterrupts()-jaksot syövät suurimman osan CPU-ajasta ja Wi-Fi AP:n
-// beaconit myöhästyvät -> verkko katoaa puhelimen listalta.
+// Analogisessa ADC-reitissä ei ole digitaalisen HX710B:n kaltaista
+// "näyte valmis" -lippua, joten kiinteä kyselyväli riittää. 20 Hz on
+// reilusti UI:n tarpeisiin - tarkempi 1 kHz/desimointi-putki (rauta.md
+// §3.2) on tietoisesti S5b:n asia.
 constexpr unsigned long SAMPLE_INTERVAL_MS = 50;
-constexpr unsigned long DIAG_INTERVAL_MS = 5000;
+// 200 ms -> 5 tulostusta/s, riittää näkemään puhalluksen nousun/laskun serial
+// monitorissa ilman että konsoli tulvii.
+constexpr unsigned long RAW_PRINT_INTERVAL_MS = 200;
 
 const char* const AP_SSID = "Suckboxx";
 const char* const AP_PASSWORD = "alipaine123";  // vähintään 8 merkkiä (WPA2)
 constexpr uint8_t AP_CHANNEL = 1;
 constexpr uint8_t AP_MAX_CLIENTS = 4;
 
-Hx710b sensors[CHANNEL_COUNT];
 int32_t latestRaw[CHANNEL_COUNT] = {0, 0, 0};
 int32_t zeroOffset[CHANNEL_COUNT] = {0, 0, 0};
 unsigned long lastUpdateMs[CHANNEL_COUNT] = {0, 0, 0};
 bool everRead[CHANNEL_COUNT] = {false, false, false};
-uint32_t badReads[CHANNEL_COUNT] = {0, 0, 0};
+
+// Datasheetin mukaan anturin ulostulo pysyy aina välillä 0,2-2,7 V, eli
+// 12-bittinen lukema ei normaalikäytössä koskaan ole lähellä 0 tai 4095.
+// Jos on, ADC-linja on poikki tai oikosulussa eikä lukema ole käyttökelpoinen.
+bool isRailed(int raw) { return raw <= 4 || raw >= 4090; }
 
 WebServer server(80);
 
@@ -94,8 +96,11 @@ void setup() {
   Serial.begin(115200);
   pinMode(PIN_LED, OUTPUT);
 
+  // 12-bittinen lukema ja 11 dB:n vaimennus kattaa n. 0,15-3,10 V lineaarisesti
+  // (rauta.md §1.2) - anturin koko 0,2-2,7 V ulostuloalue mahtuu tähän.
+  analogReadResolution(12);
   for (uint8_t i = 0; i < CHANNEL_COUNT; i++) {
-    sensors[i].begin(PIN_SCK[i], PIN_DOUT[i]);
+    analogSetPinAttenuation(PIN_ADC[i], ADC_11db);
   }
 
   WiFi.mode(WIFI_AP);
@@ -130,18 +135,21 @@ void loop() {
   if (now - lastSampleMs >= SAMPLE_INTERVAL_MS) {
     lastSampleMs = now;
     for (uint8_t i = 0; i < CHANNEL_COUNT; i++) {
-      if (!sensors[i].isReady()) {
-        continue;
+      // ESP32:n ADC1:n tunnettu ominaisuus: peräkkäin luettujen kanavien
+      // sample-and-hold-kondensaattori ei ehdi tyhjentyä täysin edellisestä
+      // kanavasta ennen tätä, jolloin osa edellisen arvosta "vuotaa" tähän
+      // lukemaan (korkeaimpedanssinen 10 kOhm-lähde pahentaa tätä). Hylätty
+      // lämmittelyluku samasta kanavasta antaa S&H:n asettua ennen oikeaa
+      // mittausta.
+      analogRead(PIN_ADC[i]);
+      int raw = analogRead(PIN_ADC[i]);
+      if (isRailed(raw)) {
+        continue;  // linja poikki tai oikosulussa - ei oikeaa dataa
       }
-      int32_t value = 0;
-      if (!sensors[i].readRaw(value)) {
-        badReads[i]++;  // kelluva tai jumissa oleva DOUT - ei oikeaa dataa
-        continue;
-      }
-      latestRaw[i] = value;
+      latestRaw[i] = raw;
       lastUpdateMs[i] = now;
       if (!everRead[i]) {
-        zeroOffset[i] = value;  // nollataan ensimmäiseen lukemaan, ei hyppyä käynnistyksessä
+        zeroOffset[i] = raw;  // nollataan ensimmäiseen lukemaan, ei hyppyä käynnistyksessä
         everRead[i] = true;
       }
     }
@@ -153,16 +161,13 @@ void loop() {
     digitalWrite(PIN_LED, !digitalRead(PIN_LED));
   }
 
-  static unsigned long lastDiagMs = 0;
-  if (now - lastDiagMs >= DIAG_INTERVAL_MS) {
-    lastDiagMs = now;
-    Serial.printf(
-      "[DIAG] up=%lus asiakkaita=%d heap=%u ika_ms=%lu/%lu/%lu virhelukuja=%lu/%lu/%lu\n",
-      now / 1000, WiFi.softAPgetStationNum(), ESP.getFreeHeap(),
-      now - lastUpdateMs[0], now - lastUpdateMs[1], now - lastUpdateMs[2],
-      static_cast<unsigned long>(badReads[0]),
-      static_cast<unsigned long>(badReads[1]),
-      static_cast<unsigned long>(badReads[2]));
+  static unsigned long lastPrintMs = 0;
+  if (now - lastPrintMs >= RAW_PRINT_INTERVAL_MS) {
+    lastPrintMs = now;
+    Serial.printf("%ld\t%ld\t%ld\n",
+      static_cast<long>(latestRaw[0]),
+      static_cast<long>(latestRaw[1]),
+      static_cast<long>(latestRaw[2]));
   }
 
   // Antaa idle-taskin ja Wi-Fi-pinon ajoaikaa. Ilman tätä loop on busy-loop,

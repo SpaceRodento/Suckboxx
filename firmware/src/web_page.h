@@ -108,12 +108,12 @@ const char WEB_PAGE_HTML[] PROGMEM = R"HTMLPAGE(<!DOCTYPE html>
 <body>
   <header>
     <h1>Suckboxx</h1>
-    <p class="sub">HX710B raakadata &middot; ei kalibroitu &middot; v&auml;liaikainen bring-up</p>
+    <p class="sub">XGZP6847A raakadata (ADC) &middot; ei kalibroitu</p>
   </header>
 
   <main>
     <div class="ch" id="ch0">
-      <div class="ch-label">SYL 1</div>
+      <div class="ch-label">SYL 1 (p&auml;&auml;)</div>
       <div class="meter">
         <div class="meter-center"></div>
         <div class="meter-fill" id="fill0"></div>
@@ -123,7 +123,7 @@ const char WEB_PAGE_HTML[] PROGMEM = R"HTMLPAGE(<!DOCTYPE html>
       <div class="stale-overlay">EI<br>DATAA</div>
     </div>
     <div class="ch" id="ch1">
-      <div class="ch-label">SYL 2</div>
+      <div class="ch-label">SYL 2 vs S1</div>
       <div class="meter">
         <div class="meter-center"></div>
         <div class="meter-fill" id="fill1"></div>
@@ -133,7 +133,7 @@ const char WEB_PAGE_HTML[] PROGMEM = R"HTMLPAGE(<!DOCTYPE html>
       <div class="stale-overlay">EI<br>DATAA</div>
     </div>
     <div class="ch" id="ch2">
-      <div class="ch-label">SYL 3</div>
+      <div class="ch-label">SYL 3 vs S1</div>
       <div class="meter">
         <div class="meter-center"></div>
         <div class="meter-fill" id="fill2"></div>
@@ -152,29 +152,33 @@ const char WEB_PAGE_HTML[] PROGMEM = R"HTMLPAGE(<!DOCTYPE html>
 <script>
 (function () {
   var METER_HALF_PX = 105;   // meter-height 220px, keskiviivasta reunaan
+  var MASTER_CH = 0;         // SYL 1 on määräävä kanava - muut suhteutetaan tähän
   // Kiinteä asteikon täysi skaala raakayksikköinä (delta-arvo joka täyttää
   // palkin puolikkaan kokonaan). Säädä tätä käsin normaalin puhalluksen
   // mukaan - ei automaattista kasvatusta, jotta yksi ylikuormituspiikki
   // (esim. anturi täyteen pohjaan asti) ei enää lukitse asteikkoa isoksi
   // ja tee kaikista muista lukemista näennäisen pieniä.
-  var FULL_SCALE_DELTA = 20000;
+  // Arvio n. 31 count/kPa: anturin 100 kPa mitta-alue mahtuu ADC:n koko
+  // lineaariselle alueelle (12-bit, ~3100 countia, rauta.md §1.2/§3.2) -
+  // täysi skaala on siis suunnilleen anturin koko mitta-alue.
+  var FULL_SCALE_DELTA = 3100;
+  // Sivukanavien (ei-määräävien) palkki ei näytä omaa absoluuttista
+  // painetta vaan eron pääkanavaan - tasapainotuksessa juuri tämä ero
+  // kiinnostaa, ei kummankaan itsenäinen lukema. Ero on tyypillisesti
+  // paljon pienempi kuin itse paine-ero, joten oma, herkempi täysasteikko.
+  // Aloitusarvaus n. 5 kPa (D2:n 1,5 kPa -kynnyksen moninkerta, rauta.md
+  // §3.2), hienosäädä käsin oikealla raudalla kunnes palkki liikkuu
+  // järkevästi tasapainotuksen aikana.
+  var FULL_SCALE_DIFF = 150;
   var STALE_MS = 2000;
   var POLL_MS = 500;
 
   var statusLine = document.getElementById('statusLine');
 
-  function updateChannel(i, ch) {
-    var chEl = document.getElementById('ch' + i);
-    var fillEl = document.getElementById('fill' + i);
-    var deltaEl = document.getElementById('delta' + i);
-    var rawEl = document.getElementById('raw' + i);
-
-    var stale = ch.age_ms > STALE_MS;
-    chEl.classList.toggle('stale', stale);
-
-    var pct = Math.min(1, Math.abs(ch.delta) / FULL_SCALE_DELTA);
+  function setMeter(fillEl, value, fullScale) {
+    var pct = Math.min(1, Math.abs(value) / fullScale);
     var px = Math.round(pct * METER_HALF_PX);
-    if (ch.delta >= 0) {
+    if (value >= 0) {
       fillEl.style.background = 'var(--fill-pos)';
       fillEl.style.bottom = '50%';
       fillEl.style.top = 'auto';
@@ -185,8 +189,25 @@ const char WEB_PAGE_HTML[] PROGMEM = R"HTMLPAGE(<!DOCTYPE html>
       fillEl.style.bottom = 'auto';
       fillEl.style.height = px + 'px';
     }
+  }
 
-    deltaEl.textContent = (ch.delta >= 0 ? '+' : '') + ch.delta;
+  function updateChannel(i, ch, masterDelta) {
+    var chEl = document.getElementById('ch' + i);
+    var fillEl = document.getElementById('fill' + i);
+    var deltaEl = document.getElementById('delta' + i);
+    var rawEl = document.getElementById('raw' + i);
+
+    var stale = ch.age_ms > STALE_MS;
+    chEl.classList.toggle('stale', stale);
+
+    if (i === MASTER_CH) {
+      setMeter(fillEl, ch.delta, FULL_SCALE_DELTA);
+      deltaEl.textContent = (ch.delta >= 0 ? '+' : '') + ch.delta;
+    } else {
+      var diff = ch.delta - masterDelta;
+      setMeter(fillEl, diff, FULL_SCALE_DIFF);
+      deltaEl.textContent = (diff >= 0 ? '+' : '') + diff;
+    }
     rawEl.textContent = 'raw ' + ch.raw;
   }
 
@@ -206,8 +227,9 @@ const char WEB_PAGE_HTML[] PROGMEM = R"HTMLPAGE(<!DOCTYPE html>
       .then(function (r) { return r.json(); })
       .then(function (data) {
         var channels = data.ch;
+        var masterDelta = channels[MASTER_CH].delta;
         for (var i = 0; i < channels.length; i++) {
-          updateChannel(i, channels[i]);
+          updateChannel(i, channels[i], masterDelta);
         }
         statusLine.textContent = 'yhteys OK · uptime ' + Math.round(data.uptime_ms / 1000) + ' s';
         statusLine.classList.remove('offline');

@@ -153,13 +153,20 @@ ole käytettävissä.** MVP on Wi-Fi AP, joten kaikki kolme kanavaa **on** oltav
 |-----|-----|-----|-----|
 | CH1 alipaine | **GPIO34** | ADC1_CH6 | input-only, ei sisäistä pull-uppia — ihanteellinen analogialle |
 | CH2 alipaine | **GPIO35** | ADC1_CH7 | input-only |
-| CH3 alipaine | **GPIO36** (VP) | ADC1_CH0 | input-only |
+| CH3 alipaine | **GPIO32** | ADC1_CH4 | ei input-only, ks. huomio alla |
 | V_REF-monitori | **GPIO39** (VN) | ADC1_CH3 | anturikiskon mittaus, ks. §3.3 |
 | Tila-LED | GPIO2 | — | devkitin oma LED useimmissa korteissa |
 | Käyttäjän nappi | GPIO0 | — | BOOT-nappi; pitkä paine = kalibrointi |
 
 GPIO34–39 ovat **input-only** eikä niissä ole sisäisiä ylösvetoja tai -laskuja, joten ne eivät
 kuormita eivätkä vääristä analogiasignaalia. Se on niiden oikea käyttötarkoitus.
+
+⚠ **Poikkeama, huomattu 5.9.2026 protolevyn kytkennässä:** CH3 päätyi GPIO36:n sijaan
+GPIO32:een, koska devkitin silkkipainatus merkitsee GPIO36:n "VP":ksi eikä "D36":ksi — se jäi
+helposti huomaamatta rinnakkain kytketyistä D32/D34/D35-pinneistä. GPIO32 on edelleen ADC1
+(toimii Wi-Fin kanssa), mutta sillä on sisäiset pull-vastukset — koodi ei kuitenkaan ota niitä
+käyttöön (`analogRead` ei aseta pinMode-pullupia), joten ne eivät kuormita signaalia käytännössä.
+Ei vaadi PCB- tai koodimuutosta enempää kuin `main.cpp`:n pinnijako.
 
 ---
 
@@ -477,7 +484,7 @@ Ja jokaisen ADC-pinnin ja GND:n väliin **100 nF**, fyysisesti ESP32:n pinnin vi
                                 GND
 
   anturi CH2  pin 5 ──[ 10 kΩ ]──┬── GPIO35      (sama kuvio)
-  anturi CH3  pin 5 ──[ 10 kΩ ]──┬── GPIO36      (sama kuvio)
+  anturi CH3  pin 5 ──[ 10 kΩ ]──┬── GPIO32      (sama kuvio - ks. §2.2:n huomio GPIO36→32)
 ```
 
 #### Kiskomonitori (R6, toinen puolisko)
