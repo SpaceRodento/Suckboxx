@@ -1,0 +1,600 @@
+#pragma once
+// Suckboxx core - käytösmatriisi (WP-4, docs/firmware.md §4.7, SUUNNITTELU.md §8).
+//
+// Kokoaa DSP:n kanavatilat ja rpm-arvion yhdeksi näyttötilaksi ja yhdeksi
+// suomenkieliseksi ohjeeksi. Tämä on se kohta, jossa "väärä vihreä" joko
+// syntyy tai estetään, joten prioriteetti on kiinteä (korkein ensin):
+//   1. FaultMaster  rivi 12: master täyttää rivin 6 tai 7 ehdon
+//   2. FaultSensor  rivi 7
+//   3. FaultHose    rivi 6
+//   4. NoSignal     rivit 1+8 (D10)
+//   5. Unstable     rivi 2 + D12 (rpm < sync_rpm_min, vakausajan odotus)
+//   6. RpmTooHigh   rivi 9
+//   7. Synced / Near / OutOfSync  rivit 3 / 4a / 4b
+// §8:n suunnittelusääntö: vikatilat voittavat aina säätötilat. Laite ei
+// koskaan näytä vihreää, jos yksikin kanava on epäluotettava - väärä
+// "synkronoitu" on pahempi kuin ei tulosta lainkaan.
+//
+// Aika tulee syötteestä (now_s), joten kone on deterministinen ja
+// testattavissa ilman kelloa. Ei muistinvarausta, ei poikkeuksia; tekstit
+// kirjoitetaan StatusResultin kiinteisiin puskureihin.
+
+#include <cmath>
+#include <cstdarg>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+
+#include "types.h"
+
+namespace sbx {
+
+struct StatusInput {
+  ChannelState ch[kChannels];
+  RpmEstimate rpm;
+  bool zero_valid = false;   // Calibration::zero_valid
+  bool gain_valid = false;   // Calibration::gain_valid
+  float now_s = 0.0f;        // monotoninen aika
+};
+
+// Snapshot-JSONin "state"-avain (docs/firmware.md §5).
+inline const char* syncStateKey(SyncState s) {
+  switch (s) {
+    case SyncState::NoSignal: return "no_signal";
+    case SyncState::Unstable: return "unstable";
+    case SyncState::RpmTooHigh: return "rpm_too_high";
+    case SyncState::Synced: return "synced";
+    case SyncState::Near: return "near";
+    case SyncState::OutOfSync: return "out_of_sync";
+    case SyncState::FaultSensor: return "fault_sensor";
+    case SyncState::FaultHose: return "fault_hose";
+    case SyncState::FaultMaster: return "fault_master";
+  }
+  return "no_signal";
+}
+
+namespace status_detail {
+
+// Lyhentää NUL-päätetyn merkkijonon niin, ettei viimeinen UTF-8-merkki jää
+// kesken. snprintf katkaisee tavurajalla, ja puolikas "ä" tai "–" näkyisi
+// selaimessa korvausmerkkinä tai rikkoisi JSON-validoinnin.
+inline void utf8TrimTail(char* s) {
+  size_t len = std::strlen(s);
+  size_t cont = 0;
+  while (len > 0 && cont < 3 &&
+         (static_cast<unsigned char>(s[len - 1]) & 0xC0u) == 0x80u) {
+    --len;
+    ++cont;
+  }
+  if (len == 0) {
+    if (cont > 0) s[0] = '\0';   // pelkkiä jatkotavuja: ei kelvollista merkkiä
+    return;
+  }
+  const unsigned char lead = static_cast<unsigned char>(s[len - 1]);
+  size_t need = 0;
+  if ((lead & 0xE0u) == 0xC0u) need = 1;
+  else if ((lead & 0xF0u) == 0xE0u) need = 2;
+  else if ((lead & 0xF8u) == 0xF0u) need = 3;
+  if (lead >= 0x80u && cont < need) s[len - 1] = '\0';
+}
+
+// snprintf kiinteään puskuriin + UTF-8-turvallinen katkaisu. Tekstit on
+// mitoitettu mahtumaan (ks. testit äärimmäisillä luvuilla), joten katkaisu on
+// vain varmistus.
+__attribute__((format(printf, 3, 4)))
+inline void writeText(char* dst, size_t n, const char* fmt, ...) {
+  if (dst == nullptr || n == 0) return;
+  va_list ap;
+  va_start(ap, fmt);
+  const int r = std::vsnprintf(dst, n, fmt, ap);
+  va_end(ap);
+  if (r < 0) {
+    dst[0] = '\0';
+  } else if (static_cast<size_t>(r) >= n) {
+    utf8TrimTail(dst);
+  }
+}
+
+// Yksi desimaali desimaalipilkulla ("2,1", "-55,0"). |v| rajataan 999,9:ään,
+// jolloin pisin tulos on "-999,9" ja tekstien pituus on rajattu
+// rakenteellisesti. Ei-äärellinen -> "?". "-0,0" -> "0,0".
+inline void fmt1(char (&out)[8], float v) {
+  if (!std::isfinite(v)) {
+    std::memcpy(out, "?", 2);
+    return;
+  }
+  if (v > 999.9f) v = 999.9f;
+  if (v < -999.9f) v = -999.9f;
+  int r = std::snprintf(out, sizeof(out), "%.1f", static_cast<double>(v));
+  if (r < 0) r = 0;
+  for (int i = 0; out[i] != '\0'; ++i) {
+    if (out[i] == '.') out[i] = ',';
+  }
+  if (std::strcmp(out, "-0,0") == 0) std::memcpy(out, "0,0", 4);
+}
+
+// Kokonaisluvuksi pyöristetty rpm, rajattu 0..99999 (5 numeroa riittää
+// sync_rpm_max:n 12000 rpm:n konfiguraatiorajalle).
+inline int rpmInt(float rpm) {
+  if (!std::isfinite(rpm) || rpm < 0.0f) return 0;
+  if (rpm > 99999.0f) return 99999;
+  return static_cast<int>(rpm + 0.5f);
+}
+
+}  // namespace status_detail
+
+class StatusMachine {
+ public:
+  StatusMachine() { configure(StatusParams()); }
+
+  // Nollaa ajastimet: uusi master tai uudet kynnykset = uusi vakausjakso
+  // (D7: nollataso vaihtui, vanha vakaus ei kerro uudesta viitteestä mitään).
+  void configure(const StatusParams& p) {
+    p_ = p;
+    master_ = p.master < kChannels ? p.master : 0;
+    reset();
+  }
+
+  void reset() {
+    have_t_ = false;
+    last_t_ = 0.0f;
+    stable_run_ = false;
+    stable_since_ = 0.0f;
+    for (int i = 0; i < kChannels; ++i) {
+      lost_run_[i] = false;
+      lost_since_[i] = 0.0f;
+      zero_lo_[i] = 0.0f;
+      zero_hi_[i] = 0.0f;
+    }
+    zero_run_ = false;
+    zero_since_ = 0.0f;
+    zero_armed_ = true;   // käynnistys moottori sammuksissa -> nollaus (rivi 1)
+    drift_n_ = 0;
+    drift_head_ = 0;
+  }
+
+  const StatusParams& params() const { return p_; }
+  int master() const { return master_; }
+
+  // ~20 Hz (toimii 10-50 Hz:llä ja epätasaisella dt:llä).
+  StatusResult update(const StatusInput& in) {
+    using namespace status_detail;
+    StatusResult r;
+
+    // Ajastimet laskevat erotuksia, joten ajan on oltava monotoninen.
+    // Taaksepäin hyppy = uusi alku; NaN = aika ei edennyt.
+    float now = in.now_s;
+    if (!std::isfinite(now)) now = have_t_ ? last_t_ : 0.0f;
+    if (have_t_ && now < last_t_) reset();
+    have_t_ = true;
+    last_t_ = now;
+
+    // Kanava pulssii vain, jos sen keskiarvo on myös käyttökelpoinen. NaN-
+    // keskiarvo jäisi muuten spreadin min/max-vertailuista hiljaa pois ja
+    // voisi päästää vihreän läpi.
+    bool pulse[kChannels];
+    int pulsing = 0;
+    for (int i = 0; i < kChannels; ++i) {
+      pulse[i] = in.ch[i].has_pulse && std::isfinite(in.ch[i].mean_kpa);
+      if (pulse[i]) ++pulsing;
+    }
+
+    // --- kanavaluokitus --------------------------------------------------
+    Cond cond[kChannels];
+    for (int i = 0; i < kChannels; ++i) {
+      const ChannelState& c = in.ch[i];
+      const bool others = pulsing - (pulse[i] ? 1 : 0) > 0;
+      // Pulssi puuttuu vain tältä kanavalta: ajastin sille, jäikö vika päälle.
+      const bool lost = !c.sensor_fault && !pulse[i] && others;
+      if (!lost) {
+        lost_run_[i] = false;
+      } else if (!lost_run_[i]) {
+        lost_run_[i] = true;
+        lost_since_[i] = now;
+      }
+      if (c.sensor_fault) {
+        cond[i] = Cond::Sensor;                    // rivi 7 (DSP:n fault_hold_s)
+      } else if (pulse[i]) {
+        cond[i] = Cond::Ok;
+      } else if (!others) {
+        cond[i] = Cond::Idle;                      // rivit 1+8: kaikki hiljaa
+      } else if (std::fabs(c.level_kpa) < p_.hose_off_kpa) {
+        cond[i] = Cond::HoseOff;                   // rivi 6
+      } else if (now - lost_since_[i] >= p_.off_hold_s) {
+        // Rivin 6 laajennus: ei pulssia, mutta taso ei ole nollassa. Tukossa
+        // tai taittunut letku pitää alipaineen loukussa, ja kalibroimaton
+        // anturi voi näyttää irti olevallakin letkulla yli hose_off_kpa:n
+        // (±2 kPa, R4). Kun tila jatkuu off_hold_s, se on vika eikä
+        // ohimenevä (ks. Lost).
+        cond[i] = Cond::Blocked;
+      } else {
+        // Ohimenevä: letku juuri irrotettu (EMA-taso vielä laskussa) tai
+        // kanavien pulssit alkavat/loppuvat eri syklillä käynnistyksessä
+        // ja sammutuksessa. Ei vikaa heti, ettei VIKA välähdä turhaan.
+        cond[i] = Cond::Lost;
+      }
+    }
+
+    // --- tilariippumattomat liput ----------------------------------------
+    for (int i = 0; i < kChannels; ++i) {
+      // Rivi 10 koskee pulssin huippua. GN-anturi on ilmanpaineessa 2700 mV
+      // eli aina >= sat_mv, joten ilman pulssia lippu varoittaisi
+      // leikkautumisesta jokaisella sammutetulla moottorilla.
+      if (in.ch[i].saturated && pulse[i]) r.flag_saturation = true;
+    }
+    r.flag_uncal_zero = !in.zero_valid;   // D11
+    r.flag_uncal_gain = !in.gain_valid;   // rivi 11
+    r.flag_drift = updateDrift(in.rpm, now);   // rivi 5
+
+    // --- alipaine-erot (D3) ---------------------------------------------
+    // Lasketaan aina kun master on kelvollinen, kelvollisista kanavista;
+    // muiden d = 0. Näyttääkö UI ne, kertovat show_bars/show_verdict.
+    const int m = master_;
+    if (cond[m] == Cond::Ok) {
+      const float ref = in.ch[m].mean_kpa;
+      float lo = 0.0f;
+      float hi = 0.0f;
+      float worst_abs = -1.0f;
+      for (int i = 0; i < kChannels; ++i) {
+        if (cond[i] != Cond::Ok || i == m) continue;
+        // Positiivinen = kanava imee enemmän kuin master (läppä suljetumpi).
+        const float d = ref - in.ch[i].mean_kpa;
+        r.vac_delta_kpa[i] = d;
+        if (d < lo) lo = d;
+        if (d > hi) hi = d;
+        if (std::fabs(d) > worst_abs) {
+          worst_abs = std::fabs(d);
+          r.worst_ch = static_cast<int8_t>(i);
+        }
+      }
+      r.spread_kpa = hi - lo;   // masterin d = 0 on mukana (D2)
+    }
+
+    // --- tila prioriteettijärjestyksessä ---------------------------------
+    int n_sensor = 0, n_hose = 0, n_blocked = 0, n_lost = 0;
+    int first_sensor = -1, first_hose = -1, first_lost = -1;
+    for (int i = 0; i < kChannels; ++i) {
+      switch (cond[i]) {
+        case Cond::Sensor:
+          if (first_sensor < 0) first_sensor = i;
+          ++n_sensor;
+          break;
+        case Cond::HoseOff:
+        case Cond::Blocked:
+          if (first_hose < 0) first_hose = i;
+          if (cond[i] == Cond::HoseOff) ++n_hose; else ++n_blocked;
+          break;
+        case Cond::Lost:
+          if (first_lost < 0) first_lost = i;
+          ++n_lost;
+          break;
+        default:
+          break;
+      }
+    }
+
+    const RpmEstimate& e = in.rpm;
+    // NaN-turvalliset vertailut: epäkelpo luku putoaa aina epävakaaksi.
+    const bool cv_ok = e.valid && e.cv <= p_.unstable_cv;
+    const bool rpm_low = !(e.rpm >= p_.sync_rpm_min);
+    const bool rpm_high = e.rpm > p_.sync_rpm_max;
+    const bool master_bad = cond[m] == Cond::Sensor || cond[m] == Cond::HoseOff ||
+                            cond[m] == Cond::Blocked;
+
+    // Vakausajastin (rivi 3, D12): kaikki kanavat pulssivat, ei vikoja, rpm
+    // voimassa, hajonta kunnossa ja ikkunassa. Rivin 5 ajautuminen ei nollaa
+    // sitä - yhteismuotoinen liike on jo poistettu erotuksesta (D3).
+    const bool measurable = n_sensor == 0 && n_hose == 0 && n_blocked == 0 && n_lost == 0 &&
+                            pulsing == kChannels && cv_ok && !rpm_low && !rpm_high;
+    if (!measurable) {
+      stable_run_ = false;
+    } else if (!stable_run_) {
+      stable_run_ = true;
+      stable_since_ = now;
+    }
+    const float stable_for = stable_run_ ? now - stable_since_ : 0.0f;
+    const bool stable = stable_run_ && stable_for >= p_.stable_hold_s;
+
+    char a[8], b[8];   // fmt1-apupuskurit
+    if (master_bad) {
+      r.state = SyncState::FaultMaster;
+      r.fault_ch = static_cast<int8_t>(m);
+      // Erot masteriin ovat merkityksettömiä.
+      clearDeltas(r);
+      writeText(r.headline, sizeof(r.headline),
+                "Master (SYL %d) ei kelpaa viitteeksi – valitse toinen", m + 1);
+      if (cond[m] == Cond::Sensor) {
+        writeText(r.advice, sizeof(r.advice), "SYL %d: anturivika (jännite %u mV)", m + 1,
+                  static_cast<unsigned>(in.ch[m].last_mv));
+      } else if (cond[m] == Cond::HoseOff) {
+        writeText(r.advice, sizeof(r.advice), "SYL %d: ei alipainetta – tarkista letku", m + 1);
+      } else {
+        fmt1(a, in.ch[m].level_kpa);
+        writeText(r.advice, sizeof(r.advice),
+                  "SYL %d: ei pulssia (taso %s kPa) – tarkista letku", m + 1, a);
+      }
+    } else if (n_sensor > 0) {
+      r.state = SyncState::FaultSensor;
+      r.fault_ch = static_cast<int8_t>(first_sensor);
+      char list[32];
+      channelList(list, cond, Cond::Sensor, Cond::Sensor);
+      writeText(r.headline, sizeof(r.headline), "VIKA: %s – anturivika", list);
+      if (n_sensor == 1) {
+        writeText(r.advice, sizeof(r.advice),
+                  "Jännite %u mV – tarkista anturin johdot tai vaihda",
+                  static_cast<unsigned>(in.ch[first_sensor].last_mv));
+      } else {
+        // Usea anturi yhtä aikaa viittaa yhteiseen syöttöön (R6:n LDO).
+        writeText(r.advice, sizeof(r.advice),
+                  "Useita anturivikoja – tarkista anturien käyttöjännite");
+      }
+    } else if (n_hose + n_blocked > 0) {
+      r.state = SyncState::FaultHose;
+      r.fault_ch = static_cast<int8_t>(first_hose);
+      char list[32];
+      channelList(list, cond, Cond::HoseOff, Cond::Blocked);
+      const char* plural = n_hose + n_blocked > 1 ? "letkut" : "letku";
+      if (n_blocked == 0) {
+        writeText(r.headline, sizeof(r.headline), "VIKA: %s – ei alipainetta, tarkista %s", list,
+                  plural);
+        writeText(r.advice, sizeof(r.advice),
+                  "Letku irti tai vuotaa – kytke ja tarkista liitokset");
+      } else if (n_hose == 0) {
+        writeText(r.headline, sizeof(r.headline), "VIKA: %s – ei pulssia, tarkista %s", list,
+                  plural);
+        fmt1(a, in.ch[first_hose].level_kpa);
+        writeText(r.advice, sizeof(r.advice),
+                  "Taso %s kPa ilman pulssia – letku irti, tukossa tai taittunut?", a);
+      } else {
+        writeText(r.headline, sizeof(r.headline), "VIKA: %s – tarkista letkut", list);
+        writeText(r.advice, sizeof(r.advice),
+                  "Letku irti, vuotaa tai tukossa – tarkista liitokset");
+      }
+    } else if (pulsing == 0) {
+      r.state = SyncState::NoSignal;   // D10: sammuksissa ja kaikki letkut irti = sama tila
+      clearDeltas(r);
+      writeText(r.headline, sizeof(r.headline), "Ei alipainesignaalia");
+      writeText(r.advice, sizeof(r.advice), "Moottori sammuksissa tai letkut irti");
+    } else if (n_lost > 0 || !e.valid || !cv_ok || rpm_low) {
+      r.state = SyncState::Unstable;
+      writeText(r.headline, sizeof(r.headline), "Odota, käynti tasaantuu");
+      if (n_lost > 0) {
+        fmt1(a, in.ch[first_lost].level_kpa);
+        writeText(r.advice, sizeof(r.advice), "SYL %d: ei pulssia (taso %s kPa)", first_lost + 1,
+                  a);
+      } else if (!e.valid) {
+        writeText(r.advice, sizeof(r.advice), "Kierroslukua ei vielä tunnistettu");
+      } else if (!cv_ok) {
+        fmt1(a, e.cv * 100.0f);
+        fmt1(b, p_.unstable_cv * 100.0f);
+        writeText(r.advice, sizeof(r.advice), "Käynti epätasainen: hajonta %s %% (raja %s %%)", a,
+                  b);
+      } else {
+        // floor/ceil: näytetty luku on aina rajan väärällä puolella
+        // (499,9 rpm ei näy "500 rpm (raja 500)").
+        writeText(r.advice, sizeof(r.advice), "Kierrosluku liian matala: %d rpm (raja %d)",
+                  rpmInt(std::floor(e.rpm)), rpmInt(p_.sync_rpm_min));
+      }
+    } else if (rpm_high) {
+      // Rivi 9: rpm näytetään, arvio piilotetaan. Ei vakausodotusta - piilotus
+      // on turvallinen suunta.
+      r.state = SyncState::RpmTooHigh;
+      writeText(r.headline, sizeof(r.headline), "Säädä joutokäynnillä");
+      writeText(r.advice, sizeof(r.advice), "Kierrosluku %d rpm (raja %d) – laske kaasua",
+                rpmInt(std::ceil(e.rpm)), rpmInt(p_.sync_rpm_max));
+    } else if (!stable) {
+      r.state = SyncState::Unstable;   // D12: vakaa >= stable_hold_s ennen tuomiota
+      writeText(r.headline, sizeof(r.headline), "Odota, käynti tasaantuu");
+      fmt1(a, stable_for);
+      fmt1(b, p_.stable_hold_s);
+      writeText(r.advice, sizeof(r.advice), "Vakautta odotetaan: %s / %s s", a, b);
+    } else {
+      verdict(r, in.zero_valid);
+    }
+
+    const bool verdict_state = r.state == SyncState::Synced || r.state == SyncState::Near ||
+                               r.state == SyncState::OutOfSync;
+    r.show_bars = verdict_state;
+    r.show_verdict = verdict_state;
+
+    // --- rivi 1: automaattinen nollaus -----------------------------------
+    // Reunaliipattu: kerran per NoSignal-jakso, kun kaikki tasot ovat olleet
+    // nollan tuntumassa (off_kpa, D10) ja paikallaan (kAutoZeroBandKpa)
+    // yhtäjaksoisesti off_hold_s. Vielä vuotava alipaine ei siis päädy
+    // offsetiksi. Uudelleenviritys vasta kun pulssit palaavat.
+    if (pulsing > 0) zero_armed_ = true;
+    bool near_zero = r.state == SyncState::NoSignal;
+    for (int i = 0; i < kChannels && near_zero; ++i) {
+      near_zero = std::fabs(in.ch[i].level_kpa) < p_.off_kpa;
+    }
+    if (!near_zero) {
+      zero_run_ = false;
+    } else {
+      bool restart = !zero_run_;
+      for (int i = 0; i < kChannels && !restart; ++i) {
+        const float l = in.ch[i].level_kpa;
+        const float lo = l < zero_lo_[i] ? l : zero_lo_[i];
+        const float hi = l > zero_hi_[i] ? l : zero_hi_[i];
+        if (hi - lo > kAutoZeroBandKpa) restart = true;
+      }
+      if (restart) {
+        zero_run_ = true;
+        zero_since_ = now;
+        for (int i = 0; i < kChannels; ++i) zero_lo_[i] = zero_hi_[i] = in.ch[i].level_kpa;
+      } else {
+        for (int i = 0; i < kChannels; ++i) {
+          const float l = in.ch[i].level_kpa;
+          if (l < zero_lo_[i]) zero_lo_[i] = l;
+          if (l > zero_hi_[i]) zero_hi_[i] = l;
+        }
+      }
+      if (zero_armed_ && p_.auto_zero && now - zero_since_ >= p_.off_hold_s) {
+        r.request_auto_zero = true;
+        zero_armed_ = false;
+      }
+    }
+    return r;
+  }
+
+  // Rivin 1 nollaus vaatii, että tasot pysyvät tämän kaistan sisällä koko
+  // off_hold_s-jakson. Pelkkä |taso| < off_kpa päästäisi läpi vielä laskevan
+  // alipaineen (esim. -4 kPa ja tasaantumassa), ja nollaus kirjaisi sen
+  // offsetiksi. 0,3 kPa = 1/5 D2:n vihreästä rajasta; level-EMA:n kohina
+  // (tau 0,5 s) on tästä kertaluokkia pienempi.
+  static constexpr float kAutoZeroBandKpa = 0.3f;
+
+  // Rivi 5: rpm-historia harvennetaan niin, että drift_window_s jakautuu
+  // vähintään kDriftSlots väliin päivitystaajuudesta riippumatta (10-50 Hz,
+  // epätasainen dt). Kapasiteetti kattaa >= (kDriftCap-1)/kDriftSlots ≈ 1,47
+  // ikkunaa, joten kohta now - drift_window_s on aina historiassa.
+  static constexpr int kDriftSlots = 32;
+  static constexpr int kDriftCap = 48;
+
+ private:
+  enum class Cond : uint8_t { Ok, Idle, Sensor, HoseOff, Blocked, Lost };
+
+  struct RpmPoint {
+    float t;
+    float rpm;
+  };
+
+  static void clearDeltas(StatusResult& r) {
+    for (int i = 0; i < kChannels; ++i) r.vac_delta_kpa[i] = 0.0f;
+    r.spread_kpa = 0.0f;
+    r.worst_ch = -1;
+  }
+
+  // "SYL 2", "SYL 2 ja SYL 3", "SYL 1, SYL 2 ja SYL 3" (pisin 21 tavua).
+  static void channelList(char (&out)[32], const Cond (&cond)[kChannels], Cond c1, Cond c2) {
+    int idx[kChannels];
+    int n = 0;
+    for (int i = 0; i < kChannels; ++i) {
+      if (cond[i] == c1 || cond[i] == c2) idx[n++] = i;
+    }
+    // Numerot merkkeinä (%c): GCC ei näe, että idx < kChannels, ja varoittaisi
+    // %d:n mahdollisesta katkeamisesta (-Wformat-truncation).
+    char d[kChannels];
+    for (int i = 0; i < n; ++i) d[i] = static_cast<char>('1' + idx[i]);
+    out[0] = '\0';
+    if (n == 1) {
+      std::snprintf(out, sizeof(out), "SYL %c", d[0]);
+    } else if (n == 2) {
+      std::snprintf(out, sizeof(out), "SYL %c ja SYL %c", d[0], d[1]);
+    } else if (n == 3) {
+      std::snprintf(out, sizeof(out), "SYL %c, SYL %c ja SYL %c", d[0], d[1], d[2]);
+    }
+  }
+
+  // Rivit 3 / 4a / 4b (D2) ja D11.
+  void verdict(StatusResult& r, bool zero_valid) const {
+    using namespace status_detail;
+    char a[8], b[8];
+    const float s = r.spread_kpa;
+    // NaN-spread ei täytä kumpaakaan ehtoa -> OutOfSync, ei koskaan vihreä.
+    if (s <= p_.tol_green_kpa) {
+      if (zero_valid) {
+        r.state = SyncState::Synced;
+        writeText(r.headline, sizeof(r.headline), "Synkronoitu");
+        fmt1(a, s);
+        fmt1(b, p_.tol_green_kpa);
+        writeText(r.advice, sizeof(r.advice), "Valmis: ero %s kPa (raja %s kPa)", a, b);
+      } else {
+        // D11: ilman tämän käynnistyksen nollausta ero voi olla pelkkää
+        // anturin offsetia (±2 kPa, R4) -> enintään keltainen, ja ohje
+        // kertoo miten nollaus saadaan.
+        r.state = SyncState::Near;
+        writeText(r.headline, sizeof(r.headline), "Lähellä – kalibroimaton");
+        if (p_.auto_zero) {
+          writeText(r.advice, sizeof(r.advice),
+                    "Nollaus puuttuu – sammuta moottori hetkeksi, laite nollaa itse");
+        } else {
+          writeText(r.advice, sizeof(r.advice), "Nollaus puuttuu – irrota letkut ja tee nollaus");
+        }
+      }
+      return;
+    }
+    r.state = s <= p_.tol_yellow_kpa ? SyncState::Near : SyncState::OutOfSync;
+    const char* head = r.state == SyncState::Near ? "Lähellä" : "Ei synkronissa";
+    writeText(r.headline, sizeof(r.headline), "%s%s", head, zero_valid ? "" : " – kalibroimaton");
+    const int w = r.worst_ch;
+    if (w < 0 || w >= kChannels) {
+      fmt1(a, s);
+      writeText(r.advice, sizeof(r.advice), "Ero %s kPa", a);
+      return;
+    }
+    // Säätösuunta (D3, docs/firmware.md §4.7): d > 0 = imee enemmän kuin
+    // master = läppä suljetumpi -> avaa. Ruuvin kiertosuunta riippuu
+    // moottorista (D6), joten sitä ei kerrota.
+    const float d = r.vac_delta_kpa[w];
+    const bool more = d > 0.0f;
+    fmt1(a, std::fabs(d));
+    writeText(r.advice, sizeof(r.advice), "SYL %d: %s läppää – imee %s kPa %s kuin SYL %d", w + 1,
+              more ? "avaa" : "sulje", a, more ? "enemmän" : "vähemmän", master_ + 1);
+  }
+
+  // Palauttaa flag_driftin: |rpm(now) - rpm(now - drift_window_s)| > drift_rpm.
+  // Menneisyyden rpm interpoloidaan lineaarisesti kahden tallennetun pisteen
+  // välistä, joten tulos ei riipu siitä, osuuko jokin päivitys tarkalleen
+  // ikkunan reunaan. Ennen kuin historiaa on koko ikkunan verran, lippu on
+  // alhaalla (ei tietoa != ajautuu).
+  bool updateDrift(const RpmEstimate& e, float now) {
+    const float win = p_.drift_window_s;
+    if (!e.valid || !std::isfinite(e.rpm) || !(win > 0.0f)) {
+      drift_n_ = 0;
+      drift_head_ = 0;
+      return false;
+    }
+    bool drift = false;
+    const float target = now - win;
+    int newer = -1;
+    for (int k = 0; k < drift_n_; ++k) {
+      const int idx = (drift_head_ - 1 - k + kDriftCap) % kDriftCap;
+      const RpmPoint& pa = drift_[idx];
+      if (pa.t <= target) {
+        float then = pa.rpm;
+        if (newer >= 0) {
+          const RpmPoint& pb = drift_[newer];
+          const float span = pb.t - pa.t;
+          if (span > 0.0f) then = pa.rpm + (pb.rpm - pa.rpm) * ((target - pa.t) / span);
+        }
+        drift = std::fabs(e.rpm - then) > p_.drift_rpm;
+        break;
+      }
+      newer = idx;
+    }
+    const float spacing = win / static_cast<float>(kDriftSlots);
+    const int last = (drift_head_ - 1 + kDriftCap) % kDriftCap;
+    if (drift_n_ == 0 || now - drift_[last].t >= spacing) {
+      drift_[drift_head_].t = now;
+      drift_[drift_head_].rpm = e.rpm;
+      drift_head_ = (drift_head_ + 1) % kDriftCap;
+      if (drift_n_ < kDriftCap) ++drift_n_;
+    }
+    return drift;
+  }
+
+  StatusParams p_;
+  int master_ = 0;
+
+  bool have_t_ = false;
+  float last_t_ = 0.0f;
+
+  bool stable_run_ = false;
+  float stable_since_ = 0.0f;
+
+  bool lost_run_[kChannels] = {false, false, false};
+  float lost_since_[kChannels] = {0.0f, 0.0f, 0.0f};
+
+  bool zero_run_ = false;
+  bool zero_armed_ = true;
+  float zero_since_ = 0.0f;
+  float zero_lo_[kChannels] = {0.0f, 0.0f, 0.0f};
+  float zero_hi_[kChannels] = {0.0f, 0.0f, 0.0f};
+
+  RpmPoint drift_[kDriftCap] = {};
+  int drift_n_ = 0;
+  int drift_head_ = 0;
+};
+
+}  // namespace sbx
