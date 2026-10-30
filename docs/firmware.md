@@ -66,8 +66,8 @@
 | `web/index.html` | WP-5 | koko käyttöliittymä yhtenä tiedostona |
 | `src/web/web_page.h` | WP-5 | generoitu `tools/embed_web.py`:llä — älä muokkaa käsin |
 | `tools/mock_server.py` | WP-5 | PC-palvelin UI:n kehitykseen (sama API kuin laitteella) |
-| `src/core/processor.h`, `snapshot.h` | WP-6 (vaihe 2) | kokoaja + snapshot-JSON + integraatiotestit |
-| `src/hal/*`, `src/main.cpp` | WP-7 (vaihe 2) | ESP32-liima |
+| `src/core/processor.h`, `snapshot.h`, `sim_api.h` | WP-6 (vaihe 2) | kokoaja + snapshot-JSON + `/api/sim`-muunnos + integraatiotestit (§4.8) |
+| `src/hal/*`, `src/main.cpp` | WP-7 (vaihe 2) | ESP32-liima (§4.9) |
 
 Testit: `firmware/test/test_<moduuli>/test_main.cpp`, yksi kansio per moduuli. Yhteiset
 testiapurit `firmware/test/support/` (include-polussa).
@@ -316,6 +316,99 @@ Tekstit UTF-8-suomeksi, desimaalipilkku, esim. headline `"Synkronoitu"` ja advic
 `"SYL 3: avaa läppää – imee 2,1 kPa enemmän kuin SYL 1"`. Säätösuunta:
 `vac_delta > 0` (imee enemmän kuin master, läppä suljetumpi) → "avaa", `< 0` → "sulje".
 Ruuvin kiertosuunta riippuu moottorista (D6) eikä sitä kerrota.
+
+`flag_saturation` nousee vain pulssivista kanavista (`has_pulse && saturated`). Rivi 10 koskee
+pulssin huippua, ja GN-anturi on ilmanpaineessa leikkausrajallaan (docs/rauta.md §1.2), joten
+pelkkä `saturated` olisi päällä jokaisella sammutuksella (tarkennettu 30.10.2026).
+
+### 4.8 `processor.h`, `snapshot.h`, `sim_api.h` (WP-6)
+
+Processor kokoaa coren yhdeksi olioksi, jota ESP32-liima kutsuu mutexin takaa. Kaikki
+päätöslogiikka (milloin nollataan, milloin vahvistusmittaus päättyy, mitä snapshotissa on) on
+täällä, jotta se on native-testattavissa. Liimaan jää vain ajastus, laitteet ja verkko.
+
+```cpp
+namespace sbx {
+struct CalStatus {
+  bool busy = false;          // vahvistusmittaus käynnissä
+  char msg[96] = {0};         // viimeisin kalibrointiviesti suomeksi, UI näyttää sellaisenaan
+};
+
+class Processor {
+ public:
+  Processor(RawSample* ring_storage, size_t ring_capacity);   // ESP32: staattinen 8192 näytettä
+
+  void configure(const Config& c);         // Dsp + StatusMachine + muunnos; nollaa DSP:n ja ajastimet,
+                                           // keskeyttää käynnissä olevan vahvistusmittauksen
+  const Config& config() const;
+  void setCalibration(const Calibration& cal);   // käynnistyksessä NVS:stä; zero_valid = false (D11)
+  const Calibration& calibration() const;
+
+  void push(const RawFrame& f);            // 1 kHz: rengas, mV → kPa (nominalKpa + applyCal), Dsp,
+                                           // vahvistusmittauksen keruu, aaltomuodon desimointi
+  void tick(float now_s);                  // ~20 Hz: StatusMachine, automaattinen nollaus
+                                           // (request_auto_zero), vahvistusmittauksen päättäminen
+
+  CalResult zeroNow();                     // POST /api/cal/zero (vaatii ilmanpaineen, |taso| < off_kpa)
+  bool startGainCapture();                 // POST /api/cal/gain: 2 s keruu nimellisistä näytteistä
+  void resetGain();                        // POST /api/cal/reset: gain = 1, gain_valid = false
+  bool setMaster(int ch);                  // POST /api/master (D7); ei nollaa DSP:tä
+
+  bool takeConfigDirty();                  // pysyvä muutos (master) → liima tallentaa NVS:ään
+  bool takeCalDirty();                     // gain muuttui → liima tallentaa NVS:ään
+
+  const StatusResult& status() const;
+  const ChannelState& channel(int i) const;
+  RpmEstimate rpm() const;
+  const CalStatus& calStatus() const;
+  RawRing& ring();                         // /api/raw.csv jäädyttää ja vapauttaa
+  int takeWave(float (*rows)[kChannels], int max_rows);  // 16 näytteen lohkokeskiarvot (62,5 Hz)
+                                                         // edellisen haun jälkeen, vanhin ensin
+};
+
+struct SnapshotMeta {
+  uint32_t t_ms;        // millis()
+  const char* src;      // "sim" | "adc" | "hx710b"
+  float fs_hz;          // mitattu näytetaajuus (liima laskee)
+  uint32_t heap;        // vapaa heap (native: 0)
+};
+// §5:n snapshot yhdelle riville. Tyhjentää aaltojonon. 0 = ei mahtunut.
+size_t snapshotJson(Processor& p, const SnapshotMeta& m, char* buf, size_t n);
+}
+```
+
+- Automaattinen nollaus: kun `StatusResult::request_auto_zero` nousee, Processor laskee
+  nimelliset tasot kääntämällä kalibroinnin DSP:n `level_kpa`:sta ja kutsuu `computeZero`a
+  rajalla `off_kpa`. Onnistuminen asettaa `zero_valid`in; viesti `CalStatus::msg`:iin.
+- Vahvistusmittaus kerää 2000 nimellistä näytettä (`CalCapture`) ja päättyy `tick`issä
+  (`computeGain`), jotta `push` pysyy O(1):nä. Tulos `calResultText`illä `msg`:iin.
+- `sim_api.h`: `/api/sim`-avainten (§5) ja `SimParams`in välinen muunnos: arvon asetus
+  tekstistä avaimella ja kaikki avaimet JSON-objektiksi. Simulaattori on liiman omistama
+  (näytteenottotaski), mutta muunnos on corea, jotta se on testattavissa.
+- Integraatiotestit (`test/test_integration/`): EngineSim → Processor simuloidulla ajalla,
+  **jokainen §8:n rivi omana testinään** ja lisäksi D10, D11 ja D12.
+
+### 4.9 ESP32-liima (WP-7)
+
+Tiedostot `src/main.cpp` ja `src/hal/*` (Arduino-ESP32 2.0.17, ESPAsyncWebServer 3.6.0).
+
+- **Näytteenotto:** oma FreeRTOS-taski ytimellä 1, `vTaskDelayUntil` 1 ms:n välein
+  (`CONFIG_FREERTOS_HZ` = 1000). Lähde `Config::source`n mukaan: `EngineSim::next()`, ADC1
+  (GPIO34/35/36 + kisko GPIO39, docs/rauta.md §2.2) tai HX710B (penkkitesti, D14). Kehykset
+  jonoon, josta käsittelytaski vie ne `Processor::push`iin. Täysi jono pudottaa kehyksen, ja
+  pudotus näkyy seq-aukkona (`diag.gaps`).
+- **Ei pitkiä keskeytyskieltoja eikä busy-waitia.** Bring-up-firmwaressa `noInterrupts()`
+  yli 90 % ajasta myöhästytti AP:n beaconit ja laukaisi watchdogin (commit b838911).
+- **Käsittely:** `tick` 20 Hz, snapshot `push_rate_hz`:llä SSE-tapahtumana `snap`. Processor
+  mutexin takana. Web-käsittelijät ajetaan AsyncTCP-taskissa ytimellä 0.
+- **Wi-Fi AP:** SSID `Suckboxx`, salasana `alipaine123`, kanava 1, enintään 4 asiakasta,
+  `WiFi.setSleep(false)` (bring-up-firmwaren arvot).
+- **NVS** (`Preferences`, nimiavaruus `sbx`): konfiguraatio kenttä kerrallaan rekisterin
+  kautta (§4.4) ja skeemaversio; kalibroinnista vain gainit ja `gain_valid` (D11: nollaus ei
+  ole pysyvä). Tallennus dirty-lipuista viiveellä, jotta flash ei kulu.
+- **Web:** §5:n reitit, sivu `src/web/web_page.h`:sta gzip-koodattuna. `/api/raw.csv`
+  jäädyttää renkaan ja striimaa `CsvWriter`illa chunked-vastauksena. Rengas vapautetaan
+  myös, jos asiakas katkaisee yhteyden (aikakatkaisu).
 
 ---
 
