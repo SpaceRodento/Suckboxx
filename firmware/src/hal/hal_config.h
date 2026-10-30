@@ -29,8 +29,9 @@ namespace sbx {
 namespace hal {
 
 // --- Pinnit (docs/rauta.md §2.2) -------------------------------------------
-// ADC-kanavat ovat sampler.cpp:ssä ADC1-kanavanumeroina (GPIO34/35/36 + kisko
-// GPIO39). Kaikki ADC1:ssä, koska ADC2 ei toimi Wi-Fin kanssa (D8).
+// ADC-kanavat ovat sampler.cpp:ssä ADC1-kanavanumeroina (protolevy GPIO34/35/32,
+// ei kiskoa; suunnitelma GPIO34/35/36 + kisko GPIO39). Kaikki ADC1:ssä, koska
+// ADC2 ei toimi Wi-Fin kanssa (D8).
 // HX710B-penkkitesti (D14) bring-up-kytkennällä: DOUT samoissa input-only-
 // pinneissä, SCK erillisissä lähtöpinneissä.
 constexpr uint8_t kPinHxSck[kChannels] = {25, 26, 27};

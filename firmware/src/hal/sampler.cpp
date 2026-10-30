@@ -51,7 +51,12 @@ class SimSource {
 };
 
 // ---------------------------------------------------------------------------
-// Lähde: ADC1 (D8), GPIO34/35/36 + kisko GPIO39 (docs/rauta.md §2.2, §3.3).
+// Lähde: ADC1 (D8), protolevyn kytkentä GPIO34/35/32 (docs/rauta.md §2.2:n
+// poikkeama). rauta.md:n suunnitelma on GPIO34/35/36 + kisko GPIO39, mutta
+// protolevyllä SYL 3 on GPIO32:ssa, eikä kiskomonitoria ole kytketty: rail_mv = 0
+// ("ei mitattu", kuten simulaattorissa) - kelluva GPIO39 lukisi edellisen kanavan
+// S&H-jäännöstä. Kun levy tehdään suunnitelman mukaan, palauta GPIO36 ja
+// kAdcHasRail = true.
 //
 // Ei analogReadMilliVoltsia: se kutsuu joka lukukerralla __adcAttachPin:ia
 // (pinMode -> gpio_config ja adc1_config_channel_atten) ja karakterisoi
@@ -66,7 +71,8 @@ class SimSource {
 // alueella - mitattava penkissä tunnetulla jännitteellä.
 // ---------------------------------------------------------------------------
 constexpr adc1_channel_t kAdcCh[kChannels] = {ADC1_GPIO34_CHANNEL, ADC1_GPIO35_CHANNEL,
-                                               ADC1_GPIO36_CHANNEL};
+                                               ADC1_GPIO32_CHANNEL};
+constexpr bool kAdcHasRail = false;  // protolevyllä kiskomonitoria ei ole kytketty
 constexpr adc1_channel_t kAdcRail = ADC1_GPIO39_CHANNEL;
 constexpr adc_atten_t kAdcAtten = ADC_ATTEN_DB_12;
 constexpr uint32_t kDefaultVrefMv = 1100;  // käytetään vain, jos eFusessa ei ole kalibrointia
@@ -79,12 +85,13 @@ class AdcSource {
   void begin(AdcInfo& info) {
     adc1_config_width(ADC_WIDTH_BIT_12);
     for (int c = 0; c < kChannels; ++c) adc1_config_channel_atten(kAdcCh[c], kAdcAtten);
-    adc1_config_channel_atten(kAdcRail, kAdcAtten);
+    if (kAdcHasRail) adc1_config_channel_atten(kAdcRail, kAdcAtten);
     // ESP32-erratum 3.11 (IDF driver/adc.h:224-230): kun SAR ADC:n virta kytketään,
     // GPIO36:n (SYL 3) ja GPIO39:n (kisko) tulo vetäytyy alas ~80 ns. adc1_get_raw
     // pyytää ja vapauttaa virran joka luvulla (adc1_rtc_mode_acquire ->
     // sar_periph_ctrl_adc_oneshot_power_acquire, viitelaskuri). Pysyvä viite pitää
     // virran päällä, jolloin vain SYL 3:een osuvaa epäsymmetristä häiriötä ei synny.
+    // (Protolevyllä SYL 3 on GPIO32:ssa; pidetään silti suunnitelman levyä varten.)
     adc_power_acquire();
     info.cal_type = static_cast<int>(
         esp_adc_cal_characterize(ADC_UNIT_1, kAdcAtten, ADC_WIDTH_BIT_12, kDefaultVrefMv, &chars_));
@@ -97,7 +104,18 @@ class AdcSource {
   }
 
   void read(RawFrame& f) {
-    for (int c = 0; c < kChannels; ++c) f.mv[c] = toMv(adc1_get_raw(kAdcCh[c]));
+    // Lämmittelyluku per kanava: ADC1:n yhteinen S&H-kondensaattori ei ehdi
+    // asettua 10 kΩ:n lähteen kautta, ja ilman pinnin 100 nF:ää (rauta.md §3.4)
+    // edellisen kanavan jännite vuotaa lukemaan - protolevyllä imu yhteen
+    // letkuun näkyi kaikissa kanavissa. Ensimmäinen luku hylätään. ~42 µs/luku.
+    for (int c = 0; c < kChannels; ++c) {
+      (void)adc1_get_raw(kAdcCh[c]);
+      f.mv[c] = toMv(adc1_get_raw(kAdcCh[c]));
+    }
+    if (!kAdcHasRail) {
+      f.rail_mv = 0;  // ei mitattu
+      return;
+    }
     const uint32_t rail = static_cast<uint32_t>(toMv(adc1_get_raw(kAdcRail))) * kRailDivider;
     f.rail_mv = static_cast<uint16_t>(rail > 65535u ? 65535u : rail);
   }
