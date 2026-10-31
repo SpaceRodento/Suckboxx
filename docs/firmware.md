@@ -512,13 +512,14 @@ Sim-avaimet: `engine_on` (0/1), `rpm`, `jitter`, `drift`, `base`, `err1`, `err2`
   "v": 1, "t": 123456, "src": "sim",
   "state": "near", "fault_ch": -1, "bars": true, "verdict": true,
   "head": "Lähellä", "advice": "SYL 3: avaa läppää – imee 2,1 kPa enemmän kuin SYL 1",
+  "act": {"ch": 2, "open": true},
   "flags": {"sat": false, "uncal_zero": false, "uncal_gain": true, "drift": false},
   "master": 0, "tol": [1.5, 3.0],
   "rpm": 851.2, "rpm_sd": 9.1, "rpm_cv": 0.011,
   "spread": 2.1, "worst": 2,
   "ch": [
     {"d": 0.0, "mean": -55.1, "level": -55.0, "min": -72.3, "p2p": 25.0, "rpm": 851.0,
-     "mv": 1323, "pulse": true, "fault": false, "sat": false}
+     "mv": 1323, "pulse": true, "fault": false, "sat": false, "cond": "ok"}
   ],
   "wave": {"fs": 62.5, "s": [[-55.1, -54.0, -56.2]]},
   "cal": {"busy": false, "zero": true, "gain": false, "msg": ""},
@@ -530,8 +531,34 @@ Sim-avaimet: `engine_on` (0/1), `rpm`, `jitter`, `drift`, `base`, `err1`, `err2`
   fault_hose, fault_master`.
 - `ch[i].d` = `vac_delta_kpa` (positiivinen = imee enemmän kuin master). `rpm` on `null`
   kun ei voimassa.
+- `act` (WP-10, 31.10.2026) = ruuvineuvo rakenteisena: `{"ch": n, "open": b}` täsmälleen
+  silloin, kun `advice` on muotoa "SYL n+1: avaa|sulje läppää – …" (rivit 4a/4b, ero yli
+  `tol_green_kpa`), muuten `null`. `open` = `vac_delta_kpa > 0` (imee enemmän kuin master →
+  avaa, §4.7). Status asettaa sen samassa kohdassa kuin tekstin (`StatusResult::act_ch`,
+  `act_open`). UI merkitsee kortin (worst-kehys, AVAA/SULJE) tästä eikä jäsennä tekstiä.
+- `ch[i].cond` (WP-10) = kanavan luokitus käytösmatriisissa (`StatusResult::ch_cond`), samoilla
+  pitoajoilla ja kynnyksillä kuin `state`. UI näyttää kanavan tilan tästä eikä päättele sitä
+  pulssista, tasosta tai `hose_off_kpa`:sta. Arvonimet ovat WP-10:n ehdotus:
+
+  | `cond` | merkitys | §8 |
+  |---|---|---|
+  | `ok` | pulssi ja kelvollinen keskiarvo, mukana erotuksessa | 2–5, 9 |
+  | `sat` | kuten `ok`, mutta pulssin huippu leikkautuu: `flags.sat` päällä ja kanavan oma `sat` | 10 |
+  | `idle` | ei pulssia missään kanavassa | 1, 8 (D10) |
+  | `no_pulse` | ei pulssia muiden pulssiessa, ohimenevä: pitoaika (`kHoseHoldS` tai `off_hold_s`) kesken | 2 |
+  | `hose` | ei pulssia, \|taso\| < `hose_off_kpa`, kestänyt `kHoseHoldS` | 6 |
+  | `blocked` | ei pulssia, taso ei nollassa, kestänyt `off_hold_s` (tukos, taittuma) | 6 (laajennus) |
+  | `sensor` | anturivika | 7 |
+
+  Masterin vika (rivi 12) näkyy masterin omana `sensor`-, `hose`- tai `blocked`-arvona ja
+  tilana `fault_master`; erillistä arvoa ei tarvita. `ch[i].sat` ja `ch[i].pulse` ovat DSP:n
+  raakalippuja (`sat` on tosi myös ilmanpaineessa, GN-anturi), diagnostiikkaa varten.
 - `wave.s` = edellisen viestin jälkeen kertyneet desimoidut näytteet (16 näytteen
   lohkokeskiarvo → 62,5 Hz), kalibroitua kPa:ta, enintään 16 riviä.
+- Pariteetti: `test_snapshot` vertaa laitteen viestiä muotomerkkijonoihin (avaimet järjestyksessä,
+  tyypit), ja `python tools/mock_server.py --check-snapshot` ajaa mockin samoissa tilanteissa ja
+  vertaa sen viestiä samoihin merkkijonoihin sekä `state`- ja `cond`-arvojoukkoja
+  `status.h`:hon ja `snapshot.h`:hon.
 
 ---
 
