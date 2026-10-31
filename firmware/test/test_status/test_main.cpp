@@ -820,6 +820,43 @@ void test_row5_drift_filter_keeps_threshold_and_rates() {
   TEST_ASSERT_EQUAL_INT(counted, flagged);
   driftRun(26.0f, 0.02f, 0.02f, 0.0f, flagged, counted, def, settle);  // 50 Hz
   TEST_ASSERT_EQUAL_INT(counted, flagged);
+  // Raja tarkka ±0,4 rpm / 2 s epätasaisella dt:llä. Tavallinen EMA (nollannen
+  // kertaluvun pito) viivästäisi rampin s * (tau - dt/2):n verran, jolloin
+  // viive vaihtelisi dt:n mukana (0,02-0,1 s: ~1 rpm 25 rpm/s:lla) ja raja
+  // heiluisi; first-order hold suodattaa rampin tarkasti. Asettuminen 5 tau.
+  driftRun(25.2f, 0.02f, 0.1f, 0.0f, flagged, counted, def, 5.0f * def.drift_tau_s);   // 50,4
+  TEST_ASSERT_GREATER_THAN(60, counted);
+  TEST_ASSERT_EQUAL_INT(counted, flagged);
+  driftRun(24.8f, 0.02f, 0.1f, 0.0f, flagged, counted, def, 0.0f);   // 49,6
+  TEST_ASSERT_EQUAL_INT(0, flagged);
+}
+
+// Rivi 5 + WP-9: päivitystaajuus vaihtuu kesken rampin (status.h: "toimii
+// 10-50 Hz:llä ja epätasaisella dt:llä"), 10 <-> 50 Hz 2 s:n jaksoissa.
+// Tavallisen EMA:n viive s * (tau - dt/2) olisi 0,45 s / 0,49 s jakson mukaan,
+// jolloin 50,4 rpm / 2 s näkyisi 49,4:nä ja 49,6 voisi näkyä yli 50:n.
+// First-order hold suodattaa rampin tarkasti, joten raja pysyy.
+void test_row5_drift_filter_exact_when_update_rate_changes() {
+  const StatusParams def;
+  const float slopes[] = {25.2f, 24.8f};   // 50,4 ja 49,6 rpm / 2 s
+  for (float slope : slopes) {
+    g.begin(def);
+    int flagged = 0, counted = 0;
+    float t = 0.0f;
+    while (t < 14.0f) {
+      const float dt = (static_cast<int>(t / 2.0f) % 2 == 0) ? 0.1f : 0.02f;
+      StatusInput in = running(-55.0f, -55.4f, -54.8f, 900.0f + slope * t);
+      in.now_s = t;
+      const StatusResult r = g.sm.update(in);
+      if (t > def.drift_window_s + 6.0f * def.drift_tau_s) {
+        ++counted;
+        if (r.flag_drift) ++flagged;
+      }
+      t += dt;
+    }
+    TEST_ASSERT_GREATER_THAN(100, counted);
+    TEST_ASSERT_EQUAL_INT(slope > 25.0f ? counted : 0, flagged);
+  }
 }
 
 // Rivi 5 + WP-9: päivityskohtainen rpm-kohina ±30 rpm (tasajakauma) ylittää
@@ -850,6 +887,13 @@ void test_row5_drift_history_cleared_when_rpm_lost() {
   // Moottori käynnistyy eri kierroksille: ei vertailukohtaa -> ei ajautumista.
   StatusResult r = g.run(running(-55.0f, -55.4f, -54.8f, 1500.0f), 1.5f);
   TEST_ASSERT_FALSE(r.flag_drift);
+  // Rivi 5: kierrosluku pysyy 1500:ssa, joten lippu ei nouse myöhemminkään.
+  // WP-9: myös suodattimen tila alkaa alusta (vanha 850 rpm ei saa vetää
+  // suodatettua arvoa ja näkyä 2 s myöhemmin 650 rpm:n "ajautumana").
+  for (int k = 0; k < 64; ++k) {
+    r = g.step(running(-55.0f, -55.4f, -54.8f, 1500.0f));
+    TEST_ASSERT_FALSE(r.flag_drift);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1056,6 +1100,29 @@ void test_row6_hysteresis_exit_and_reentry() {
   dropPulse(in, 1, -(exit_kpa - 0.02f));
   r = g.run(in, 1.0f);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::Unstable), static_cast<int>(r.state));
+}
+
+// Rivi 6 + D7: masterin vaihto (configure) aloittaa uuden jakson, jossa myös
+// hystereesin muisti on tyhjä (§4.7: "Masterin vaihto nollaa ajastimet").
+// Hystereesialueella (2,0-2,2 kPa) oleva kanava ei siksi palaa "irti"-tilaan,
+// vaan sisääntulosääntö pätee alusta: ensin "odota", off_hold_s:n jälkeen tukos.
+void test_row6_hysteresis_memory_cleared_by_configure() {
+  const StatusParams def;
+  StatusInput in = idleSynced();
+  settle(in);
+  dropPulse(in, 1, -1.5f);
+  StatusResult r = hoseHold(in);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::FaultHose), static_cast<int>(r.state));
+  dropPulse(in, 1, -(def.hose_off_kpa + 0.1f));   // hystereesialueella: pysyy "irti"
+  r = g.step(in);
+  TEST_ASSERT_EQUAL_STRING("VIKA: SYL 2 – ei alipainetta, tarkista letku", r.headline);
+  StatusParams p;
+  p.master = 2;
+  g.sm.configure(p);
+  r = g.run(in, 1.0f);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::Unstable), static_cast<int>(r.state));
+  r = g.run(in, def.off_hold_s);
+  TEST_ASSERT_EQUAL_STRING("VIKA: SYL 2 – ei pulssia, tarkista letku", r.headline);
 }
 
 // Rivi 6 vs. 7: anturivian aika ei ole "pulssittomuutta". Kun anturi toipuu
@@ -1718,6 +1785,7 @@ int main() {
   RUN_TEST(test_row5_drift_window_is_exact_with_irregular_dt);
   RUN_TEST(test_row5_drift_step_needs_full_window_of_history);
   RUN_TEST(test_row5_drift_filter_keeps_threshold_and_rates);
+  RUN_TEST(test_row5_drift_filter_exact_when_update_rate_changes);
   RUN_TEST(test_row5_drift_filter_rejects_update_noise);
   RUN_TEST(test_row5_drift_history_cleared_when_rpm_lost);
   RUN_TEST(test_row6_hose_off);
@@ -1727,6 +1795,7 @@ int main() {
   RUN_TEST(test_row6_realistic_disconnect_sequence);
   RUN_TEST(test_row6_hose_fault_does_not_flicker_at_threshold);
   RUN_TEST(test_row6_hysteresis_exit_and_reentry);
+  RUN_TEST(test_row6_hysteresis_memory_cleared_by_configure);
   RUN_TEST(test_row6_hold_times_restart_after_sensor_fault);
   RUN_TEST(test_row6_two_hoses_off);
   RUN_TEST(test_row6_mixed_hose_faults_generic_text);

@@ -159,6 +159,8 @@ class StatusMachine {
     for (int i = 0; i < kChannels; ++i) {
       lost_run_[i] = false;
       lost_since_[i] = 0.0f;
+      // Varmistus: ensimmäinen päivitys tyhjentäisi muistin joka tapauksessa,
+      // koska pitoaika (kHoseHoldS) alkaa alusta (mutaatiokierros WP-9).
       hose_latched_[i] = false;
     }
     zero_run_ = false;

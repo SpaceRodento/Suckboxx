@@ -16,7 +16,10 @@ ja käytösmatriisin suoran portin (src/core/status.h), joten tilat, tekstit ja
 liput syntyvät samoista syistä kuin laitteella - eivät käsin asetettuina.
 Laitteen tavoin:
   - nollaus (POST /api/cal/zero) onnistuu vain ilmanpaineessa: engine_on=0,
-    tai automaattisesti kun "ei signaalia" on kestänyt off_hold_s (rivi 1)
+    tai automaattisesti kun "ei signaalia" on kestänyt off_hold_s (rivi 1);
+    kumpikin vaatii tason pysyneen paikallaan 1 s (zero_settle_kpa, WP-9)
+  - letkuvika poistuu hystereesillä (hose_hyst_kpa) ja rivin 5 rpm
+    suodatetaan (drift_tau_s) kuten status.h:ssa (WP-9)
   - vahvistuskalibrointi mittaa 2 s ja vaatii tasaisen alipaineen kaikissa
     kanavissa (T-haara). Simulaattorissa: depth=0, res=0, err1..3=0.
   - letkuvika (0,5 s) ja saturaatiovaroitus (1,2 s) pitoajoilla, ja kaikkien
@@ -126,6 +129,8 @@ CAL_TEXT = {  # calibration.h calResultText
                       "3,3 V / 5 V) ja anturiasetukset v_zero_mv ja mv_per_kpa",
     "NoZero": "Nollaus puuttuu. Päästä alipaine pois (letkut ilmanpaineeseen), tee vaihe 1 "
               "Nollaa ja toista sitten vahvistuskalibrointi",
+    "NotSettled": "Nollaus hylätty: lukemat liikkuvat vielä (alipaine purkautuu letkuista). "
+                  "Odota, kunnes lukemat pysyvät paikallaan, ja yritä uudelleen",
 }
 
 
@@ -595,7 +600,7 @@ COND_KEYS = ("ok", "sat", "idle", "no_pulse", "hose", "blocked", "sensor")
 
 
 class StatusMachine:
-    AUTO_ZERO_BAND = 0.3
+    ZERO_SETTLE_WINDOW_S = 1.0  # calibration.h kZeroSettleWindowS (WP-9)
     HOSE_HOLD_S = 0.5        # kHoseHoldS: rivi 6 vasta näin pitkän pulssittomuuden jälkeen
     SAT_HOLD_S = 1.2         # kSatHoldS: rivi 10 vasta kun leikkautuminen on jatkunut näin kauan
     COMMON_MOVE_KPA = 1.0    # kCommonMoveKpa: rivi 5, yhteismuotoinen alipaineen muutos
@@ -619,17 +624,52 @@ class StatusMachine:
         self.cm_t = [0.0, 0.0]
         self.cm_mean = [[0.0] * KCH, [0.0] * KCH]
         self.lost_since = [None] * KCH
-        self.zero_since = None
-        self.zero_lo = [0.0] * KCH
-        self.zero_hi = [0.0] * KCH
+        self.hose_latched = [False] * KCH   # rivi 6: hystereesin muisti (WP-9)
+        self.zero_since = None              # NoSignal alkoi
         self.zero_armed = True
+        self.reset_settle()
         self.drift = deque()
+        self.drift_y = None                 # rivi 5: suodatettu rpm, edellinen rpm ja hetki (WP-9)
+        self.drift_x = 0.0
+        self.drift_tx = 0.0
+
+    # --- nollauksen vakausportti (calibration.h LevelSettle, WP-9) -------------
+    def reset_settle(self):
+        self.settle = deque()
+
+    def _add_settle(self, levels, now):
+        w = self.ZERO_SETTLE_WINDOW_S
+        self.settle.append((now, list(levels)))
+        while len(self.settle) >= 2 and self.settle[1][0] <= now - w:
+            self.settle.popleft()
+        self.settle_now = now
+
+    def settle_range(self, i):
+        """Tason vaihteluväli viimeisen 1 s:n aikana; ääretön, jos historiaa < 1 s tai NaN."""
+        w = self.ZERO_SETTLE_WINDOW_S
+        if not self.settle or self.settle_now - self.settle[0][0] < w:
+            return math.inf
+        vals = [lv[i] for t, lv in self.settle if self.settle_now - t <= w]
+        if any(not math.isfinite(v) for v in vals):
+            return math.inf
+        return max(vals) - min(vals)
 
     def _update_drift(self, e, now):
         win = self.p["drift_window_s"]
         if not e["valid"] or not math.isfinite(e["rpm"]) or not win > 0:
             self.drift.clear()
+            self.drift_y = None
             return False
+        # Suodatus ennen ikkunavertailua (status.h updateDrift, first-order hold).
+        x, tau = e["rpm"], self.p["drift_tau_s"]
+        if self.drift_y is None or not tau > 0:
+            self.drift_y, self.drift_x, self.drift_tx = x, x, now
+        elif now > self.drift_tx:
+            dt = now - self.drift_tx
+            om = -math.expm1(-dt / tau)
+            self.drift_y = x - (x - self.drift_x) * (tau / dt) * om + (self.drift_y - self.drift_x) * (1.0 - om)
+            self.drift_x, self.drift_tx = x, now
+        y = self.drift_y
         target = now - win
         drift = False
         newer = None
@@ -638,11 +678,11 @@ class StatusMachine:
                 then = r
                 if newer is not None and newer[0] - t > 0:
                     then = r + (newer[1] - r) * ((target - t) / (newer[0] - t))
-                drift = abs(e["rpm"] - then) > self.p["drift_rpm"]
+                drift = abs(y - then) > self.p["drift_rpm"]
                 break
             newer = (t, r)
         if not self.drift or now - self.drift[-1][0] >= win / self.DRIFT_SLOTS:
-            self.drift.append((now, e["rpm"]))
+            self.drift.append((now, y))
             while len(self.drift) > self.DRIFT_CAP:
                 self.drift.popleft()
         return drift
@@ -656,6 +696,7 @@ class StatusMachine:
         if self.last_t is not None and now < self.last_t:
             self.reset()
         self.last_t = now
+        self._add_settle([c["level"] for c in chs], now)
 
         pulse = [c["pulse"] and c["mean"] is not None for c in chs]
         pulsing = sum(pulse)
@@ -673,14 +714,16 @@ class StatusMachine:
                 cond[i] = "ok"
             elif not others:
                 cond[i] = "idle"
-            elif abs(c["level"]) < p["hose_off_kpa"] and now - self.lost_since[i] >= self.HOSE_HOLD_S:
+            elif (abs(c["level"]) < p["hose_off_kpa"] + (p["hose_hyst_kpa"] if self.hose_latched[i] else 0.0)
+                  and now - self.lost_since[i] >= self.HOSE_HOLD_S):
                 # Rivi 6 pitoajan jälkeen: käynnistyksessä ja sammutuksessa kanavat saavat ja
-                # menettävät pulssin eri sykleillä (WP-2c).
+                # menettävät pulssin eri sykleillä (WP-2c). Poistuminen hystereesillä (WP-9).
                 cond[i] = "hose"
             elif now - self.lost_since[i] >= p["off_hold_s"]:
                 cond[i] = "blocked"
             else:
                 cond[i] = "lost"
+            self.hose_latched[i] = cond[i] == "hose"
 
         # Rivi 10 vain pulssin aikana ja vasta SAT_HOLD_S:n jälkeen (DSP:n saturated- ja
         # has_pulse-muistit ovat 1 s, joten käynnistys ja sammutus eivät välähdä).
@@ -822,30 +865,21 @@ class StatusMachine:
         verdict = r["state"] in ("synced", "near", "out_of_sync")
         r["bars"] = r["verdict"] = verdict
 
-        # Rivi 1: automaattinen nollaus, reunaliipattu kerran per NoSignal-jakso.
+        # Rivi 1: automaattinen nollaus, reunaliipattu kerran per NoSignal-jakso: NoSignal
+        # kestänyt off_hold_s ja sillä hetkellä tasot nollan tuntumassa ja paikallaan
+        # (vakausportti WP-9, sama kuin käsin nollauksessa).
         if pulsing > 0:
             self.zero_armed = True
-        near_zero = r["state"] == "no_signal" and all(abs(c["level"]) < p["off_kpa"] for c in chs)
-        if not near_zero:
+        if r["state"] != "no_signal":
             self.zero_since = None
-        else:
-            restart = self.zero_since is None
-            if not restart:
-                for i, c in enumerate(chs):
-                    lv = c["level"]
-                    if max(self.zero_hi[i], lv) - min(self.zero_lo[i], lv) > self.AUTO_ZERO_BAND:
-                        restart = True
-            if restart:
-                self.zero_since = now
-                self.zero_lo = [c["level"] for c in chs]
-                self.zero_hi = [c["level"] for c in chs]
-            else:
-                for i, c in enumerate(chs):
-                    self.zero_lo[i] = min(self.zero_lo[i], c["level"])
-                    self.zero_hi[i] = max(self.zero_hi[i], c["level"])
-            if self.zero_armed and p["auto_zero"] and now - self.zero_since >= p["off_hold_s"]:
-                r["auto_zero"] = True
-                self.zero_armed = False
+        elif self.zero_since is None:
+            self.zero_since = now
+        zero_ok = (self.zero_since is not None and now - self.zero_since >= p["off_hold_s"] and
+                   all(abs(c["level"]) < p["off_kpa"] and self.settle_range(i) < p["zero_settle_kpa"]
+                       for i, c in enumerate(chs)))
+        if zero_ok and self.zero_armed and p["auto_zero"]:
+            r["auto_zero"] = True
+            self.zero_armed = False
         return r
 
     def _verdict(self, r, zero_valid):
@@ -1017,11 +1051,16 @@ class Device:
         return [d.level if d.level is not None else d.last_nom for d in self.dsps]
 
     def _zero(self):
+        # calibration.h computeZero: NotAtmosphere, sitten vakausportti (WP-9: kalibroidun
+        # tason 1 s:n vaihteluväli < zero_settle_kpa, StatusMachinen ikkuna viimeisestä tickistä).
         lv = self._nominal_levels()
         if not all(abs(v) <= self.cfg["off_kpa"] for v in lv):
             return "NotAtmosphere"
+        if not all(self.status.settle_range(i) < self.cfg["zero_settle_kpa"] for i in range(KCH)):
+            return "NotSettled"
         self.offset = [-self.gain[i] * lv[i] for i in range(KCH)]
         self.zero_valid = True
+        self.status.reset_settle()  # kalibroitu taso hyppää (laitteella commitCal)
         return "Ok"
 
     def _capture_add(self, nom):
@@ -1061,6 +1100,7 @@ class Device:
         self.gain = g_new
         self.offset = [-g_new[i] * z[i] for i in range(KCH)]
         self.gain_valid = True
+        self.status.reset_settle()  # laitteella commitCal
         return "Ok"
 
     # --- REST-komennot --------------------------------------------------------
@@ -1086,6 +1126,7 @@ class Device:
             self.offset = [self.offset[i] / self.gain[i] for i in range(KCH)]
             self.gain = [1.0] * KCH
             self.gain_valid = False
+            self.status.reset_settle()  # laitteella commitCal
             self.cal_msg = "Vahvistuskalibrointi poistettu"
             return {"ok": True, "msg": self.cal_msg}
 
