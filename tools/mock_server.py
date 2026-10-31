@@ -8,6 +8,7 @@ kehittää ja testata PC:llä ilman ESP32:ta. Pelkkä Pythonin standardikirjasto
     python3 tools/mock_server.py                 # http://localhost:8000
     python3 tools/mock_server.py --port 8080 --sensor-err
     python3 tools/mock_server.py --check-config  # rekisteri vs. config.h/types.h
+    python3 tools/mock_server.py --check-snapshot  # snapshotin muoto vs. laite (test_snapshot)
 
 Mock ajaa pienen moottorisimulaation 1 kHz:llä (sama malli kuin
 src/core/engine_sim.h), kevyen DSP:n (syklin keskiarvo D1, rpm, vikamonitorit)
@@ -18,6 +19,9 @@ Laitteen tavoin:
     tai automaattisesti kun "ei signaalia" on kestänyt off_hold_s (rivi 1)
   - vahvistuskalibrointi mittaa 2 s ja vaatii tasaisen alipaineen kaikissa
     kanavissa (T-haara). Simulaattorissa: depth=0, res=0, err1..3=0.
+  - letkuvika (0,5 s) ja saturaatiovaroitus (1,2 s) pitoajoilla, ja kaikkien
+    kanavien yhteinen alipaineen muutos (kaasu) on "odota" (WP-2c)
+  - snapshotissa ruuvineuvo rakenteisena (act) ja kanavaluokitus (ch[i].cond)
   - lähteen (source) vaihto käynnistää "laitteen" uudelleen: SSE katkeaa,
     nollaus unohtuu (D11). ADC/HX710B-lähde ilman antureita = kelluvat pinnit
     ~10 mV -> anturivika kaikissa kanavissa.
@@ -571,8 +575,28 @@ def channel_list(idx):
     return ", ".join(names[:-1]) + " ja " + names[-1]
 
 
+def all_beyond(v, k):
+    """status_detail::allBeyond: kaikki arvot samaan suuntaan yli rajan k."""
+    return all(x > k for x in v) or all(x < -k for x in v)
+
+
+# Snapshotin state- ja ch[i].cond-arvot (status.h syncStateKey, snapshot.h channelCondKey).
+# --check-snapshot vertaa näitä lähdekoodiin.
+STATE_KEYS = ("no_signal", "unstable", "rpm_too_high", "synced", "near", "out_of_sync",
+              "fault_sensor", "fault_hose", "fault_master")
+# Sisäinen luokitus (status.h Cond) -> ch[i].cond (types.h ChannelCond). "ok" voi tarkentua
+# "sat":ksi, ks. StatusMachine.update().
+COND_KEY = {"ok": "ok", "idle": "idle", "lost": "no_pulse", "hose": "hose", "blocked": "blocked",
+            "sensor": "sensor"}
+COND_KEYS = ("ok", "sat", "idle", "no_pulse", "hose", "blocked", "sensor")
+
+
 class StatusMachine:
     AUTO_ZERO_BAND = 0.3
+    HOSE_HOLD_S = 0.5        # kHoseHoldS: rivi 6 vasta näin pitkän pulssittomuuden jälkeen
+    SAT_HOLD_S = 1.2         # kSatHoldS: rivi 10 vasta kun leikkautuminen on jatkunut näin kauan
+    COMMON_MOVE_KPA = 1.0    # kCommonMoveKpa: rivi 5, yhteismuotoinen alipaineen muutos
+    COMMON_WINDOW_S = 0.3    # kCommonWindowS
     DRIFT_SLOTS = 32
     DRIFT_CAP = 48
 
@@ -587,6 +611,10 @@ class StatusMachine:
     def reset(self):
         self.last_t = None
         self.stable_since = None
+        self.sat_since = None
+        self.cm_count = 0
+        self.cm_t = [0.0, 0.0]
+        self.cm_mean = [[0.0] * KCH, [0.0] * KCH]
         self.lost_since = [None] * KCH
         self.zero_since = None
         self.zero_lo = [0.0] * KCH
@@ -620,7 +648,8 @@ class StatusMachine:
         p = self.p
         r = {"state": "no_signal", "fault_ch": -1, "d": [0.0] * KCH, "spread": 0.0, "worst": -1,
              "sat": False, "uncal_zero": not zero_valid, "uncal_gain": not gain_valid,
-             "drift": False, "auto_zero": False, "head": "", "advice": ""}
+             "drift": False, "auto_zero": False, "head": "", "advice": "", "act": None,
+             "cond": ["idle"] * KCH}
         if self.last_t is not None and now < self.last_t:
             self.reset()
         self.last_t = now
@@ -641,14 +670,22 @@ class StatusMachine:
                 cond[i] = "ok"
             elif not others:
                 cond[i] = "idle"
-            elif abs(c["level"]) < p["hose_off_kpa"]:
+            elif abs(c["level"]) < p["hose_off_kpa"] and now - self.lost_since[i] >= self.HOSE_HOLD_S:
+                # Rivi 6 pitoajan jälkeen: käynnistyksessä ja sammutuksessa kanavat saavat ja
+                # menettävät pulssin eri sykleillä (WP-2c).
                 cond[i] = "hose"
             elif now - self.lost_since[i] >= p["off_hold_s"]:
                 cond[i] = "blocked"
             else:
                 cond[i] = "lost"
 
-        r["sat"] = any(c["sat"] and pulse[i] for i, c in enumerate(chs))
+        # Rivi 10 vain pulssin aikana ja vasta SAT_HOLD_S:n jälkeen (DSP:n saturated- ja
+        # has_pulse-muistit ovat 1 s, joten käynnistys ja sammutus eivät välähdä).
+        if not any(c["sat"] and pulse[i] for i, c in enumerate(chs)):
+            self.sat_since = None
+        elif self.sat_since is None:
+            self.sat_since = now
+        r["sat"] = self.sat_since is not None and now - self.sat_since >= self.SAT_HOLD_S
         r["drift"] = self._update_drift(e, now)
 
         m = self.master
@@ -684,6 +721,29 @@ class StatusMachine:
             self.stable_since = now
         stable_for = now - self.stable_since if self.stable_since is not None else 0.0
         stable = self.stable_since is not None and stable_for >= p["stable_hold_s"]
+
+        # Rivi 5, yhteismuotoinen alipaineen muutos (kaasu, WP-2c): kanavien keskiarvot
+        # päivittyvät eri hetkinä, joten kaikkien yhteinen muutos näkyisi hetken spreadinä.
+        # Taso-EMA karkaa keskiarvosta, tai keskiarvot ovat siirtyneet COMMON_WINDOW_S...2x
+        # sitten, kaikissa kanavissa samaan suuntaan -> odota. Vakausajastin ei nollaudu.
+        common_move = False
+        if pulsing == KCH:
+            common_move = all_beyond([c["level"] - c["mean"] for c in chs], self.COMMON_MOVE_KPA)
+            if self.cm_count == 0 or now - self.cm_t[1] >= self.COMMON_WINDOW_S:
+                self.cm_t = [self.cm_t[1], now]
+                self.cm_mean = [self.cm_mean[1], [c["mean"] for c in chs]]
+                self.cm_count = min(self.cm_count + 1, 2)
+            if self.cm_count >= 2:
+                moved = [chs[i]["mean"] - self.cm_mean[0][i] for i in range(KCH)]
+                if all_beyond(moved, self.COMMON_MOVE_KPA):
+                    common_move = True
+        else:
+            self.cm_count = 0  # keskiarvot eivät ole vertailukelpoisia pulssikatkon yli
+
+        # Kanavakohtainen luokitus snapshotiin (ch[i].cond, WP-10). "sat" vain, kun rivin 10
+        # varoitus on päällä (pitoaika) ja juuri tämä kanava leikkautuu.
+        r["cond"] = ["sat" if cond[i] == "ok" and r["sat"] and chs[i]["sat"] else COND_KEY[cond[i]]
+                     for i in range(KCH)]
 
         def clear():
             r["d"] = [0.0] * KCH
@@ -745,6 +805,10 @@ class StatusMachine:
             r["head"] = "Säädä joutokäynnillä"
             r["advice"] = "Kierrosluku %d rpm (raja %d) – laske kaasua" % (
                 rpm_int(math.ceil(e["rpm"])), rpm_int(p["sync_rpm_max"]))
+        elif common_move:
+            r["state"] = "unstable"
+            r["head"] = "Odota, käynti tasaantuu"
+            r["advice"] = "Alipaine muuttuu kaikissa sylintereissä"
         elif not stable:
             r["state"] = "unstable"
             r["head"] = "Odota, käynti tasaantuu"
@@ -808,6 +872,8 @@ class StatusMachine:
         r["advice"] = "SYL %d: %s läppää – imee %s kPa %s kuin SYL %d" % (
             w + 1, "avaa" if more else "sulje", fmt1(abs(d)), "enemmän" if more else "vähemmän",
             self.master + 1)
+        # Sama neuvo rakenteisena (snapshotin act, WP-10): ainoa paikka, jossa act asetetaan.
+        r["act"] = {"ch": w, "open": more}
 
 
 # ---------------------------------------------------------------------------
@@ -1090,7 +1156,8 @@ class Device:
                 chs.append({
                     "d": rnd(r["d"][i], 2), "mean": rnd(c["mean"], 2), "level": rnd(c["level"], 2),
                     "min": rnd(c["min"], 2), "p2p": rnd(c["p2p"], 2), "rpm": rnd(c["rpm"], 1),
-                    "mv": c["mv"], "pulse": c["pulse"], "fault": c["fault"], "sat": c["sat"]})
+                    "mv": c["mv"], "pulse": c["pulse"], "fault": c["fault"], "sat": c["sat"],
+                    "cond": r["cond"][i]})
             rows = [[round(v, 2) for v in row] for row in self.wave_rows]
             self.wave_rows.clear()
             return {
@@ -1098,6 +1165,7 @@ class Device:
                 "src": SOURCE_NAMES.get(int(cfg["source"]), "sim"),
                 "state": r["state"], "fault_ch": r["fault_ch"], "bars": r["bars"],
                 "verdict": r["verdict"], "head": r["head"], "advice": r["advice"],
+                "act": dict(r["act"]) if r["act"] is not None else None,
                 "flags": {"sat": r["sat"], "uncal_zero": r["uncal_zero"],
                           "uncal_gain": r["uncal_gain"], "drift": r["drift"]},
                 "master": self.status.master,
@@ -1342,6 +1410,134 @@ def check_config():
     return 0
 
 
+# ---------------------------------------------------------------------------
+# --check-snapshot: snapshotin rakenne vs. laite (WP-10)
+#
+# Laitteen snapshotin muoto on kirjattu test_snapshot:iin muotomerkkijonoina
+# (avaimet järjestyksessä, tyypit n/s/b/z), ja native-testi vertaa laitteen
+# viestiä niihin. Tämä ajaa mockin samoissa tilanteissa simuloidulla ajalla ja
+# vertaa mockin viestiä samoihin merkkijonoihin, joten kumpikin puoli on
+# sidottu samaan lähteeseen. Lisäksi state- ja cond-arvojoukot luetaan
+# status.h:sta ja snapshot.h:sta.
+# ---------------------------------------------------------------------------
+TEST_SNAPSHOT = os.path.join(ROOT, "firmware", "test", "test_snapshot", "test_main.cpp")
+STATUS_H = os.path.join(ROOT, "firmware", "src", "core", "status.h")
+SNAPSHOT_H = os.path.join(ROOT, "firmware", "src", "core", "snapshot.h")
+
+# (muoto test_snapshot:ssa, sim-asetukset, kesto s, odotettu tila) - samat tilanteet kuin
+# test_shape_engine_off_matches_mock, test_shape_running_matches_mock ja
+# test_delta_sign_and_worst_follow_status.
+SNAPSHOT_CASES = [
+    ("kShapeOff", [("engine_on", "0")], 1.0, "no_signal"),
+    ("kShapeRunning", [], 5.0, "near"),
+    ("kShapeAdvice", [("err3", "-4")], 6.0, "out_of_sync"),
+]
+
+
+def shape_of(v):
+    """test_snapshot.cpp:n muotomerkkijono: {avain:muoto,...}, [..], n/s/b/z."""
+    if isinstance(v, dict):
+        return "{" + ",".join("%s:%s" % (k, shape_of(x)) for k, x in v.items()) + "}"
+    if isinstance(v, list):
+        return "[" + ",".join(shape_of(x) for x in v) + "]"
+    if isinstance(v, bool):
+        return "b"
+    if v is None:
+        return "z"
+    if isinstance(v, str):
+        return "s"
+    if isinstance(v, (int, float)):
+        return "n"
+    raise TypeError("tuntematon tyyppi %r" % type(v))
+
+
+def cpp_shapes(src):
+    """kShape*-vakiot test_snapshot.cpp:stä: merkkijonoliteraalit ja #define-makrot auki."""
+    macros = {m: b.replace("\\\n", " ")
+              for m, b in re.findall(r"^#define (\w+) ((?:.*\\\n)*.*)$", src, re.M)}
+
+    def expand(expr, depth=0):
+        out = []
+        for lit, name in re.findall(r'"((?:[^"\\]|\\.)*)"|\b([A-Z][A-Z0-9_]*)\b', expr):
+            if not name:
+                out.append(lit)
+            elif name in macros and depth < 4:
+                out.append(expand(macros[name], depth + 1))
+            else:
+                raise ValueError("tuntematon makro %s" % name)
+        return "".join(out)
+
+    return {n: expand(e) for n, e in re.findall(r"const char\* const (kShape\w+) =(.*?);", src, re.S)}
+
+
+def switch_keys(src, func):
+    """Funktion func paluuarvot ('return "x";') lähdekoodista arvojoukkona."""
+    m = re.search(r"inline const char\* %s\([^)]*\) \{(.*?)\n\}" % func, src, re.S)
+    return set(re.findall(r'return "(\w+)";', m.group(1))) if m else set()
+
+
+def headless_snapshot(sim_pairs, seconds, seed=1):
+    """Mock ilman säikeitä ja seinäkelloa: näytteet ajetaan suoraan (deterministinen)."""
+    dev = Device(seed, False, False)
+    if sim_pairs:
+        res = dev.api_sim_set(sim_pairs)
+        if not res["ok"]:
+            raise ValueError(res["err"])
+    with dev.lock:
+        for _ in range(int(seconds * FS + 0.5)):
+            dev._sample()
+        dev.wave_rows.clear()  # kuten test_snapshot: dropWave() ennen viestiä
+    return dev.snapshot()
+
+
+def check_snapshot():
+    try:
+        with open(TEST_SNAPSHOT, encoding="utf-8") as f:
+            shapes = cpp_shapes(f.read())
+        with open(STATUS_H, encoding="utf-8") as f:
+            states = switch_keys(f.read(), "syncStateKey")
+        with open(SNAPSHOT_H, encoding="utf-8") as f:
+            conds = switch_keys(f.read(), "channelCondKey")
+    except (OSError, ValueError) as e:
+        print("lähde puuttuu tai ei jäsenny: %s" % e)
+        return 2
+    errors = []
+    if states != set(STATE_KEYS):
+        errors.append("state-arvot eroavat: status.h %s, mock %s" % (sorted(states), sorted(STATE_KEYS)))
+    if conds != set(COND_KEYS):
+        errors.append("cond-arvot eroavat: snapshot.h %s, mock %s" % (sorted(conds), sorted(COND_KEYS)))
+    for name, sim, seconds, state in SNAPSHOT_CASES:
+        want = shapes.get(name)
+        if want is None:
+            errors.append("%s puuttuu test_snapshot:sta" % name)
+            continue
+        snap = headless_snapshot(sim, seconds)
+        try:
+            # Laite ei koskaan lähetä NaN/Inf:iä (JsonWriter -> null); sama mockilta.
+            snap = json.loads(json.dumps(snap, ensure_ascii=False, allow_nan=False))
+        except ValueError as e:
+            errors.append("%s: ei kelvollista JSONia (%s)" % (name, e))
+            continue
+        have = shape_of(snap)
+        if have != want:
+            errors.append("%s eroaa:\n  laite: %s\n  mock:  %s" % (name, want, have))
+            continue
+        if snap["state"] != state:
+            errors.append("%s: tila %s, laitteella %s" % (name, snap["state"], state))
+        bad = [c["cond"] for c in snap["ch"] if c["cond"] not in COND_KEYS]
+        if bad:
+            errors.append("%s: tuntematon cond %s" % (name, bad))
+        # test_delta_sign_and_worst_follow_status: SYL 3 imee 4 kPa enemmän -> avaa (§4.7).
+        if name == "kShapeAdvice" and snap["act"] != {"ch": 2, "open": True}:
+            errors.append("%s: act %r, laitteella {'ch': 2, 'open': True}" % (name, snap["act"]))
+    if errors:
+        print("\n".join(errors))
+        return 1
+    print("OK: %d snapshot-muotoa, %d tilaa ja %d cond-arvoa vastaavat laitetta" % (
+        len(SNAPSHOT_CASES), len(states), len(conds)))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="Suckboxx PC-mock (sama API kuin laitteella)")
     ap.add_argument("--port", type=int, default=8000)
@@ -1354,9 +1550,13 @@ def main():
     ap.add_argument("--verbose", action="store_true", help="HTTP-loki")
     ap.add_argument("--check-config", action="store_true",
                     help="vertaa rekisteriä config.h/types.h:hon ja lopeta")
+    ap.add_argument("--check-snapshot", action="store_true",
+                    help="vertaa snapshotin rakennetta laitteen muotoon (test_snapshot) ja lopeta")
     args = ap.parse_args()
     if args.check_config:
         sys.exit(check_config())
+    if args.check_snapshot:
+        sys.exit(check_snapshot())
 
     dev = Device(args.seed, args.sensor_err, args.calibrated)
     Handler.dev = dev

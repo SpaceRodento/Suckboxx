@@ -8,6 +8,8 @@
 //   - ch[i].mean/min/p2p/rpm = null, kun kanava ei pulssi (types.h: voimassa
 //     vain kun has_pulse); d, level ja mv ovat aina lukuja.
 //   - rpm/rpm_sd/rpm_cv = null, kun RpmEstimate ei ole voimassa.
+//   - act = {ch, open} vain kun status antaa ruuvineuvon, muuten null (WP-10).
+//   - ch[i].cond = StatusResult::ch_cond (channelCondKey), aina merkkijono.
 //   - NaN/Inf -> null (JsonWriter), joten yksi huono luku ei hylkää koko
 //     viestiä selaimen JSON.parsessa.
 // Desimaalit kuten mockissa (round(v, 2) / 1 / 4), loppunollat pois.
@@ -33,11 +35,12 @@ struct SnapshotMeta {
   uint32_t heap = 0;          // vapaa heap (native: 0)
 };
 
-// Pahin tapaus on 1781 tavua, mitattu test_snapshot:ssa: kaikki luvut
+// Pahin tapaus on 1863 tavua, mitattu test_snapshot:ssa: kaikki luvut
 // leveimmillään (±99998.1172), pisimmät tekstit (headline 79, advice 111,
-// calResultText 149 tavua), 16 aaltoriviä ja kymmennumeroiset kokonaisluvut.
+// calResultText 149 tavua), act-objekti, pisin cond ("no_pulse"), 16
+// aaltoriviä ja kymmennumeroiset kokonaisluvut.
 // Testi kaatuu, jos vara putoaa alle 128 tavun. Tavallinen viesti
-// joutokäynnillä on noin 0,9 kt (4 aaltoriviä 15 Hz:llä).
+// joutokäynnillä on noin 1,0 kt (4 aaltoriviä 15 Hz:llä).
 constexpr size_t kSnapshotJsonSize = 2048;
 
 // Snapshotin sisältö yhdeltä hetkeltä. snapshotJson kokoaa tämän
@@ -90,6 +93,21 @@ inline const char* sourceKey(SourceKind s) {
 
 }  // namespace snapshot_detail
 
+// Snapshotin ch[i].cond-avain (docs/firmware.md §5). Tuntematon arvo ei ole
+// koskaan "ok": UI näyttäisi kanavan mittaavana.
+inline const char* channelCondKey(ChannelCond c) {
+  switch (c) {
+    case ChannelCond::Ok: return "ok";
+    case ChannelCond::Sat: return "sat";
+    case ChannelCond::Idle: return "idle";
+    case ChannelCond::NoPulse: return "no_pulse";
+    case ChannelCond::Hose: return "hose";
+    case ChannelCond::Blocked: return "blocked";
+    case ChannelCond::Sensor: return "sensor";
+  }
+  return "sensor";
+}
+
 // Kirjoittaa näkymän §5:n muodossa yhdelle riville (ei rivinvaihtoja, SSE:n
 // data-kenttä). Puuttuva osa (nullptr) -> 0, eli ei koskaan puolikasta viestiä.
 inline size_t snapshotWrite(const SnapshotView& v, const SnapshotMeta& m, char* buf, size_t n) {
@@ -115,6 +133,16 @@ inline size_t snapshotWrite(const SnapshotView& v, const SnapshotMeta& m, char* 
   w.key("verdict").value(s.show_verdict);
   w.key("head").value(s.headline);
   w.key("advice").value(s.advice);
+  // Ruuvineuvo rakenteisena (WP-10): sama kanava ja suunta kuin advice-tekstissä.
+  w.key("act");
+  if (s.act_ch >= 0 && s.act_ch < kChannels) {
+    w.beginObject();
+    w.key("ch").value(static_cast<int>(s.act_ch));
+    w.key("open").value(s.act_open);
+    w.endObject();
+  } else {
+    w.null();
+  }
   w.key("flags").beginObject();
   w.key("sat").value(s.flag_saturation);
   w.key("uncal_zero").value(s.flag_uncal_zero);
@@ -156,6 +184,7 @@ inline size_t snapshotWrite(const SnapshotView& v, const SnapshotMeta& m, char* 
     w.key("pulse").value(c.has_pulse);
     w.key("fault").value(c.sensor_fault);
     w.key("sat").value(c.saturated);
+    w.key("cond").value(channelCondKey(s.ch_cond[i]));
     w.endObject();
   }
   w.endArray();

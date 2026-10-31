@@ -85,6 +85,10 @@ void setup() {
   if (!hal::wifiApStart()) fail("Wi-Fi AP");
   if (!hal::webStart(hal::diagJson)) fail("web");
   hal::diagLogBoot();
+  // Käynnistys valmis: tähän asti myöhästyneet näytteet (ensimmäinen luku,
+  // Wi-Fin käynnistys) näkyvät omana laskurinaan (diag late_boot), ja late
+  // laskee tästä eteenpäin vain ajonaikaiset (jatko.md 9).
+  hal::procBootDone();
 }
 
 void loop() {
