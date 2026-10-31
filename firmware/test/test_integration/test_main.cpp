@@ -950,12 +950,13 @@ void test_D11_never_synced_without_zero() {
     TEST_ASSERT_EQUAL_INT(0, static_cast<int>(w.seen & bit(SyncState::Synced)));
     TEST_ASSERT_EQUAL_STRING("Nollaus puuttuu – irrota letkut ja tee nollaus", b.st().advice);
     // Käsin tehty nollaus ilmanpaineessa avaa vihreän. Odotetaan taso-EMA:n
-    // asettuminen (4 s = 8 tau): vielä laskeva taso kirjautuisi offsetiksi
-    // (processor.h AVOIN: manuaalinen nollaus ei tarkista vakautta).
+    // asettuminen: WP-9:n vakausportti (1 s:n vaihteluväli < 0,1 kPa) täyttyy
+    // -55 kPa:sta ~4,1 s sammutuksen jälkeen (test_wp9_manual_zero_*), joten
+    // 5 s. Ennen WP-9:ää testi odotti 4 s, koska portti puuttui.
     s = b.params();
     s.engine_on = false;
     b.set(s);
-    b.run(4.0f);
+    b.run(5.0f);
     TEST_ASSERT_EQUAL_INT(static_cast<int>(CalResult::Ok), static_cast<int>(b.p.zeroNow()));
     s.engine_on = true;
     b.set(s);
@@ -1267,6 +1268,315 @@ void test_H1_positive_offset_invisible_at_atmosphere() {
   TEST_MESSAGE(m);
 }
 
+// ---------------------------------------------------------------------------
+// WP-9 (jatko.md 7 ja 8): käytösmatriisin ja kalibroinnin jälkityöt.
+// Uudet kynnykset (hose_hyst_kpa, drift_tau_s, zero_settle_kpa) ovat
+// EHDOTUKSIA omistajalle; testit lukitsevat mitatun käytöksen niillä.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Sammutus käyvästä joutokäynnistä; anturien nolla ryömi käytön aikana, jotta
+// uusi nollaus näkyy offseteissa (vrt. test_row8).
+SimParams shutdownWithDrift(SimParams s) {
+  s.engine_on = false;
+  s.sensor_offset_kpa[0] = -0.5f;
+  s.sensor_offset_kpa[1] = -0.3f;
+  s.sensor_offset_kpa[2] = -0.7f;
+  return s;
+}
+
+}  // namespace
+
+// e: automaattinen nollaus sammutuksen jälkeen (ennen 5,6-8 s). Aikajana
+// -55 kPa:n joutokäynniltä; EngineSim päästää alipaineen heti, joten koko lasku
+// on DSP:n taso-EMA:ta (level_tau_s 0,5 s):
+//   pulssi pois  ~0,9-1,05 s  pulse_timeout_s (1 s) viimeisestä syklistä
+//   NoSignal     ~1,0-1,05 s  viimeinen kanava
+//   rivi 1       + off_hold_s (3 s) NoSignalista (firmware.md §4.7)
+//   taso-EMA     4,08 s       1 s:n vaihtelu 55 e^-2t (e^2 - 1) < zero_settle_kpa 0,1
+// WP-4 laski off_hold_s:n vasta tason asettumisesta 0,3 kPa:n kaistaan
+// (2,65 s), ja kaistan alku saattoi osua EMA:n hännälle: 6,35-8,5 s
+// (8 siementä). Nyt toteutuksen osuus on EMA:n häntä ja tick: <= 0,25 s.
+void test_wp9_auto_zero_after_shutdown_timeline() {
+  const Config def;
+  const float pt = def.dsp.pulse_timeout_s;
+  const float oh = def.status.off_hold_s;
+  float t_max = 0.0f;
+  for (uint32_t seed = 1; seed <= 4; ++seed) {
+    Bench b;
+    SimParams s;
+    s.seed = seed;
+    b.set(s);
+    zeroThenStart(b, s);
+    b.run(6.0f);
+    TEST_ASSERT_TRUE(b.p.channel(0).has_pulse);
+    b.set(shutdownWithDrift(b.params()));
+    float t_nosig = -1.0f;
+    float t_zero = -1.0f;
+    const uint32_t n0 = b.n;
+    while (b.n - n0 < 10000u && t_zero < 0.0f) {
+      if (!b.step()) continue;
+      const float t = static_cast<float>(b.n - n0) / 1000.0f;
+      if (t_nosig < 0.0f && b.st().state == SyncState::NoSignal) t_nosig = t;
+      if (b.st().request_auto_zero) t_zero = t;
+    }
+    char m[128];
+    std::snprintf(m, sizeof(m), "VIIVE e: sammutus -> NoSignal %.2f s, -> nollaus %.2f s (siemen %u)",
+                  static_cast<double>(t_nosig), static_cast<double>(t_zero), static_cast<unsigned>(seed));
+    TEST_MESSAGE(m);
+    TEST_ASSERT_GREATER_THAN_FLOAT(0.0f, t_nosig);
+    TEST_ASSERT_GREATER_THAN_FLOAT(0.0f, t_zero);
+    atLeast(oh - 1e-3f, t_zero - t_nosig, "rivi 1: nollaus ennen off_hold_s:ää");
+    atMost(pt + oh + 0.25f, t_zero, "e: toteutuksen osuus yli 0,25 s");
+    if (t_zero > t_max) t_max = t_zero;
+    // Nollaus osui ilmanpaineeseen: offset = anturin ryöminyt nolla (R4).
+    const SimParams& sp = b.params();
+    for (int i = 0; i < kChannels; ++i) {
+      TEST_ASSERT_FLOAT_WITHIN(0.05f, -sp.sensor_offset_kpa[i], b.p.calibration().offset_kpa[i]);
+    }
+  }
+  report("e: sammutus -> automaattinen nollaus (pahin 4 siemenestä)", t_max);
+}
+
+// d: käsin nollaus vaatii vakauden. Ennen WP-9:ää zeroNow hyväksyi
+// (EngineSim, mittausskripti WP-9): sammutus 1,5 s -> 2,75 kPa:n offset,
+// 2,0 s -> 1,01; purkautuva alipaine -10 kPa (tau 2 s, ei pulsseja) 2,5 s ->
+// 4,1 kPa. D2:n vihreä raja on 1,5 kPa.
+void test_wp9_manual_zero_waits_for_settled_level() {
+  Config c;
+  c.status.auto_zero = false;   // vain käsin
+  {
+    Bench b;
+    TEST_ASSERT_TRUE(b.p.configure(c));
+    SimParams s;
+    s.engine_on = false;
+    b.set(s);
+    b.run(1.5f);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(CalResult::Ok), static_cast<int>(b.p.zeroNow()));
+    const Calibration first = b.p.calibration();
+    s.engine_on = true;
+    b.set(s);
+    b.run(6.0f);
+    s.engine_on = false;
+    b.set(s);
+    b.run(1.5f);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(CalResult::NotSettled), static_cast<int>(b.p.zeroNow()));
+    TEST_ASSERT_EQUAL_STRING(sbx::calResultText(CalResult::NotSettled), b.p.calStatus().msg);
+    for (int i = 0; i < kChannels; ++i) {   // hylätty nollaus ei koske kalibrointiin
+      TEST_ASSERT_EQUAL_FLOAT(first.offset_kpa[i], b.p.calibration().offset_kpa[i]);
+    }
+    // Käyttäjä painaa uudelleen joka tickillä: hyväksyntä, kun taso-EMA:n
+    // 1 s:n vaihtelu < 0,1 kPa (4,08 s sammutuksesta).
+    const float t_ok = 1.5f + b.runUntil([&] { return b.p.zeroNow() == CalResult::Ok; }, 5.0f);
+    report("d: sammutus -> käsin nollaus hyväksytään", t_ok);
+    atLeast(3.9f, t_ok, "d: hyväksyttiin vielä laskeva taso");
+    atMost(4.3f, t_ok, "d: vakaa taso hylättiin");
+    for (int i = 0; i < kChannels; ++i) TEST_ASSERT_FLOAT_WITHIN(0.05f, 0.0f, b.p.calibration().offset_kpa[i]);
+  }
+  {
+    // Fysikaalinen purkautuminen: alipaine loukussa letkuissa, ei pulsseja.
+    // Eksponentiaalisella purkautumisella (tau_b) jäännös on enintään
+    // zero_settle_kpa / (e^(1 s / tau_b) - 1) = 0,1 / 0,65 = 0,154 kPa (tau_b 2 s).
+    Bench b;
+    TEST_ASSERT_TRUE(b.p.configure(c));
+    SimParams s;
+    s.engine_on = false;
+    b.set(s);
+    b.run(1.5f);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(CalResult::Ok), static_cast<int>(b.p.zeroNow()));
+    s.engine_on = true;
+    s.depth_kpa = 0.0f;
+    s.res_kpa = 0.0f;
+    s.peak_kpa = 0.0f;
+    const uint32_t n0 = b.n;
+    auto bleed = [&]() {
+      const float t = static_cast<float>(b.n - n0) / 1000.0f;
+      s.base_kpa = -10.0f * std::exp(-t / 2.0f);
+      b.set(s);
+    };
+    while (b.n - n0 < 2500u) {
+      if (b.n % 10 == 0) bleed();
+      b.step();
+    }
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(CalResult::NotSettled), static_cast<int>(b.p.zeroNow()));
+    float t_ok = -1.0f;
+    float residual = 0.0f;
+    while (b.n - n0 < 20000u && t_ok < 0.0f) {
+      if (b.n % 10 == 0) bleed();
+      if (!b.step()) continue;
+      residual = -s.base_kpa;
+      if (b.p.zeroNow() == CalResult::Ok) t_ok = static_cast<float>(b.n - n0) / 1000.0f;
+    }
+    float err = 0.0f;
+    for (int i = 0; i < kChannels; ++i) {
+      const float e = std::fabs(b.p.calibration().offset_kpa[i]);
+      if (e > err) err = e;
+    }
+    char m[128];
+    std::snprintf(m, sizeof(m), "d: purkautuva alipaine (tau 2 s): hyväksytty %.2f s, offset-virhe %.3f kPa "
+                  "(jäljellä %.3f kPa)", static_cast<double>(t_ok), static_cast<double>(err),
+                  static_cast<double>(residual));
+    TEST_MESSAGE(m);
+    TEST_ASSERT_GREATER_THAN_FLOAT(0.0f, t_ok);
+    atMost(0.1f / (std::exp(0.5f) - 1.0f), err, "d: purkautuva alipaine kirjautui offsetiksi");
+  }
+}
+
+// d/e: vakausportti ei saa estää nollausta ADC-kohinan takia. Laitteella mitattu
+// kohina 3,8-4,1 mV RMS puhelin yhdistettynä (jatko.md); 8 mV = 2x varmuus.
+void test_wp9_settle_gate_ignores_adc_noise() {
+  const float noises[] = {4.0f, 8.0f};
+  const float limit = StatusParams().zero_settle_kpa;
+  for (float nz : noises) {
+    float worst = 0.0f;
+    for (uint32_t seed = 1; seed <= 2; ++seed) {
+      Bench b;
+      SimParams s;
+      s.seed = seed;
+      s.noise_mv = nz;
+      s.engine_on = false;
+      b.set(s);
+      const float t_zero = b.runUntil([&] { return b.p.calibration().zero_valid; }, 4.0f);
+      TEST_ASSERT_FLOAT_WITHIN(0.1f, 3.05f, t_zero);   // rivi 1: off_hold_s ensimmäisestä tickistä
+      // Tason 1 s:n vaihteluväli (21 tickiä) 20 s:n ajalta. Nollaus nollasi DSP:n,
+      // ja EMA alkaa yhdestä kohinaisesta näytteestä: ohitetaan 2 s (4 tau).
+      b.run(2.0f);
+      float hist[kChannels][21];
+      int hn = 0;
+      const uint32_t n0 = b.n;
+      while (b.n - n0 < 20000u) {
+        if (!b.step()) continue;
+        for (int c = 0; c < kChannels; ++c) hist[c][hn % 21] = b.p.channel(c).level_kpa;
+        if (++hn < 21) continue;
+        for (int c = 0; c < kChannels; ++c) {
+          float lo = hist[c][0], hi = hist[c][0];
+          for (int k = 1; k < 21; ++k) {
+            lo = hist[c][k] < lo ? hist[c][k] : lo;
+            hi = hist[c][k] > hi ? hist[c][k] : hi;
+          }
+          if (hi - lo > worst) worst = hi - lo;
+        }
+      }
+    }
+    char m[112];
+    std::snprintf(m, sizeof(m), "d/e: kohina %.0f mV RMS -> tason 1 s:n vaihtelu enintään %.3f kPa (raja %.2f)",
+                  static_cast<double>(nz), static_cast<double>(worst), static_cast<double>(limit));
+    TEST_MESSAGE(m);
+    atMost(nz <= 4.0f ? 0.5f * limit : limit, worst, "d/e: kohina lähellä vakausrajaa");
+  }
+}
+
+// b: rivi 5 ei reagoi rpm-kohinaan, 60 rpm / 2 s tunnistuu, 20 rpm / 2 s ei.
+// D12 sallii arvion 3000 rpm:iin, jossa DSP:n 8 syklin rpm on kohinaisin.
+void test_wp9_drift_ignores_rpm_noise() {
+  // 20 rpm / 2 s 3000 rpm:llä oletusjitterillä (1 %): ennen WP-9:ää liputti
+  // 8/8 siemenellä (mittausskripti), nyt ei kertaakaan.
+  for (int filt = 0; filt < 2; ++filt) {
+    int flagged = 0;
+    for (uint32_t seed = 1; seed <= 4; ++seed) {
+      Bench b;
+      Config c;
+      if (filt == 0) c.status.drift_tau_s = 0.0f;
+      TEST_ASSERT_TRUE(b.p.configure(c));
+      SimParams s;
+      s.seed = seed;
+      s.rpm = 3000.0f;
+      s.base_kpa = -25.0f;
+      s.depth_kpa = 12.0f;
+      b.set(s);
+      b.run(5.0f);
+      s = b.params();
+      s.rpm_drift = 10.0f;
+      b.set(s);
+      const uint32_t n0 = b.n;
+      while (b.n - n0 < 8000u) {
+        if (b.step() && b.st().flag_drift) ++flagged;
+      }
+    }
+    char m[96];
+    std::snprintf(m, sizeof(m), "b: 3000 rpm, 20 rpm / 2 s, drift_tau_s %s: %d liputettua tickiä / 4 x 8 s",
+                  filt == 0 ? "0" : "oletus", flagged);
+    TEST_MESSAGE(m);
+    if (filt == 0) {
+      TEST_ASSERT_GREATER_THAN(0, flagged);   // ongelma ennen WP-9:ää
+    } else {
+      TEST_ASSERT_EQUAL_INT(0, flagged);
+    }
+  }
+  // 60 rpm / 2 s joutokäynnillä: tunnistuu, viive raportoidaan.
+  float worst = 0.0f;
+  for (uint32_t seed = 1; seed <= 4; ++seed) {
+    Bench b;
+    SimParams s;
+    s.seed = seed;
+    b.set(s);
+    b.run(5.0f);
+    s = b.params();
+    s.rpm_drift = 30.0f;
+    b.set(s);
+    const float t_flag = b.runUntil([&] { return b.st().flag_drift; }, 6.0f);
+    TEST_ASSERT_GREATER_THAN_FLOAT(0.0f, t_flag);
+    if (t_flag > worst) worst = t_flag;
+    // Lippu pysyy rampin ajan (asettumisen jälkeen).
+    int ticks = 0, on = 0;
+    const uint32_t n0 = b.n;
+    while (b.n - n0 < 3000u) {
+      if (!b.step()) continue;
+      ++ticks;
+      if (b.st().flag_drift) ++on;
+    }
+    TEST_ASSERT_GREATER_THAN(ticks * 9 / 10, on);
+  }
+  report("b: 60 rpm / 2 s -> ajautumislippu (pahin 4 siemenestä)", worst);
+  atMost(3.5f, worst, "b: 60 rpm / 2 s tunnistuu liian hitaasti");
+}
+
+// a: rivi 6, letkuvika ei välky rajalla. Irti oleva letku, jonka anturin nolla
+// on ryöminyt nollauksen jälkeen -2 kPa:iin (R5) = taso tasan hose_off_kpa:ssa.
+// Ennen WP-9:ää otsikko vaihtui "ei alipainetta" <-> "ei pulssia" ~1,5 Hz
+// (mittausskripti: 689 / 8 x 60 s, 4 mV); hystereesillä kerran.
+void test_wp9_hose_fault_stable_at_threshold() {
+  for (int hyst = 0; hyst < 2; ++hyst) {
+    Bench b;
+    Config c;
+    if (hyst == 0) c.status.hose_hyst_kpa = 0.0f;
+    TEST_ASSERT_TRUE(b.p.configure(c));
+    SimParams s = withErr(0.0f, 0.0f, 0.0f);
+    s.noise_mv = 4.0f;
+    b.set(s);
+    settleSynced(b, s);
+    s = b.params();
+    s.fault[1] = SimFault::HoseOff;
+    s.sensor_offset_kpa[1] = -c.status.hose_off_kpa;
+    b.set(s);
+    int changes = 0;
+    bool entered = false;
+    char prev[sbx::kHeadlineLen] = {0};
+    const uint32_t n0 = b.n;
+    while (b.n - n0 < 20000u) {
+      if (!b.step()) continue;
+      const StatusResult& r = b.st();
+      if (!entered && r.state == SyncState::FaultHose) entered = true;
+      if (entered) {
+        TEST_ASSERT_EQUAL_INT(S(SyncState::FaultHose), S(r.state));
+        if (prev[0] != '\0' && std::strcmp(prev, r.headline) != 0) ++changes;
+        std::snprintf(prev, sizeof(prev), "%s", r.headline);
+      }
+    }
+    char m[96];
+    std::snprintf(m, sizeof(m), "a: letkuvika rajalla, hose_hyst_kpa %s: %d otsikon vaihtoa / 20 s",
+                  hyst == 0 ? "0" : "oletus", changes);
+    TEST_MESSAGE(m);
+    TEST_ASSERT_TRUE(entered);
+    if (hyst == 0) {
+      TEST_ASSERT_GREATER_THAN(10, changes);   // ongelma ennen WP-9:ää
+    } else {
+      TEST_ASSERT_LESS_OR_EQUAL(1, changes);   // "ei pulssia" -> "ei alipainetta" kerran
+    }
+  }
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_row1_engine_off_no_signal_and_auto_zero);
@@ -1295,5 +1605,10 @@ int main() {
   RUN_TEST(test_wp2c_rpm_drop_keeps_pulse);
   RUN_TEST(test_wp2c_throttle_blip_tracks_rpm);
   RUN_TEST(test_H1_positive_offset_invisible_at_atmosphere);
+  RUN_TEST(test_wp9_auto_zero_after_shutdown_timeline);
+  RUN_TEST(test_wp9_manual_zero_waits_for_settled_level);
+  RUN_TEST(test_wp9_settle_gate_ignores_adc_noise);
+  RUN_TEST(test_wp9_drift_ignores_rpm_noise);
+  RUN_TEST(test_wp9_hose_fault_stable_at_threshold);
   return UNITY_END();
 }

@@ -186,10 +186,17 @@ float nominalKpa(uint16_t mv, uint16_t rail_mv, const SensorParams& sp);
 float applyCal(float nominal_kpa, int ch, const Calibration& cal);
 
 enum class CalResult : uint8_t { Ok, NotAtmosphere, NotStable, TooSmall, Mismatch, GainOutOfRange,
-                                 NoZero };
+                                 NoZero, NotSettled };
 
 // Nollapiste: kanavat ilmanpaineessa -> offset niin että kalibroitu = 0. Säilyttää gainin.
 CalResult computeZero(const float (&nominal_level)[kChannels], float max_abs_kpa, Calibration& cal);
+// Sama + vakausportti (WP-9): level_range = tason vaihteluväli viimeisen
+// kZeroSettleWindowS (1 s) aikana; NotSettled, jos jokin >= max_range_kpa (myös NaN/ääretön).
+CalResult computeZero(const float (&nominal_level)[kChannels], const float (&level_range)[kChannels],
+                      float max_abs_kpa, float max_range_kpa, Calibration& cal);
+// Liukuva 1 s:n min/max-ikkuna kanavien tasoista (StatusMachine päivittää, ~20 Hz).
+class LevelSettle { public: void reset(); void add(const float (&level)[kChannels], float now);
+  bool full() const; float range(int ch) const; };   // range = ääretön, jos historiaa < 1 s
 // Vahvistus: kaikki kanavat samassa alipaineessa (T-haara) -> gain niin että kanavat täsmäävät
 // toisiinsa (referenssi = kanavien keskiarvo). Säilyttää nollapisteen. Vaatii voimassa olevan
 // nollauksen (muuten NoZero), koska anturien omat offsetit menisivät muuten gainiin.
@@ -207,6 +214,15 @@ Hyväksymisrajat (vakioina, perustelut kommentteihin): vahvistus vaatii |referen
 jokaisen kanavan sd < 0,5 kPa, kanavat 15 %:n sisällä toisistaan (pareittain:
 max − min ≤ 0,15 · min |c|) ja tuloksena gain 0,85…1,15. Tarkistusjärjestys: NoZero, TooSmall,
 NotStable, Mismatch, GainOutOfRange.
+
+Nollauksen vakausportti (WP-9, 31.10.2026): ilmanpaine-ehdon (|taso| ≤ `off_kpa`) lisäksi
+jokaisen kanavan tason vaihteluväli viimeisen 1 s:n aikana < `zero_settle_kpa` (oletus 0,1 kPa,
+**ehdotus**, ei päätöslokissa). Tarkistusjärjestys NotAtmosphere, NotSettled. Sama portti
+automaattiselle (rivi 1) ja käsin tehdylle nollaukselle. Ilman porttia juuri sammutetun moottorin
+vielä laskeva taso kirjautui offsetiksi (EngineSim: 1,5 s sammutuksesta 2,75 kPa, purkautuva
+alipaine −10 kPa / tau 2 s 2,5 s:n kohdalla 4,1 kPa). Portin kanssa jäännös on enintään
+`zero_settle_kpa` / (e^(1 s / tau) − 1) eksponentiaalisella purkautumisella (tau 2 s: 0,15 kPa).
+ADC-kohina ei laukaise sitä: taso-EMA:n 1 s:n vaihteluväli 0,04 kPa 4 mV RMS:llä, 0,08 kPa 8 mV:lla.
 
 ### 4.4 `config.h` (WP-3)
 
@@ -341,7 +357,8 @@ Prioriteetti (korkein ensin) — §8:n suunnittelusääntö: *vikatilat voittava
 Liput ovat tilasta riippumattomia: `flag_saturation` (rivi 10), `flag_uncal_zero` (D11: ilman
 nollausta **ei koskaan Synced** — näytetään enintään `Near`), `flag_uncal_gain` (rivi 11),
 `flag_drift` (rivi 5: Δ-luvut pysyvät näkyvissä). `request_auto_zero` nousee kun `NoSignal`
-on kestänyt `off_hold_s` ja `auto_zero` on päällä.
+on kestänyt `off_hold_s`, `auto_zero` on päällä ja sillä hetkellä kaikki |taso| < `off_kpa` ja
+tasot ovat paikallaan (vakausportti `zero_settle_kpa`, §4.3; kerran per NoSignal-jakso).
 
 Tekstit UTF-8-suomeksi, desimaalipilkku, esim. headline `"Synkronoitu"` ja advice
 `"SYL 3: avaa läppää – imee 2,1 kPa enemmän kuin SYL 1"`. Säätösuunta:
@@ -363,6 +380,24 @@ Pitoajat ja yhteismuotoinen muutos (WP-2c, 30.10.2026):
   ("Alipaine muuttuu kaikissa sylintereissä"). Kanavien liukuvat keskiarvot päivittyvät eri
   hetkinä, joten yhteismuotoinen muutos näkyisi muuten hetkellisenä spreadinä (20 kPa →
   1,7–2,5 kPa). Vakausajastin ei nollaudu. Yhden ruuvin säätö ei laukaise tätä.
+
+Käytösmatriisin ja kalibroinnin jälkityöt (WP-9, 31.10.2026). Uudet kynnykset ovat S5a:n
+mukaan säädettäviä (`StatusParams`, rekisteri §4.4) ja **ehdotuksia omistajalle**, eivät
+päätöslokissa; arvo 0 palauttaa WP-4:n käytöksen hystereesille ja suodatukselle.
+- Rivi 6, `hose_hyst_kpa` = 0,2 kPa: sisääntulo ennallaan (|taso| < `hose_off_kpa`
+  yhtäjaksoisesti `kHoseHoldS`), poistuminen vasta kun |taso| ≥ `hose_off_kpa` + `hose_hyst_kpa`
+  tai pulssi palaa. Ennen rajalla oleva taso vaihtoi otsikkoa "ei alipainetta" ↔ "ei pulssia"
+  ~1,5 Hz (EngineSim 701 / 8 × 60 s) ja `off_hold_s`:n sisällä VIKA ↔ "Odota". Taso-EMA:n
+  vaihteluväli 0,024 / 0,047 kPa (2 / 4 mV RMS). Anturivian aika ei ole pulssittomuutta: pito-
+  ajat alkavat alusta, kun anturi toipuu.
+- Rivi 5, `drift_tau_s` = 0,5 s: rpm suodatetaan (EMA, first-order hold) ennen ikkunan
+  vertailua. Tasaisella rampilla erotus on sama kuin ilman suodatusta, joten raja 50 rpm / 2 s
+  ei siirry. Väärät liput (8 siementä × 60 s): 1500 rpm / 3 % jitter 2,4 % → 0,12 %, 3000 rpm /
+  2 % 8,9 % → 0,07 %; 20 rpm / 2 s 3000 rpm:llä liputti 8/8 → 0/8. 60 rpm / 2 s tunnistuu
+  850 rpm:llä 3,07 s:ssa (ennen 2,49 s).
+- Rivi 1, `zero_settle_kpa` = 0,1 kPa / 1 s: vakausehto kulkee `off_hold_s`:n rinnalla eikä
+  sen perässä. Automaattinen nollaus −55 kPa:n joutokäynnin sammutuksesta 6,35–8,5 s → 4,10–4,15 s
+  (= `pulse_timeout_s` 1 s + `off_hold_s` 3 s + taso-EMA:n häntä ≤ 0,15 s).
 
 ### 4.8 `processor.h`, `snapshot.h`, `sim_api.h` (WP-6)
 

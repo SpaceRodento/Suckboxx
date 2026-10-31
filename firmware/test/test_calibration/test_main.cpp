@@ -184,6 +184,88 @@ void test_zero_boundary_and_not_atmosphere() {
   }
 }
 
+// --- nollauksen vakausportti (WP-9, jatko.md 8) ------------------------------------
+
+void test_zero_settle_gate_order_and_edges() {
+  const float inf = std::numeric_limits<float>::infinity();
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float level[kChannels] = {0.8f, -1.2f, 1.9f};
+  {
+    Calibration cal;
+    const float range[kChannels] = {0.0f, 0.099f, 0.05f};   // raja on tiukka <
+    TEST_ASSERT_EQUAL_INT(asInt(CalResult::Ok), asInt(sbx::computeZero(level, range, 5.0f, 0.1f, cal)));
+    TEST_ASSERT_TRUE(cal.zero_valid);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, -0.8f, cal.offset_kpa[0]);
+  }
+  const float bad_range[][kChannels] = {
+      {0.0f, 0.1f, 0.0f},   // tasan rajalla ei kelpaa (raja on "alle")
+      {0.0f, 0.0f, 0.3f},   // yksikin kanava liikkeessä
+      {inf, 0.0f, 0.0f},    // historiaa ei koko ikkunaa (LevelSettle::range)
+      {0.0f, nan, 0.0f},    // rikkinäinen taso
+  };
+  for (const auto& rg : bad_range) {
+    Calibration cal;
+    cal.offset_kpa[1] = 0.4f;
+    const Calibration before = cal;
+    TEST_ASSERT_EQUAL_INT(asInt(CalResult::NotSettled), asInt(sbx::computeZero(level, rg, 5.0f, 0.1f, cal)));
+    assertCalEqual(before, cal);  // hylätty ei koske kalibrointiin
+  }
+  // Ilmanpaine-ehto tarkistetaan ensin: alipaineessa teksti kertoo sen eikä "odota".
+  Calibration cal;
+  const float vac[kChannels] = {0.0f, -6.0f, 0.0f};
+  const float moving[kChannels] = {0.0f, 2.0f, 0.0f};
+  TEST_ASSERT_EQUAL_INT(asInt(CalResult::NotAtmosphere), asInt(sbx::computeZero(vac, moving, 5.0f, 0.1f, cal)));
+}
+
+// LevelSettle: vaihteluväli liukuvassa 1 s:n ikkunassa, 10-50 Hz ja epätasainen dt.
+void test_level_settle_window() {
+  const float W = sbx::kZeroSettleWindowS;
+  sbx::LevelSettle s;
+  const float inf = std::numeric_limits<float>::infinity();
+  TEST_ASSERT_FALSE(s.full());
+  TEST_ASSERT_TRUE(s.range(0) == inf);
+  // 20 Hz, kanava 1 nousee 0,05 kPa/tick (1 kPa/s), muut paikallaan.
+  for (int k = 0; k <= 30; ++k) {
+    const float t = 0.05f * static_cast<float>(k);
+    const float lv[kChannels] = {0.0f, 0.05f * static_cast<float>(k), -0.2f};
+    s.add(lv, t);
+    TEST_ASSERT_EQUAL_INT(k >= 20, s.full());   // historiaa >= 1 s
+  }
+  TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, s.range(0));
+  TEST_ASSERT_FLOAT_WITHIN(0.06f, 1.0f, s.range(1));   // 1 kPa/s x 1 s (lokeroresoluutio)
+  TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, s.range(2));
+  // Liike loppuu: ikkunan jälkeen vaihteluväli 0.
+  const float stop[kChannels] = {0.0f, 1.5f, -0.2f};
+  for (int k = 31; k <= 51; ++k) s.add(stop, 0.05f * static_cast<float>(k));
+  TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, s.range(1));
+  TEST_ASSERT_TRUE(s.range(-1) == inf);
+  TEST_ASSERT_TRUE(s.range(kChannels) == inf);
+  // 50 Hz: lokeroita harvennetaan (alkujen väli >= ikkuna / kSlots), mutta
+  // jokainen näyte on mukana: lokeroon yhdistetty yksittäinen piikki näkyy.
+  s.reset();
+  TEST_ASSERT_FALSE(s.full());
+  for (int k = 0; k < 75; ++k) {
+    const float spike = (k == 61) ? 0.3f : 0.0f;   // pariton k = ei lokeron alku
+    const float lv[kChannels] = {spike, 0.0f, 0.0f};
+    s.add(lv, 0.02f * static_cast<float>(k));
+  }
+  TEST_ASSERT_TRUE(s.full());
+  TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.3f, s.range(0));
+  // 10 Hz ja epätasainen dt: kapasiteetti riittää (ikkuna aina historiassa).
+  s.reset();
+  uint32_t lcg = 5u;
+  float t = 0.0f;
+  for (int k = 0; k < 400; ++k) {
+    lcg = lcg * 1664525u + 1013904223u;
+    const float dt = 0.02f + 0.08f * static_cast<float>(lcg >> 8) / 16777216.0f;
+    const float lv[kChannels] = {0.0f, 0.0f, 0.0f};
+    s.add(lv, t);
+    if (t >= W + 0.1f) TEST_ASSERT_TRUE(s.full());
+    t += dt;
+  }
+  TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, s.range(1));
+}
+
 // --- vahvistus: fysikaalinen anturimalli -----------------------------------------
 
 // Anturi i: nimellinen = (1 + e_i)·P + o_i, mitattuna 1 mV:n ADC:llä.
@@ -534,7 +616,7 @@ void test_gain_with_corrupt_old_gain_stays_finite() {
 void test_cal_result_text() {
   const CalResult all[] = {CalResult::Ok,       CalResult::NotAtmosphere, CalResult::NotStable,
                            CalResult::TooSmall, CalResult::Mismatch,      CalResult::GainOutOfRange,
-                           CalResult::NoZero};
+                           CalResult::NoZero,   CalResult::NotSettled};
   const int n_all = static_cast<int>(sizeof(all) / sizeof(all[0]));
   for (int i = 0; i < n_all; ++i) {
     const char* t = sbx::calResultText(all[i]);
@@ -554,6 +636,9 @@ void test_cal_result_text() {
   TEST_ASSERT_NOT_NULL(std::strstr(sbx::calResultText(CalResult::TooSmall), "15 kPa"));
   TEST_ASSERT_NOT_NULL(std::strstr(sbx::calResultText(CalResult::Mismatch), "T-haara"));
   TEST_ASSERT_NOT_NULL(std::strstr(sbx::calResultText(CalResult::GainOutOfRange), "mv_per_kpa"));
+  // WP-9: odottaminen riittää (juuri sammutettu moottori), ei vikaa.
+  TEST_ASSERT_NOT_NULL(std::strstr(sbx::calResultText(CalResult::NotSettled), "Odota"));
+  TEST_ASSERT_EQUAL_INT(7, asInt(CalResult::NotSettled));   // lisätty loppuun (§4.3)
   TEST_ASSERT_NOT_NULL(sbx::calResultText(static_cast<CalResult>(42)));
 }
 
@@ -632,6 +717,8 @@ int main() {
   RUN_TEST(test_apply_cal);
   RUN_TEST(test_zero_ok_preserves_gain);
   RUN_TEST(test_zero_boundary_and_not_atmosphere);
+  RUN_TEST(test_zero_settle_gate_order_and_edges);
+  RUN_TEST(test_level_settle_window);
   RUN_TEST(test_two_point_calibration_makes_channels_agree_everywhere);
   RUN_TEST(test_rezero_after_gain_keeps_gain_and_agreement);
   RUN_TEST(test_gain_preserves_zero_point_exactly);

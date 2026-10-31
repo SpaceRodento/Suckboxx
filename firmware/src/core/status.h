@@ -26,6 +26,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "calibration.h"
 #include "types.h"
 
 namespace sbx {
@@ -158,18 +159,29 @@ class StatusMachine {
     for (int i = 0; i < kChannels; ++i) {
       lost_run_[i] = false;
       lost_since_[i] = 0.0f;
-      zero_lo_[i] = 0.0f;
-      zero_hi_[i] = 0.0f;
+      // Varmistus: ensimmäinen päivitys tyhjentäisi muistin joka tapauksessa,
+      // koska pitoaika (kHoseHoldS) alkaa alusta (mutaatiokierros WP-9).
+      hose_latched_[i] = false;
     }
     zero_run_ = false;
     zero_since_ = 0.0f;
     zero_armed_ = true;   // käynnistys moottori sammuksissa -> nollaus (rivi 1)
+    settle_.reset();
     drift_n_ = 0;
     drift_head_ = 0;
+    drift_primed_ = false;
   }
 
   const StatusParams& params() const { return p_; }
   int master() const { return master_; }
+
+  // Nollauksen vakausportti (calibration.h): sama ikkuna automaattiselle
+  // (rivi 1) ja käsin tehdylle nollaukselle (Processor::zeroNow).
+  const LevelSettle& settle() const { return settle_; }
+  // DSP:n nollaus (kalibroinnin muutos) aloittaa tason alusta, joten vanha
+  // historia näyttäisi hyppynä. Ei koske muihin ajastimiin: reset() virittäisi
+  // nollauksen uudelleen kesken saman NoSignal-jakson.
+  void resetSettle() { settle_.reset(); }
 
   // ~20 Hz (toimii 10-50 Hz:llä ja epätasaisella dt:llä).
   StatusResult update(const StatusInput& in) {
@@ -183,6 +195,11 @@ class StatusMachine {
     if (have_t_ && now < last_t_) reset();
     have_t_ = true;
     last_t_ = now;
+
+    // Nollauksen vakausikkuna (rivi 1 ja Processor::zeroNow) kaikissa tiloissa.
+    float levels[kChannels];
+    for (int i = 0; i < kChannels; ++i) levels[i] = in.ch[i].level_kpa;
+    settle_.add(levels, now);
 
     // Kanava pulssii vain, jos sen keskiarvo on myös käyttökelpoinen. NaN-
     // keskiarvo jäisi muuten spreadin min/max-vertailuista hiljaa pois ja
@@ -213,13 +230,14 @@ class StatusMachine {
         cond[i] = Cond::Ok;
       } else if (!others) {
         cond[i] = Cond::Idle;                      // rivit 1+8: kaikki hiljaa
-      } else if (std::fabs(c.level_kpa) < p_.hose_off_kpa && now - lost_since_[i] >= kHoseHoldS) {
+      } else if (std::fabs(c.level_kpa) < hoseLimit(i) && now - lost_since_[i] >= kHoseHoldS) {
         // Rivi 6. Viive, koska käynnistyksessä ja sammutuksessa kanavat saavat
         // ja menettävät pulssin eri sykleillä: matalalla alipaineella (täysi
         // kaasu, -8 kPa) taso on jo hose_off_kpa:n alla, kun ensimmäinen
         // kanava menettää pulssin, ja VIKA välähti (sammutuksessa master
         // ensin -> FaultMaster). Oikealla irronneella letkulla taso-EMA
         // tarvitsee joka tapauksessa ~1,7 s, joten viive ei hidasta vikaa.
+        // Poistuminen hystereesillä (hoseLimit, WP-9).
         cond[i] = Cond::HoseOff;
       } else if (now - lost_since_[i] >= p_.off_hold_s) {
         // Rivin 6 laajennus: ei pulssia, mutta taso ei ole nollassa. Tukossa
@@ -234,6 +252,8 @@ class StatusMachine {
         // ja sammutuksessa. Ei vikaa heti, ettei VIKA välähdä turhaan.
         cond[i] = Cond::Lost;
       }
+      // Hystereesin muisti: vain yhtäjaksoinen HoseOff pitää laajennetun rajan.
+      hose_latched_[i] = cond[i] == Cond::HoseOff;
     }
 
     // --- tilariippumattomat liput ----------------------------------------
@@ -480,50 +500,38 @@ class StatusMachine {
     r.show_verdict = verdict_state;
 
     // --- rivi 1: automaattinen nollaus -----------------------------------
-    // Reunaliipattu: kerran per NoSignal-jakso, kun kaikki tasot ovat olleet
-    // nollan tuntumassa (off_kpa, D10) ja paikallaan (kAutoZeroBandKpa)
-    // yhtäjaksoisesti off_hold_s. Vielä vuotava alipaine ei siis päädy
-    // offsetiksi. Uudelleenviritys vasta kun pulssit palaavat.
+    // Reunaliipattu: kerran per NoSignal-jakso, kun NoSignal on kestänyt
+    // off_hold_s (rivi 1: ei pulssia >= 3 s) ja sillä hetkellä kaikki tasot
+    // ovat nollan tuntumassa (off_kpa, D10) ja paikallaan (vakausportti
+    // zero_settle_kpa / kZeroSettleWindowS, sama kuin käsin nollauksessa).
+    // Vielä vuotava alipaine ei siis päädy offsetiksi. Uudelleenviritys vasta
+    // kun pulssit palaavat.
+    // WP-9: vakausehto kulkee off_hold_s:n rinnalla. WP-4:ssä off_hold_s
+    // laskettiin vasta siitä, kun tasot olivat asettuneet 0,3 kPa:n kaistaan,
+    // ja kaistan alku saattoi osua EMA:n hännälle: sammutuksesta -55 kPa:sta
+    // nollaus 6,35-8,5 s (EngineSim, 8 siementä), nyt ~4,1 s (pulse_timeout_s
+    // 1 s + off_hold_s 3 s, ja taso-EMA:n 1 s:n vaihtelu < 0,1 kPa 4,08 s:ssa).
+    // NoSignal-ajastin alkaa alusta muissa tiloissa: nollaus vain NoSignalissa
+    // (ei FaultSensor tms.: vikakanava ei näe luotettavasti ilmanpainetta,
+    // vaikka sen taso olisi off_kpa:n sisällä; D10, rivi 7, §8).
     if (pulsing > 0) zero_armed_ = true;
-    bool near_zero = r.state == SyncState::NoSignal;
-    for (int i = 0; i < kChannels && near_zero; ++i) {
-      near_zero = std::fabs(in.ch[i].level_kpa) < p_.off_kpa;
-    }
-    if (!near_zero) {
+    if (r.state != SyncState::NoSignal) {
       zero_run_ = false;
-    } else {
-      bool restart = !zero_run_;
-      for (int i = 0; i < kChannels && !restart; ++i) {
-        const float l = in.ch[i].level_kpa;
-        const float lo = l < zero_lo_[i] ? l : zero_lo_[i];
-        const float hi = l > zero_hi_[i] ? l : zero_hi_[i];
-        if (hi - lo > kAutoZeroBandKpa) restart = true;
-      }
-      if (restart) {
-        zero_run_ = true;
-        zero_since_ = now;
-        for (int i = 0; i < kChannels; ++i) zero_lo_[i] = zero_hi_[i] = in.ch[i].level_kpa;
-      } else {
-        for (int i = 0; i < kChannels; ++i) {
-          const float l = in.ch[i].level_kpa;
-          if (l < zero_lo_[i]) zero_lo_[i] = l;
-          if (l > zero_hi_[i]) zero_hi_[i] = l;
-        }
-      }
-      if (zero_armed_ && p_.auto_zero && now - zero_since_ >= p_.off_hold_s) {
-        r.request_auto_zero = true;
-        zero_armed_ = false;
-      }
+    } else if (!zero_run_) {
+      zero_run_ = true;
+      zero_since_ = now;
+    }
+    bool zero_ok = zero_run_ && now - zero_since_ >= p_.off_hold_s;
+    for (int i = 0; i < kChannels && zero_ok; ++i) {
+      zero_ok = std::fabs(in.ch[i].level_kpa) < p_.off_kpa &&
+                settle_.range(i) < p_.zero_settle_kpa;
+    }
+    if (zero_ok && zero_armed_ && p_.auto_zero) {
+      r.request_auto_zero = true;
+      zero_armed_ = false;
     }
     return r;
   }
-
-  // Rivin 1 nollaus vaatii, että tasot pysyvät tämän kaistan sisällä koko
-  // off_hold_s-jakson. Pelkkä |taso| < off_kpa päästäisi läpi vielä laskevan
-  // alipaineen (esim. -4 kPa ja tasaantumassa), ja nollaus kirjaisi sen
-  // offsetiksi. 0,3 kPa = 1/5 D2:n vihreästä rajasta; level-EMA:n kohina
-  // (tau 0,5 s) on tästä kertaluokkia pienempi.
-  static constexpr float kAutoZeroBandKpa = 0.3f;
 
   // Rivi 6: kanava ilman pulssia (muiden pulssiessa) näin kauan ennen
   // letkuvikaa. Käynnistyksessä ja sammutuksessa kanavien ero on enintään
@@ -554,6 +562,21 @@ class StatusMachine {
     float t;
     float rpm;
   };
+
+  // Rivi 6, hystereesi (WP-9, jatko.md 7). Sisääntulo ennallaan: |taso| <
+  // hose_off_kpa yhtäjaksoisesti kHoseHoldS. Kerran HoseOff-tilassa kanava
+  // pysyy siinä, kunnes |taso| >= hose_off_kpa + hose_hyst_kpa (tai pulssi
+  // palaa). Ilman tätä rajalla oleva taso (esim. irti oleva letku, jonka
+  // anturin nolla on ryöminyt -2 kPa:iin, R5) vaihtoi tilaa HoseOff <-> Blocked
+  // (otsikko "ei alipainetta" <-> "ei pulssia") ja off_hold_s:n sisällä
+  // HoseOff <-> Lost (VIKA <-> "Odota"): EngineSimillä tasan rajalla 701
+  // otsikon vaihtoa / 8 x 60 s (~1,5 Hz). Taso-EMA:n vaihteluväli 55 s:n aikana
+  // 0,024 kPa (2 mV RMS) / 0,047 kPa (4 mV RMS, mitattu laitteella puhelin
+  // yhdistettynä); oletus 0,2 kPa on > 4 x tämä ja kattaa ADC:n yksittäiset
+  // ±90 mV:n piikit (EMA:ssa ~0,007 kPa / piikki). EHDOTUS, ei päätöslokissa.
+  float hoseLimit(int i) const {
+    return p_.hose_off_kpa + (hose_latched_[i] ? p_.hose_hyst_kpa : 0.0f);
+  }
 
   static void clearDeltas(StatusResult& r) {
     for (int i = 0; i < kChannels; ++i) r.vac_delta_kpa[i] = 0.0f;
@@ -647,18 +670,51 @@ class StatusMachine {
     r.act_open = more;
   }
 
-  // Palauttaa flag_driftin: |rpm(now) - rpm(now - drift_window_s)| > drift_rpm.
-  // Menneisyyden rpm interpoloidaan lineaarisesti kahden tallennetun pisteen
+  // Palauttaa flag_driftin: |y(now) - y(now - drift_window_s)| > drift_rpm,
+  // jossa y on rpm-arvio suodatettuna aikavakiolla drift_tau_s (0 = y = rpm).
+  // Menneisyyden y interpoloidaan lineaarisesti kahden tallennetun pisteen
   // välistä, joten tulos ei riipu siitä, osuuko jokin päivitys tarkalleen
   // ikkunan reunaan. Ennen kuin historiaa on koko ikkunan verran, lippu on
   // alhaalla (ei tietoa != ajautuu).
+  //
+  // Suodatus (WP-9, jatko.md 7): DSP:n rpm on avg_cycles (8) syklin
+  // keskiarvo, joten sen kohina kasvaa kierrosluvun mukana (8 sykliä on
+  // 3000 rpm:llä vain 0,32 s). Suodattamaton vertailu liputti EngineSimillä
+  // (8 siementä x 60 s, osuus tickeistä): 1500 rpm / jitter 2-3 % 0,21 / 2,4 %,
+  // 3000 rpm / 1-3 % 0,10 / 8,9 / 24,6 %, ja 3000 rpm:llä myös 20 rpm / 2 s
+  // (8/8 siementä) - rivin 5 raja on > 50 rpm / 2 s, ja D12 sallii arvion
+  // 3000 rpm:iin asti. Tasaisella rampilla suodatettu y on rpm - kulmakerroin
+  // * tau, joten ikkunan erotus on tarkalleen sama kuin ilman suodatusta
+  // (raja ei siirry). tau = 0,5 s: 1500 rpm 0 / 0,12 %, 3000 rpm 0 / 0,07 /
+  // 1,7 %, 20 rpm / 2 s ei kertaakaan; 850 rpm:llä 0 % kuten ennenkin (5 %:n
+  // jitterillä 1,8 % -> 0,2 %). Hinta: 60 rpm / 2 s tunnistuu 850 rpm:llä
+  // keskimäärin 3,07 s:ssa (ennen 2,49 s), 3000 rpm:llä 2,38 s (1,71 s, mutta
+  // liputettuna vain 75 % ajasta, nyt 94 %). EHDOTUS.
+  // Diskretointi olettaa rpm:n lineaariseksi päivitysten välillä (first-order
+  // hold), jolloin ramppi suodattuu tarkasti myös epätasaisella dt:llä.
   bool updateDrift(const RpmEstimate& e, float now) {
     const float win = p_.drift_window_s;
     if (!e.valid || !std::isfinite(e.rpm) || !(win > 0.0f)) {
       drift_n_ = 0;
       drift_head_ = 0;
+      drift_primed_ = false;
       return false;
     }
+    const float x = e.rpm;
+    const float tau = p_.drift_tau_s;
+    if (!drift_primed_ || !(tau > 0.0f)) {
+      drift_y_ = x;
+      drift_x_ = x;
+      drift_tx_ = now;
+      drift_primed_ = true;
+    } else if (now > drift_tx_) {
+      const float dt = now - drift_tx_;
+      const float om = -std::expm1(-dt / tau);  // 1 - e^(-dt/tau) tarkasti pienelläkin dt:llä
+      drift_y_ = x - (x - drift_x_) * (tau / dt) * om + (drift_y_ - drift_x_) * (1.0f - om);
+      drift_x_ = x;
+      drift_tx_ = now;
+    }
+    const float y = drift_y_;
     bool drift = false;
     const float target = now - win;
     int newer = -1;
@@ -672,7 +728,7 @@ class StatusMachine {
           const float span = pb.t - pa.t;
           if (span > 0.0f) then = pa.rpm + (pb.rpm - pa.rpm) * ((target - pa.t) / span);
         }
-        drift = std::fabs(e.rpm - then) > p_.drift_rpm;
+        drift = std::fabs(y - then) > p_.drift_rpm;
         break;
       }
       newer = idx;
@@ -681,7 +737,7 @@ class StatusMachine {
     const int last = (drift_head_ - 1 + kDriftCap) % kDriftCap;
     if (drift_n_ == 0 || now - drift_[last].t >= spacing) {
       drift_[drift_head_].t = now;
-      drift_[drift_head_].rpm = e.rpm;
+      drift_[drift_head_].rpm = y;
       drift_head_ = (drift_head_ + 1) % kDriftCap;
       if (drift_n_ < kDriftCap) ++drift_n_;
     }
@@ -705,16 +761,20 @@ class StatusMachine {
 
   bool lost_run_[kChannels] = {false, false, false};
   float lost_since_[kChannels] = {0.0f, 0.0f, 0.0f};
+  bool hose_latched_[kChannels] = {false, false, false};   // rivi 6: HoseOff edellisellä kierroksella
 
-  bool zero_run_ = false;
+  bool zero_run_ = false;     // NoSignal jatkunut zero_since_:sta
   bool zero_armed_ = true;
   float zero_since_ = 0.0f;
-  float zero_lo_[kChannels] = {0.0f, 0.0f, 0.0f};
-  float zero_hi_[kChannels] = {0.0f, 0.0f, 0.0f};
+  LevelSettle settle_;
 
-  RpmPoint drift_[kDriftCap] = {};
+  RpmPoint drift_[kDriftCap] = {};   // rpm = suodatettu y
   int drift_n_ = 0;
   int drift_head_ = 0;
+  bool drift_primed_ = false;  // suodattimen tila: y, edellinen rpm ja sen hetki
+  float drift_y_ = 0.0f;
+  float drift_x_ = 0.0f;
+  float drift_tx_ = 0.0f;
 };
 
 }  // namespace sbx
