@@ -313,11 +313,19 @@ class Dsp {
   // pudotuksessa (yli 2,3 x) yksittäisen merkin paikka voi osua 2T-välissäkin
   // oikeaan kohtaan.
   static constexpr float kBothRatio = 1.4f;
-  // Yhden todistajan sykli: todistajan paikka nopeusmuutoksella korjattuna
-  // (ks. confirm) tämän sisällä.
+  // Yhden todistajan syklissä todistajan paikka nopeuden muutoksella
+  // korjattuna (ks. confirm) tämän sisällä. nT-välissä paikat (k + 1/3) / n ja
+  // (k + 2/3) / n osuvat 1/3:n tai 2/3:n lähelle (4T täsmälleen), joten
+  // pelkkä kSlotTol ei riitä. Mitattu: oikeat syklit <= 0,072 (myös
+  // pikablipin päättyvä hidastus, jossa ennuste on liian suuri), väärät
+  // >= 0,087 (heikon sylinterin 2T kiihdytyksessä, 5T xtalk 0,5:llä).
   static constexpr float kSlotTolSingle = 0.08f;
   // Letku irti: kanava on ilmanpaineessa (yli -kVentKpa) ja yli kVentKpa
-  // muiden yläpuolella.
+  // kummankin muun kanavan yläpuolella. Synkronointivirhe ei tee tätä:
+  // joutokäynnillä kanava on -40...-55 kPa, ja kaasu auki (lähellä
+  // ilmanpainetta) sylinterien ero on pieni; mitattu ero muihin <= 8 kPa
+  // ilman synkronointivirhettä, 15,6 kPa 10 kPa:n virheellä (-45 kPa:ssa).
+  // Irrotettu letku blipin huipulla (-25 kPa) on 21 kPa muiden yläpuolella.
   static constexpr float kVentKpa = 12.0f;
   // Näytön keskiarvo aloitetaan alusta, jos uusi jakso on yli 1,5 x (tai alle
   // kMinPeriodRatio x) näytettävien syklien keskijakso: kierrosluku muuttui
@@ -393,9 +401,14 @@ class Dsp {
     ++n_;
     for (int i = 0; i < kChannels; ++i) front(ch_[i], kpa[i], raw.mv[i]);
     for (int i = 0; i < kChannels; ++i) {
+      // Letku irti (ilmanpaineessa, muut imevät): kanava on kuollut kuten
+      // anturivian aikana ja asettuu takaisin kytkettäessä kRing näytettä.
+      // Takaisinkytkennän tasoaskel (koko alipaine) ei siten ole oma pulssi,
+      // todistaja eikä vertailukanavan pudotus muille.
       Chan& c = ch_[i];
-      const float o = ch_[(i + 1) % kChannels].y > ch_[(i + 2) % kChannels].y ? ch_[(i + 1) % kChannels].y : ch_[(i + 2) % kChannels].y;
-      if (c.primed && c.y > -kVentKpa && c.y - o > kVentKpa) {
+      const float a = ch_[(i + 1) % kChannels].y;
+      const float b = ch_[(i + 2) % kChannels].y;
+      if (c.primed && c.y > -kVentKpa && c.y - (a > b ? a : b) > kVentKpa) {
         c.settle = static_cast<uint32_t>(kRing);
         c.ready = false;
       }
@@ -709,6 +722,8 @@ class Dsp {
       c.own_d1 = c.own_d2 = 0.0f;
       c.chain = false;
       c.last_period = 0.0f;
+      // Moottori seis (ei pulssia millään): letkut voidaan kytkeä uudelleen,
+      // joten opittu järjestys unohdetaan; käynnissä vaihto kääntää sen.
       if (!ch_[0].pub.has_pulse && !ch_[1].pub.has_pulse && !ch_[2].pub.has_pulse) order_ = 0;
     }
 
@@ -723,6 +738,7 @@ class Dsp {
       // tahansa vaiheeseen, mutta lukitus vaatii kolme samankokoista omaa pulssia.
       if (--c.settle == 0) c.armed = true;
       c.wait_rise = false;
+      // Vian ylittävä sykli ei kelpaa: sen integraalissa on vian näytteitä.
       c.chain = false;
       segReset(c.prev, c.y);
       segReset(c.cur, c.y);
@@ -979,6 +995,12 @@ class Dsp {
   // tunnetaan, jokaisen kanavan on osuttava juuri omaan paikkaansa - 2T-välissä
   // yksittäinen säilynyt merkki osuu toisen kanavan paikalle. Palauttaa
   // vahvistavien määrän tai -1; nl = elävät muut kanavat.
+  //
+  // dev = vahvistavan todistajan suurin poikkeama nopeuden muutoksella
+  // korjatusta paikasta. Kun kierrosnopeus muuttuu tasaisesti, jakso /
+  // edellinen oma väli = lr ja kulmanopeus syklin alussa ~(1 + (lr - 1) / 2)
+  // x keskimääräinen; kampi saavuttaa 1/3:n ja 2/3:n aikaisemmin
+  // (hidastuessa) siirtymällä (1 - lr) / 2 x s(1 - s) = (1 - lr) / 9.
   int confirm(int i, float a_new, float a_old, float period, int& nl, float& dev) {
     int np = 0, sum = 0;
     nl = 0;
@@ -1040,10 +1062,15 @@ class Dsp {
     // säilynyt merkki voi osua kiihdytyksen vinouttamana 0,1:n sisään;
     // kutistuva pulssi paljastaa tilanteen.
     if (np == 1 && c.pub.has_pulse && !similar(depth, c.own_d1)) return false;
+    // Yksi todistaja ei riitä pelkällä paikallaan: sen on osuttava
+    // nopeusmuutoksella korjattuun paikkaan (kSlotTolSingle). Ei koske
+    // sykliä, joka on epäilyttävä vain tauon vuoksi (jakso tavallinen,
+    // edellinen hylätty): edellinen oma väli ei silloin ennusta paikkaa
+    // (xtalk 0,5:n tuplablipissä letku irti has_pulse putosi).
     const float since = static_cast<float>(c.since_cycle);
     const bool slow = c.ref_period > 0.0f && period > kBothRatio * c.ref_period;
     const bool susp = slow || (c.ref_period > 0.0f && since > kBothRatio * c.ref_period);
-    if (np == 1 && kBothRatio * period >= c.last_period && (slow || !susp) && dev > kSlotTolSingle) return false;
+    if (np == 1 && (slow || !susp) && dev > kSlotTolSingle) return false;
     // Pitkä sykli tai pitkä tauko edellisestä hyväksytystä (viite vanhentunut,
     // esim. kaikki kanavat ohittivat pulsseja kaasunlisäyksessä): kaikki
     // elävät todistajat.
