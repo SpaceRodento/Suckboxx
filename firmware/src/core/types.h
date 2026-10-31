@@ -61,7 +61,10 @@ struct DspParams {
 };
 
 struct StatusParams {
-  uint8_t master = 0;            // D7, oletus SYL 1
+  // D7/D16 (31.10.2026): oletus SYL 3 = BF50A:n alin kaasutin, joka on Hondan
+  // synkronoinnin perus (docs/bf50a-huoltotiedot.md). NVS:ään tallennettu
+  // konfiguraatio ohittaa oletuksen (hal/nvs_store.cpp).
+  uint8_t master = 2;
   float tol_green_kpa = 1.5f;    // D2
   float tol_yellow_kpa = 3.0f;   // D2
   float off_kpa = 5.0f;          // rivit 1/8: kaikki |taso| alle tämän (kalibroimatonkin, D10)
@@ -154,7 +157,8 @@ struct StatusResult {
   bool show_bars = false;          // rivi 2: palkit piiloon
   bool show_verdict = false;       // vihreä/keltainen/punainen tuomio näkyvissä
   // Alipaine-ero masteriin: d = mean_master - mean_ch. Positiivinen = kanava
-  // imee enemmän kuin master (läppä suljetumpi) -> "avaa". Master = 0.
+  // imee enemmän kuin master (läppä suljetumpi) -> "avaa". Masterin oma d = 0
+  // (indeksi StatusParams::master, ei kiinteästi SYL 1).
   float vac_delta_kpa[kChannels] = {0.0f, 0.0f, 0.0f};
   float spread_kpa = 0.0f;         // max(d) - min(d)
   int8_t worst_ch = -1;            // suurin |d| ei-master-kanavista

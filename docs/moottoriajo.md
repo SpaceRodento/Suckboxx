@@ -11,8 +11,11 @@ Tämä on veneelle tulostettava tai puhelimessa pidettävä ohje roadmapin vaihe
 Ajopäivä: ________ (esimerkeissä 7.11.2026; vaihda päivämäärä tiedostonimiin).
 Tekijät: ________ Paikka (traileri / vesillä): ________ Ilman lämpötila: ______ °C
 
-Merkinnät: ☐ = tarkistettava kohta. **Varmistettava huolto-ohjeesta** = arvo, jota repossa ei
-ole. Sitä ei arvata, vaan katsotaan Hondan huolto-ohjeesta ennen ajoa.
+Merkinnät: ☐ = tarkistettava kohta. Hondan arvot ovat lähteineen ja luotettavuusluokkineen
+(A = Honda, B = huoltolähde, C = foorumi) tiedostossa [bf50a-huoltotiedot.md](bf50a-huoltotiedot.md)
+(verkosta 31.10.2026, ei korvaa Hondan korjaamokäsikirjaa). **Varmistettava** = arvo, jota
+lähteistä ei löytynyt tai joka on vain B- tai C-tasoa. Sitä ei arvata, vaan se tarkistetaan
+käsikirjasta tai moottorilta ennen ajoa.
 
 ---
 
@@ -37,13 +40,17 @@ Jatko.md:n "Raudan arvio" kohdat 1–5 sekä adapterit. Halpoja, ja ilman niitä
 - ☐ **Identtiset lyhyet letkut** (R1): sama sisähalkaisija, sama pituus ±2 cm, sama materiaali,
   leikattu samasta rullasta samalla kertaa. Mukaan lukien kotelon sisäletkut (rauta.md §4.2).
   Kirjaa letkujen pituus: ______ cm (tarvitaan resonanssin päätöspisteessä, kohta 6.2).
-- ☐ **Letkunipat synkronointitulppien tilalle**, kolme kappaletta, ja kuparialuslevyt. Kierre on
-  todennäköisesti M6, mutta **varmistettava** (D6, hankinnat.md §4): irrota yksi tulppa ja
-  kokeile M6×1,0- ja M5×0,8-muttereita ennen kuin tilaat.
+- ☐ **Letkunipat synkronointitulppien tilalle**, kolme kappaletta, ja **5 mm:n tiivisteet**.
+  Tulppa on 5 × 10 mm:n ristipääruuvi (B), eli kierre **M5, ei M6**. Nousu (oletus M5×0,8) on
+  **varmistettava** (D6, hankinnat.md A5 ja §4): irrota yksi tulppa ja kokeile M5×0,8-mutteria
+  ennen kuin tilaat.
+- ☐ **Pienet letkunpuristimet SE-letkuille** (rikastimen letkut kaasuttimien välillä). Ne
+  puristetaan kiinni ennen mittausta (B). Sijainti ja puristuskohdat **varmistettava** moottorilta.
 - ☐ Kotelo ei ole ilmatiivis (R5): anturin kyljen tasausreikä on nollareferenssi (rauta.md §4.3).
-- ☐ Letkut merkitty SYL 1 / SYL 2 / SYL 3. Mikä sylinteri on SYL 1 ja mikä kaasutin on kiinteä
-  perus (master, D7): **varmistettava huolto-ohjeesta** (D6). Oletus SYL 1 = master säilyy, kunnes
-  se on tarkistettu.
+- ☐ Letkut merkitty SYL 1 / SYL 2 / SYL 3 Hondan kaasutinnumeroiden mukaan: No. 1 = ylin,
+  No. 3 = alin. Alin kaasutin No. 3 on kiinteä perus eli master (A + B, D7/D16), ja laitteen
+  oletusmaster on SYL 3. **Varmistettava moottorilta:** osaluettelon "(CARBURETOR NO.)" ja se,
+  ettei alimmassa kaasuttimessa ole synkronointiruuvia.
 - ☐ Firmware `esp32dev_adc` flashattu (jatko.md, oraakkelit), huoltosivulla lähde ADC.
 
 **Kotona ennen lähtöä (penkkitesti kolmella letkulla).** Penkkitestissä 31.10.2026 SYL 3 ei
@@ -66,17 +73,23 @@ kotona valmiiksi (Git Bash): `SAN=0 bash tools/replay/build.sh` → `tools/repla
 
 - ☐ **Jäähdytysvesi.** Moottoria ei käytetä kuivana sekuntiakaan. Trailerilla tai telineessä
   huuhtelukupit (vesiletku) paikalleen ja vesi auki ennen käynnistystä, tai moottori vedessä.
-  Tarkista heti käynnistyksen jälkeen, että jäähdytysveden tarkkailusuihku virtaa. Saako
-  huuhtelukupeilla käyttää korotettuja kierroksia (kohdan 4 vaiheet 6–8) ja kuinka kauan:
-  **varmistettava huolto-ohjeesta**. Jos ohje kieltää, tee tasaiset kierrokset vesillä.
+  Tarkista heti käynnistyksen jälkeen, että jäähdytysveden tarkkailusuihku virtaa; jos se ei
+  virtaa, sammuta heti (A).
+- ☐ **Huuhtelukupeilla vain vapaalla ja tyhjäkäynnillä** (A, Honda PCI54237: "Running the engine
+  above idle speed can damage the water pump and overheat the engine."). Kuppien kanssa ylempi
+  vedenotto teipataan, ja kupin on peitettävä sivuaukot kokonaan (A). **Korotetut kierrokset
+  (kohdan 4 vaiheet 6–8) vain testisäiliössä tai vesillä**, ei huuhtelukupeilla. Hondan ohje
+  synkronoi testisäiliössä, jossa vesi on vähintään noin 10 cm (4") kavitaatiolevyn yläpuolella (B).
 - ☐ **Vapaa-asento** ennen käynnistystä ja koko ajan. Trailerilla potkuri on vapaana, eikä
-  sen lähellä saa olla ketään. Vesillä vene kiinni laiturissa.
+  sen lähellä saa olla ketään. Lähteissä potkuri irrotetaan koekäytön ajaksi
+  (bf50a-huoltotiedot.md, kohta 7; A + B). Vesillä vene kiinni laiturissa.
 - ☐ **Sammutusnaru** (hätäkatkaisin) kiinni käyttäjään ja kokeiltu ennen ajoa.
 - ☐ **Johdot ja letkut pois liikkuvista osista.** Synkronointi tehdään kansi auki, jolloin
   vauhtipyörä ja muut pyörivät osat ovat paljaina. Reititä anturiletkut, USB-kaapeli ja
   laitteen johdot nippusiteillä niin, etteivät ne voi osua vauhtipyörään, vipuihin tai
   pakosarjan kuumiin osiin. Ei löysiä vaatteita, hihoja tai hiuksia. Kuulonsuojaimet.
-- ☐ **Tuuletus.** Vain ulkona, ei suljetussa tilassa (pakokaasu).
+- ☐ **Tuuletus.** Vain ulkona, ei suljetussa tilassa: pakokaasun hiilimonoksidi voi aiheuttaa
+  tajuttomuuden ja kuoleman (A). Lapset ja lemmikit kauemmas.
 - ☐ **Polttoaine.** Ei avotulta, ei tupakointia. Sammutin lähellä. Kannettava ja virtapankki
   irti polttoainesäiliöstä ja -letkuista. Tulppia ja nippoja vaihdetaan vain moottori
   sammuksissa.
@@ -99,7 +112,11 @@ katoaa laitteen uudelleenkäynnistyksessä (huoltosivun ohje).
    `python -m serial.tools.list_ports -v` ja `--port COMx`.
 4. ☐ **Puhelin** Wi-Fi-verkkoon `Suckboxx` (salasana `alipaine123`, `firmware/src/hal/hal_config.h`)
    ja selaimella `http://192.168.4.1/`. Huoltosivulla (`#huolto`) lähde ADC. Diagnostiikasta
-   aukot 0.
+   aukot 0. ☐ **Varmista, että master on SYL 3** (D16): `MASTER`-merkki SYL 3:n kortissa tai
+   huoltosivulla `Master-sylinteri` = 2. Oletus on SYL 3, mutta NVS:ään tallennetut asetukset
+   ohittavat oletukset: laite, jolle on joskus tallennettu asetuksia, pitää masterin SYL 1:ssä.
+   Korjaa napauttamalla SYL 3:n korttia kahdesti tai huoltosivulta (`Palauta oletukset`
+   palauttaa myös muut asetukset).
 5. ☐ Yhteystesti kannettavalta: `mkdir -p data/raw/2026-11-07` ja 5 s:n tallenne (kohta 4,
    vaihe 0). Sitten lepo ennen nollausta, letkut ilmassa (vaihe 1a): anturien omat offsetit
    talteen.
@@ -109,7 +126,9 @@ katoaa laitteen uudelleenkäynnistyksessä (huoltosivun ohje).
    40–60 kPa alipaine, odota lukeman asettumista, **Kalibroi vahvistus** ja pidä paine tasaisena
    2 s (huoltosivun ohje; hyväksymisrajat calibration.h: |paine| ≥ 15 kPa, hajonta < 0,5 kPa,
    kanavat 15 %:n sisällä toisistaan). Tallenna samalla (kohta 4, vaihe 2).
-8. ☐ Tulpat irti, nipat ja kuparialuslevyt tilalle, letkut kiinni oikeisiin sylintereihin.
+8. ☐ Tulpat (5 × 10 mm) irti, nipat ja 5 mm:n tiivisteet tilalle, letkut kiinni oikeisiin
+   sylintereihin (SYL 1 = ylin, SYL 3 = alin). Tunnista SE-letkut ja pidä puristimet valmiina:
+   ne puristetaan kiinni vasta lämpimällä moottorilla ennen mittausta (§4, ennen vaihetta 4).
 9. ☐ **Nollaus 2 (D11) moottorilla:** moottori seis, letkut kiinni. Sammuneen moottorin imusarja on
    ilmanpaineessa (huoltosivun ohje), joten **Nollaa** uudelleen. Laite nollaa myös itse, kun
    moottori on ollut sammuksissa muutaman sekunnin (rivi 1). Tallenna lepo (kohta 4, vaihe 1).
@@ -135,27 +154,61 @@ jokaisen vakaan vaiheen lopussa.
 | 1a | lepo ennen nollausta, letkut ilmassa | 30 s | `--seconds 30 --out data/raw/2026-11-07/2026-11-07_lepo_ennen_nollausta.csv` | `_lepo_ennen_nollausta.csv` | tila "Ei alipainesignaalia", mV-lukemat | kellonaika, lämpötila |
 | 1b | lepo nollattuna, letkut moottorissa | 30 s | `--seconds 30 --out data/raw/2026-11-07/2026-11-07_lepo.csv` | `_lepo.csv` | "Nollaus: tehty ✓", Δ ≈ 0 | nollattu klo ____ |
 | 2 | vahvistuskalibrointi T-haarassa (jos mukana) | 60 s | `--seconds 60 --out data/raw/2026-11-07/2026-11-07_vahvistus_t_haara.csv` | `_vahvistus_t_haara.csv` | kalibroinnin viesti, kanavaerot ennen ja jälkeen | paine kPa, onnistuiko |
-| 3 | kylmäkäynnistys ja lämpeneminen (aloita ennen käynnistystä) | 600 s | `--seconds 600 --out data/raw/2026-11-07/2026-11-07_kylmakaynnistys_lampeneminen.csv` | `_kylmakaynnistys_lampeneminen.csv` | tila (ei signaalia → tasaantuu → tuomio), rpm, ensimmäinen värituomio | käynnistys klo, rikastin pois klo (jos käsikäyttöinen), milloin joutokäynti tasainen, sammumiset |
-| 4 | lämmin joutokäynti 1 (ruuveihin ei kosketa) | 60 s | `--seconds 60 --out data/raw/2026-11-07/2026-11-07_joutokaynti_lammin_1.csv` | `_joutokaynti_lammin_1.csv` | tila ja väri, Δ2, Δ3, rpm ± hajonta, kanavan "pulssi · leikkautuu" (rivi 10) | Δ2, Δ3 ja rpm 30 s:n kohdalla |
+| 3 | kylmäkäynnistys ja lämpeneminen (aloita ennen käynnistystä; lämmitys noin 10 min, A + B) | 600 s | `--seconds 600 --out data/raw/2026-11-07/2026-11-07_kylmakaynnistys_lampeneminen.csv` | `_kylmakaynnistys_lampeneminen.csv` | tila (ei signaalia → tasaantuu → tuomio), rpm, ensimmäinen värituomio | käynnistys klo, rikastin pois klo (jos käsikäyttöinen), milloin joutokäynti tasainen, sammumiset |
+| 4 | lämmin joutokäynti 1 (SE-letkut puristettu, ruuveihin ei kosketa) | 60 s | `--seconds 60 --out data/raw/2026-11-07/2026-11-07_joutokaynti_lammin_1.csv` | `_joutokaynti_lammin_1.csv` | tila ja väri, Δ1, Δ2 (master SYL 3), rpm ± hajonta, kanavan "pulssi · leikkautuu" (rivi 10) | Δ1, Δ2 ja rpm 30 s:n kohdalla (Honda: 950 ± 50 rpm vapaalla, A) |
 | 5 | lämmin joutokäynti 2 (n. 2 min myöhemmin) | 60 s | `--seconds 60 --out data/raw/2026-11-07/2026-11-07_joutokaynti_lammin_2.csv` | `_joutokaynti_lammin_2.csv` | sama kuin 4 | sama kuin 4 (toistettavuus) |
-| 6 | kaasunblippaukset ~2500 rpm:iin, 5 kpl 10 s:n välein | 60 s | `--seconds 60 --out data/raw/2026-11-07/2026-11-07_blippaukset.csv` | `_blippaukset.csv` | "Odota, käynti tasaantuu" ja paluu tuomioon, rpm:n seuranta | blippausten kellonajat |
-| 7 | tasainen 1500 rpm | 30 s | `--seconds 30 --out data/raw/2026-11-07/2026-11-07_tasainen_1500.csv` | `_tasainen_1500.csv` | tila, Δ:t, rpm | kierrosluku (myös erillinen kierroslukumittari, jos on) |
-| 8a | tasainen 2000 rpm | 30 s | `--seconds 30 --out data/raw/2026-11-07/2026-11-07_tasainen_2000.csv` | `_tasainen_2000.csv` | sama | sama |
-| 8b | tasainen 3000 rpm (rivi 9, D12:n yläraja) | 30 s | `--seconds 30 --out data/raw/2026-11-07/2026-11-07_tasainen_3000.csv` | `_tasainen_3000.csv` | "Säädä joutokäynnillä" (rivi 9) vai tuomio; vilkkuuko rajalla | sama |
-| 9 | sammutus (aloita joutokäynnillä, sammuta ~10 s kohdalla) | 60 s | `--seconds 60 --out data/raw/2026-11-07/2026-11-07_sammutus.csv` | `_sammutus.csv` | "Ei alipainesignaalia", huoltosivun viesti "Automaattinen nollaus tehty (moottori sammuksissa)" | sammutus klo, sekuntikellolla aika viestiin (simulaattorissa WP-9:n jälkeen ~4,1 s; ennen 5,6–8 s) |
+| 6 | kaasunblippaukset ~2500 rpm:iin, 5 kpl 10 s:n välein (**ei huuhtelukupeilla**) | 60 s | `--seconds 60 --out data/raw/2026-11-07/2026-11-07_blippaukset.csv` | `_blippaukset.csv` | "Odota, käynti tasaantuu" ja paluu tuomioon, rpm:n seuranta | blippausten kellonajat |
+| 7 | tasainen 1500 rpm (**ei huuhtelukupeilla**) | 30 s | `--seconds 30 --out data/raw/2026-11-07/2026-11-07_tasainen_1500.csv` | `_tasainen_1500.csv` | tila, Δ:t, rpm | kierrosluku (myös erillinen kierroslukumittari, jos on) |
+| 8a | tasainen 2000 rpm (**ei huuhtelukupeilla**) | 30 s | `--seconds 30 --out data/raw/2026-11-07/2026-11-07_tasainen_2000.csv` | `_tasainen_2000.csv` | sama | sama |
+| 8b | tasainen 3000 rpm (rivi 9, D12:n yläraja; **ei huuhtelukupeilla**) | 30 s | `--seconds 30 --out data/raw/2026-11-07/2026-11-07_tasainen_3000.csv` | `_tasainen_3000.csv` | "Säädä joutokäynnillä" (rivi 9) vai tuomio; vilkkuuko rajalla | sama |
+| 9 | sammutus (aloita joutokäynnillä, sammuta ~10 s kohdalla) | 60 s | `--seconds 60 --out data/raw/2026-11-07/2026-11-07_sammutus.csv` | `_sammutus.csv` | "Ei alipainesignaalia", huoltosivun viesti "Automaattinen nollaus tehty (moottori sammuksissa)" | sammutus klo, sekuntikellolla aika viestiin (simulaattorissa WP-9:n jälkeen ~4,1 s; ennen 5,6–8 s); jälkikäteen purkautumisen τ kanavittain (alla) |
 | 10 | synkronointiyritys (uudelleenkäynnistys, lämmin joutokäynti) | 300 s | `--seconds 300 --out data/raw/2026-11-07/2026-11-07_synkronointi_1.csv` | `_synkronointi_1.csv` | säätöohje (mikä SYL, avaa/sulje), Δ:t, väri | säätöloki alla |
-| 11 | valinnainen: letku irti (rivi 6), SYL 3:n letku irti **laitteen päästä** 10 s ja takaisin | 40 s | `--seconds 40 --out data/raw/2026-11-07/2026-11-07_letku_irti_syl3.csv` | `_letku_irti_syl3.csv` | "Kanava 3: ei alipainetta – tarkista letku" | irrotus ja kiinnitys klo |
+| 11 | valinnainen: letku irti (rivi 6), SYL 2:n letku irti **laitteen päästä** 10 s ja takaisin | 40 s | `--seconds 40 --out data/raw/2026-11-07/2026-11-07_letku_irti_syl2.csv` | `_letku_irti_syl2.csv` | `VIKA: SYL 2 – ei alipainetta, tarkista letku`, neuvo `Letku irti tai vuotaa – kytke ja tarkista liitokset` | irrotus ja kiinnitys klo |
 
-Vaiheet 7–8 vain, jos kohdan 2 jäähdytysveden ehto sallii (muuten vesillä). Vaiheessa 11
-imusarjaan pääsee irrotetun letkun kautta hetkeksi vuotoilmaa, joten joutokäynti voi muuttua;
-jätä väliin, jos käynti on muutenkin epävakaa.
+**SE-letkut ennen vaihetta 4** (B): kun moottori on lämmin (vaihe 3), sammuta se, purista
+kaasuttimien väliset SE-letkut kiinni ja käynnistä uudelleen. Ne pysyvät puristettuina vaiheiden
+4–11 ajan. Kylmäkäynnistys tehdään SE-letkut auki, koska SE on käynnistysrikastin (päätelmä).
+**Varmistettava moottorilta:** SE-letkujen sijainti ja puristuskohdat, ja onko SE-venttiili
+lämpimänä kiinni (C).
 
-**Synkronoinnin säätöloki (vaihe 10).** Säädä vain kaasutinta, jonka laite nimeää, ja vain jos
-master (kiinteä perus) on tarkistettu huolto-ohjeesta (D7). Pieni askel kerrallaan (esim. 1/8
-kierrosta), odota 5 s, kirjaa. Lopuksi ruuvit joko uudessa asennossa tai palautettu
-maalimerkkeihin.
+Vaiheet 6–8 (korotetut kierrokset) **vain testisäiliössä tai vesillä, ei huuhtelukupeilla**
+(A, Honda PCI54237, kohta 2). Huuhtelukupeilla ne jätetään väliin.
 
-| klo | kaasutin (SYL) | käännös (suunta, määrä) | Δ2 kPa | Δ3 kPa | väri | huom |
+**Vaihe 9: purkautumisen aikavakio τ** (katselmus
+[2026-10-31-status-wp9-wp10.md](katselmukset/2026-10-31-status-wp9-wp10.md) löydös 5). Kun
+pulssit loppuvat, letkuihin ja imusarjaan jäänyt alipaine purkautuu kohti nollaa. Lue
+`_sammutus.csv`:n kPa-sarakkeista kanavittain aika viimeisestä pulssista siihen, kun |paine| on
+laskenut 37 %:iin (1/e) alkuarvostaan: se on τ. Kirjaa τ1, τ2, τ3 = ____ s. **Jos τ > 15 s,**
+automaattisen nollauksen jäännös voi ylittää vihreän rajan 1,5 kPa (calibration.h:136, 1 s:n
+vakausikkuna): kirjaa se jatko.md:hen ja firmware.md §4.3:een päätöstä varten. EngineSim
+olettaa τ = 2 s.
+
+**Vaihe 11** irrottaa SYL 2:n letkun, koska SYL 2 ei ole master: tulos on rivi 6 (letkuvika)
+riippumatta siitä, onko master SYL 3 vai NVS:ään jäänyt SYL 1. Masterin (SYL 3) letkun irrotus
+antaisi rivin 12, `Master (SYL 3) ei kelpaa viitteeksi – valitse toinen`. Imusarjaan pääsee
+irrotetun letkun kautta hetkeksi vuotoilmaa, joten joutokäynti voi muuttua; jätä vaihe väliin,
+jos käynti on muutenkin epävakaa.
+
+**Synkronoinnin säätöloki (vaihe 10).** Master on SYL 3 = alin kaasutin No. 3, jossa ei ole
+synkronointiruuvia (A + B, D16); tarkista ennen säätöä, että `MASTER`-merkki on SYL 3:n kortissa
+(kohta 3, vaihe 4). Hondan säätöjärjestys (A + B):
+
+1. SE-letkut puristettu kiinni (yllä), tyhjäkäynti aina samoilla kierroksilla.
+2. **Ensin SYL 2** (No. 2, perusta lähin), **sitten SYL 1** (No. 1). Laite nimeää bannerissa
+   suurimman eron, joten säädä SYL 2:ta sen kortin luvun mukaan (`+X kPa`, imee enemmän → avaa;
+   `−X kPa`, imee vähemmän → sulje), kunnes se on lähellä nollaa, ja sitten SYL 1:tä.
+3. **1/8 kierrosta kerrallaan.** Jokaisen säädön jälkeen kaasu auki ja kiinni muutaman kerran,
+   sitten joutokäynnillä noin 5 s ja kirjaus.
+4. **Kiertosuunta:** ei löytynyt lähteistä (**varmistettava**). Käännä ensimmäisellä kerralla
+   1/8 kierrosta ja katso mittarista, kumpaan suuntaan Δ muuttuu; kirjaa suunta tähän:
+   avaa = ____________.
+5. Lopuksi ruuvit joko uudessa asennossa tai palautettu maalimerkkeihin, ja tyhjäkäynti
+   tarkistettu (950 ± 50 rpm vapaalla, A).
+
+Hondan raja on 20 mmHg ≈ 2,67 kPa (B). Se on keltaisella kaistalla: vihreä (≤ 1,5 kPa) täyttää
+sen aina, keltainen vain, jos spread on alle 2,67 kPa (D2, D16).
+
+| klo | kaasutin (SYL) | käännös (suunta, määrä) | Δ1 kPa | Δ2 kPa | väri | huom |
 |---|---|---|---|---|---|---|
 | | | | | | | |
 | | | | | | | |
@@ -179,14 +232,16 @@ python tools/sim_fit.py data/raw/2026-11-07/2026-11-07_joutokaynti_lammin_1.csv
 
 Lepo: offsetit ±2 kPa:n sisällä (R4), kohina samaa luokkaa kuin penkillä (3,5–4,1 mV RMS,
 jatko.md), ei vikakanavaa. Joutokäynti: kaikilla kanavilla hyväksyttyjä syklejä, rpm
-järkevä (tyhjäkäynti 850–950 rpm D6:n mukaan, **varmistettava huolto-ohjeesta**).
+järkevä (tyhjäkäynti 950 ± 50 rpm vapaalla, A, D6). Kanavaerot (Δ) lasketaan oletuksena
+SYL 3:a vasten kuten laitteessa (`--master 3`, D16).
 
 ## 5. Mitä työkalut kertovat
 
 - `tools/sim_fit.py <csv>`: EngineSimin parametrit `/api/sim`-lomakkeena (`rpm, jitter, base,
   err1..3, depth, res, xtalk, peak, noise`), kanavakohtaiset luvut (taso, huippu–huippu,
   mallin syvyys ja paluuaalto, ristivuoto +240°/+480°, resonanssi Hz ja dB, kohina), H1-rivit,
-  kanavaerot (Δ = master − kanava, 8 syklin keskiarvo kuten laite) ja huomiot. Parametri, jota ei
+  kanavaerot (Δ = master − kanava, 8 syklin keskiarvo kuten laite; `--master N`, oletus SYL 3
+  kuten laite) ja huomiot. Parametri, jota ei
   voi arvioida luotettavasti, on "Pois jätetyt" -listassa syineen. `--json` koko tulos,
   `--form` pelkkä lomake, `--start S --end S` ikkuna, `--zero-from lepo.csv` nollaus
   jälkikäteen, `--res-band 50 490` laajempi resonanssihaku, `--cal nominal` ilman otsakkeen
@@ -296,14 +351,16 @@ luvut asetetaan vaiheessa 4 nauhoitetun datan perusteella")?
   0,3 kPa), muuten väri vilkkuu.
 - Vaiheiden 4 ja 5 Δ:t ovat samat ilman säätöä (toistettavuus).
 - Kuinka pieni ero on käsin saavutettavissa (säätöloki), ja vastaako se mekaanisen mittarin
-  tulosta (roadmapin hyväksymiskriteeri §11)?
+  tulosta (roadmapin hyväksymiskriteeri §11)? Vertailuksi Hondan arvot: raja 20 mmHg ≈ 2,67 kPa
+  (B) ja saavutettavissa 0,5 inHg ≈ 1,7 kPa (A).
 
 ### 6.5 Tasauskanavat ja ristivuoto (D6)
 
 `sim_fit.py`:n rivi `ristivuoto +240° / +480°`: naapurisylinterin imun näkyminen kanavalla.
-Nolla = ei vuotoa. Selvästi nollasta poikkeava arvo viittaa tasauskanaviin (D6: "ei tiedossa").
-Jos +240° ja +480° eroavat, kanavat ovat vain osan sylintereistä välillä. Tämä on tietoa D2:n ja
-simulaattorin `xtalk`-arvon pohjaksi, ei toimenpide.
+Nolla = ei vuotoa. Kaasuttimien väliset SE-letkut on puristettu kiinni (D6, B), joten selvästi
+nollasta poikkeava arvo viittaa muihin tasauskanaviin tai vuotavaan puristukseen; muista
+kanavista ei ole lähdetietoa. Jos +240° ja +480° eroavat, kanavat ovat vain osan sylintereistä
+välillä. Tämä on tietoa D2:n ja simulaattorin `xtalk`-arvon pohjaksi, ei toimenpide.
 
 ## 7. Ajon jälkeen
 
@@ -312,7 +369,7 @@ simulaattorin `xtalk`-arvon pohjaksi, ei toimenpide.
 - ☐ Kopioi `data/raw/2026-11-07/` vähintään kahteen paikkaan (esim. muistitikku ja pilvi). Kansio
   ei ole gitissä.
 - ☐ Valokuvat käsilokista ja puhelimen näkymistä samaan kansioon.
-- ☐ Tulpat ja kuparialuslevyt takaisin, vuototarkistus.
+- ☐ SE-letkujen puristimet pois. Tulpat ja 5 mm:n tiivisteet takaisin, vuototarkistus.
 
 ### 7.2 EngineSim-parametrit (`tools/sim_fit.py`)
 
@@ -402,5 +459,6 @@ testien Python-generaattorilla (`tools/test_sim_fit.py`), eli mallit vastaavat t
 
 Ajon jälkeen (omistaja tai orkestroija) jatko.md:n "Laitteen tila" -osioon: kohinat ja offsetit
 lepotallenteesta, H1:n tulkinta, resonanssitaajuudet kanavittain, rpm-rajan havainto,
-automaattisen nollauksen aika, synkronoinnin lopputulos ja EngineSim-lomake. Päätökset
+automaattisen nollauksen aika ja purkautumisen τ kanavittain (vaihe 9), ruuvin kiertosuunta,
+synkronoinnin lopputulos ja EngineSim-lomake. Päätökset
 (H1, rivi 9, D2) päätöslokiin.

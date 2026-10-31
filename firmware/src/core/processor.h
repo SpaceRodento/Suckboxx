@@ -287,7 +287,7 @@ class Processor {
     return true;
   }
 
-  // POST /api/config/reset: oletukset (myös master = SYL 1 ja source = sim).
+  // POST /api/config/reset: oletukset (myös master = SYL 3, D16, ja source = sim).
   void resetConfig() {
     applyConfig(Config());
     config_dirty_ = true;

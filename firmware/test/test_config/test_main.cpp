@@ -82,7 +82,7 @@ static const Expect kExpect[] = {
     {"rpm_max", 7000.0f, [](const Config& c) { return c.dsp.rpm_max; }},
     {"pulse_timeout_s", 1.25f, [](const Config& c) { return c.dsp.pulse_timeout_s; }},
     {"rpm_hist", 24.0f, [](const Config& c) { return static_cast<float>(c.dsp.rpm_hist); }},
-    {"master", 2.0f, [](const Config& c) { return static_cast<float>(c.status.master); }},
+    {"master", 1.0f, [](const Config& c) { return static_cast<float>(c.status.master); }},
     {"tol_green_kpa", 1.25f, [](const Config& c) { return c.status.tol_green_kpa; }},
     {"tol_yellow_kpa", 2.5f, [](const Config& c) { return c.status.tol_yellow_kpa; }},
     {"off_kpa", 6.0f, [](const Config& c) { return c.status.off_kpa; }},
@@ -261,10 +261,10 @@ void test_defaults_in_range_and_valid() {
   char err[160] = "x";
   TEST_ASSERT_TRUE_MESSAGE(sbx::configValidate(c, err, sizeof(err)), err);
   TEST_ASSERT_EQUAL_STRING("", err);
-  // Päätösloki: D2, D7, D9, D10, D12, D14.
+  // Päätösloki: D2, D7/D16, D9, D10, D12, D14.
   TEST_ASSERT_EQUAL_FLOAT(1.5f, sbx::configGet(c, sbx::configFindField("tol_green_kpa")));
   TEST_ASSERT_EQUAL_FLOAT(3.0f, sbx::configGet(c, sbx::configFindField("tol_yellow_kpa")));
-  TEST_ASSERT_EQUAL_FLOAT(0.0f, sbx::configGet(c, sbx::configFindField("master")));
+  TEST_ASSERT_EQUAL_FLOAT(2.0f, sbx::configGet(c, sbx::configFindField("master")));  // D7/D16: SYL 3
   TEST_ASSERT_EQUAL_FLOAT(15.0f, sbx::configGet(c, sbx::configFindField("push_rate_hz")));
   TEST_ASSERT_EQUAL_FLOAT(5.0f, sbx::configGet(c, sbx::configFindField("off_kpa")));
   TEST_ASSERT_EQUAL_FLOAT(500.0f, sbx::configGet(c, sbx::configFindField("sync_rpm_min")));
@@ -446,6 +446,7 @@ void test_set_text_integer_and_enum_fields() {
   TEST_ASSERT_TRUE(c.source == sbx::SourceKind::Adc);
   TEST_ASSERT_EQUAL_INT(R(SetResult::OutOfRange), R(setText(c, "source", "3")));
   TEST_ASSERT_TRUE(c.source == sbx::SourceKind::Adc);
+  c.status.master = 0;   // oletus on 2 (D16): lähtö eri kuin asetettava arvo
   TEST_ASSERT_EQUAL_INT(R(SetResult::Ok), R(setText(c, "master", "2")));
   TEST_ASSERT_EQUAL_UINT8(2, c.status.master);
   TEST_ASSERT_EQUAL_INT(R(SetResult::OutOfRange), R(setText(c, "master", "3")));

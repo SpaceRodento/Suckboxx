@@ -267,6 +267,11 @@ const SIM_DEFAULTS = 'engine_on=1&rpm=850&jitter=0.01&drift=0&base=-55&err1=0&er
   await page.waitForFunction(() => document.getElementById('banner').getAttribute('data-state'), null, { timeout: 10000 });
   check(await page.isVisible('#simbar'), 'SIMULAATTORI-palkki näkyy kun src=sim');
   await post('/api/config/reset', '');
+  // D7/D16: oletusmaster on SYL 3 (BF50A:n alin kaasutin). Alla olevat skenaariot (rivi 12
+  // SYL 1:n letkulla, masterin vaihto) on kirjoitettu SYL 1 -masterille, joten se kiinnitetään.
+  const cfg0 = await getJson('/api/config');
+  check(cfg0.fields.find((f) => f.key === 'master').value === 2, 'oletusmaster on SYL 3 (D16)');
+  await post('/api/master', 'ch=0');
   await post('/api/sim', SIM_DEFAULTS);
 
   // Tuore laite on kalibroimaton. Jos KALIBROIMATON-merkki puuttuu, laite on jo nollattu
@@ -596,7 +601,7 @@ const SIM_DEFAULTS = 'engine_on=1&rpm=850&jitter=0.01&drift=0&base=-55&err1=0&er
   // UI toistaa laitteen neuvon (act-kenttä, WP-10), ei johda sitä luvuista eikä jäsennä tekstiä:
   // kehys ja AVAA/SULJE seuraavat act-kenttää.
   await synthView('luvut vihjaavat säätöön (ero 2,4 > raja) mutta laite ei neuvo -> ei kehystä eikä AVAA/SULJE',
-    snap({ state: 'near', head: 'Lähellä – kalibroimaton', advice: 'Nollaus puuttuu – irrota letkut ja tee nollaus',
+    snap({ state: 'near', head: 'Lähellä – kalibroimaton', advice: 'Nollaus puuttuu – sammuta moottori ja paina Nollaa',
       spread: 2.4, worst: 1, flags: { sat: false, uncal_zero: true, uncal_gain: false, drift: false },
       ch: [chan(0), chan(2.4), chan(0)] }), (v) =>
       v.acts.length || v.worst.length ? ['AVAA/SULJE tai kehys vaikka laite ei neuvo: ' + JSON.stringify(v.acts)] : []);

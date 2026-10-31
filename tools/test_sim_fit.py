@@ -199,7 +199,8 @@ class SimFitTest(unittest.TestCase):
         """EngineSimin oletukset (850 rpm, syvyys 20, resonanssi 3 kPa @ 112 Hz)."""
         err = (0.0, 0.8, -1.2)
         mv = simulate(30, err=err, seed=3)
-        o = self.run_fit("idle", mv)
+        # Δ:n odotus on kirjoitettu SYL 1 -masterille; oletus on nyt SYL 3 (D16).
+        o = self.run_fit("idle", mv, master=0)
         p = o["params"]
         self.assertEqual(o["mode"], "running")
         self.near(p["rpm"], 850, 850 * 0.005, "rpm")
@@ -448,6 +449,22 @@ class SimFitTest(unittest.TestCase):
                 self.assertTrue({"rpm", "depth", "noise", "taso1"} <= seen, seen)
 
     # --- lomake ja CLI --------------------------------------------------
+
+    def test_constants_mirror_types_h(self):
+        """sim_fitin rajat ja masterin oletus ovat types.h:n peilejä: rivi 7 (D15:
+        150 / 2950 mV), rivi 10 (sat_mv) ja master (D7/D16: SYL 3). WP-15 muutti
+        types.h:n rajat, ja tämä peili jäi vanhaksi; testi estää saman toiston."""
+        import re
+        th = (HERE.parent / "firmware" / "src" / "core" / "types.h").read_text(encoding="utf-8")
+
+        def member(name):
+            m = re.search(r"^\s*[\w:]+\s+" + name + r"\s*=\s*(\d+)\s*;", th, re.M)
+            self.assertIsNotNone(m, name)
+            return int(m.group(1))
+        self.assertEqual(sim_fit.FAULT_LO_MV, member("fault_lo_mv"))
+        self.assertEqual(sim_fit.FAULT_HI_MV, member("fault_hi_mv"))
+        self.assertEqual(sim_fit.SAT_MV, member("sat_mv"))
+        self.assertEqual(sim_fit.MASTER, member("master"))
 
     def test_form_keys_and_ranges(self):
         params = {"engine_on": 1, "rpm": 851.26, "jitter": 0.0123456, "base": -120.0,

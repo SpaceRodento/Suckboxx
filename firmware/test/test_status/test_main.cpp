@@ -100,13 +100,24 @@ void sensorFault(StatusInput& in, int ch, uint16_t mv) {
   in.ch[ch].level_kpa = (static_cast<float>(mv) - 2700.0f) / 25.0f;
 }
 
+// Testien odotukset (neuvotekstien "kuin SYL 1", vac_delta, rivi 12 kanavalla 0)
+// on kirjoitettu SYL 1 -masterille, joka oli D7:n oletus. D16 (31.10.2026)
+// vaihtoi oletuksen SYL 3:een, joten SYL 1 kiinnitetään tässä eksplisiittisesti:
+// testit testaavat samaa kuin ennen. Oletusta itseään testaavat test_types ja
+// test_processor (test_default_master_is_syl3_D16).
+StatusParams params() {
+  StatusParams p;
+  p.master = 0;
+  return p;
+}
+
 struct Rig {
   StatusMachine sm;
   float t = 0.0f;
   int zero_requests = 0;
   StatusResult last;
 
-  void begin(const StatusParams& p = StatusParams()) {
+  void begin(const StatusParams& p = params()) {
     sm.configure(p);
     t = 0.0f;
     zero_requests = 0;
@@ -334,7 +345,7 @@ void test_row1_no_auto_zero_in_fault_state_even_near_zero() {
 // vakausporttia: tason vaihteluväli 1 s:n ikkunassa < zero_settle_kpa. Raja
 // on tiukka (<) ja koskee jokaista kanavaa. Ikkuna nollautuu configure():ssa.
 void test_row1_settle_gate_edges() {
-  const StatusParams def;
+  const StatusParams def = params();
   // Yksi kanava värähtelee juuri rajan yli: ei nollausta koskaan.
   const float swing = def.zero_settle_kpa + 0.01f;
   for (int k = 0; k < 200; ++k) {
@@ -353,7 +364,7 @@ void test_row1_settle_gate_edges() {
   }
   TEST_ASSERT_FLOAT_WITHIN(1e-4f, def.off_hold_s, t_fire);
   // Ikkuna vaatii koko sekunnin historiaa: off_hold_s < 1 s ei nollaa ennen sitä.
-  StatusParams quick;
+  StatusParams quick = params();
   quick.off_hold_s = 0.5f;
   g.begin(quick);
   t_fire = -1.0f;
@@ -384,7 +395,7 @@ void test_row1_level_just_outside_off_kpa_blocks_zero() {
 }
 
 void test_row1_auto_zero_disabled() {
-  StatusParams p;
+  StatusParams p = params();
   p.auto_zero = false;
   g.begin(p);
   StatusResult r = g.run(engineOff(), 20.0f);
@@ -461,7 +472,7 @@ void test_stability_timer_gates_verdict() {
 }
 
 void test_stable_hold_zero_gives_immediate_verdict() {
-  StatusParams p;
+  StatusParams p = params();
   p.stable_hold_s = 0.0f;
   g.begin(p);
   StatusResult r = g.step(idleSynced());
@@ -605,7 +616,7 @@ void test_advice_direction_follows_sign() {
 }
 
 void test_worst_channel_tie_and_master_excluded() {
-  StatusParams p;
+  StatusParams p = params();
   p.master = 2;
   g.begin(p);
   // d0 = -55 - (-57) = +2, d1 = -55 - (-53) = -2: tasapeli -> pienempi indeksi.
@@ -631,7 +642,7 @@ void test_master_selection_changes_deltas_and_advice() {
   const float d[3][3] = {{0.0f, 1.0f, -2.0f}, {-1.0f, 0.0f, -3.0f}, {2.0f, 3.0f, 0.0f}};
   const int worst[3] = {2, 2, 1};
   for (int m = 0; m < 3; ++m) {
-    StatusParams p;
+    StatusParams p = params();
     p.master = static_cast<uint8_t>(m);
     g.begin(p);
     StatusResult r = settle(in);
@@ -648,7 +659,7 @@ void test_master_selection_changes_deltas_and_advice() {
 }
 
 void test_invalid_master_index_falls_back_to_syl1() {
-  StatusParams p;
+  StatusParams p = params();
   p.master = 7;
   g.begin(p);
   TEST_ASSERT_EQUAL_INT(0, g.sm.master());
@@ -707,7 +718,7 @@ float lcgUnit() {
 // Ikkunan tarkkuus ja historiavaatimus testataan tällä; suodatettu oletus
 // (WP-9) omissa testeissään (test_row5_drift_filter_*).
 StatusParams unfiltered() {
-  StatusParams p;
+  StatusParams p = params();
   p.drift_tau_s = 0.0f;
   return p;
 }
@@ -800,7 +811,7 @@ void test_row5_drift_step_needs_full_window_of_history() {
 // e^-4 = 0,24 rpm 26 rpm/s:lla). 60 rpm / 2 s liputtaa, 20 rpm / 2 s ei
 // (WP-9-tehtävä, docs/paketit.md), ja raja on tarkka kuten ilman suodatusta.
 void test_row5_drift_filter_keeps_threshold_and_rates() {
-  const StatusParams def;
+  const StatusParams def = params();
   TEST_ASSERT_GREATER_THAN_FLOAT(0.0f, def.drift_tau_s);   // oletus suodattaa
   const float settle = 4.0f * def.drift_tau_s;
   int flagged = 0, counted = 0;
@@ -837,7 +848,7 @@ void test_row5_drift_filter_keeps_threshold_and_rates() {
 // jolloin 50,4 rpm / 2 s näkyisi 49,4:nä ja 49,6 voisi näkyä yli 50:n.
 // First-order hold suodattaa rampin tarkasti, joten raja pysyy.
 void test_row5_drift_filter_exact_when_update_rate_changes() {
-  const StatusParams def;
+  const StatusParams def = params();
   const float slopes[] = {25.2f, 24.8f};   // 50,4 ja 49,6 rpm / 2 s
   for (float slope : slopes) {
     g.begin(def);
@@ -871,7 +882,7 @@ void test_row5_drift_filter_rejects_update_noise() {
   g_lcg = 99u;
   driftRun(0.0f, 0.0625f, 0.0625f, 30.0f, flagged, counted, unfiltered());
   TEST_ASSERT_GREATER_THAN(0, flagged);   // ongelma: suodattamaton reagoi kohinaan
-  const StatusParams def;
+  const StatusParams def = params();
   g_lcg = 99u;
   driftRun(0.0f, 0.0625f, 0.0625f, 30.0f, flagged, counted, def);
   TEST_ASSERT_GREATER_THAN(100, counted);
@@ -1037,7 +1048,7 @@ StatusInput hoseAtEdge(int k) {
 void test_row6_hose_fault_does_not_flicker_at_threshold() {
   // Ennen (hose_hyst_kpa = 0, WP-4:n käytös): VIKA <-> "Odota" off_hold_s:n
   // sisällä ja otsikko "ei alipainetta" <-> "ei pulssia" sen jälkeen.
-  StatusParams p;
+  StatusParams p = params();
   p.hose_hyst_kpa = 0.0f;
   g.begin(p);
   settle(idleSynced());
@@ -1069,7 +1080,7 @@ void test_row6_hose_fault_does_not_flicker_at_threshold() {
 }
 
 void test_row6_hysteresis_exit_and_reentry() {
-  const StatusParams def;
+  const StatusParams def = params();
   const float exit_kpa = def.hose_off_kpa + def.hose_hyst_kpa;   // 2,2
   StatusInput in = idleSynced();
   settle(in);
@@ -1107,7 +1118,7 @@ void test_row6_hysteresis_exit_and_reentry() {
 // Hystereesialueella (2,0-2,2 kPa) oleva kanava ei siksi palaa "irti"-tilaan,
 // vaan sisääntulosääntö pätee alusta: ensin "odota", off_hold_s:n jälkeen tukos.
 void test_row6_hysteresis_memory_cleared_by_configure() {
-  const StatusParams def;
+  const StatusParams def = params();
   StatusInput in = idleSynced();
   settle(in);
   dropPulse(in, 1, -1.5f);
@@ -1116,7 +1127,7 @@ void test_row6_hysteresis_memory_cleared_by_configure() {
   dropPulse(in, 1, -(def.hose_off_kpa + 0.1f));   // hystereesialueella: pysyy "irti"
   r = g.step(in);
   TEST_ASSERT_EQUAL_STRING("VIKA: SYL 2 – ei alipainetta, tarkista letku", r.headline);
-  StatusParams p;
+  StatusParams p = params();
   p.master = 2;
   g.sm.configure(p);
   r = g.run(in, 1.0f);
@@ -1319,13 +1330,16 @@ void test_d11_never_green_without_zero() {
 }
 
 void test_d11_manual_zero_advice_and_red_stays_red() {
-  StatusParams p;
+  StatusParams p = params();
   p.auto_zero = false;
   g.begin(p);
   StatusInput in = running(-55.0f, -55.2f, -54.8f);
   in.zero_valid = false;
   StatusResult r = settle(in);
-  TEST_ASSERT_EQUAL_STRING("Nollaus puuttuu – irrota letkut ja tee nollaus", r.advice);
+  // Ei "irrota letkut": tuomio näkyy vain käyvällä moottorilla, ja irrotettu
+  // letku päästää imusarjaan vuotoilmaa (docs/kayttoohje.md §1, moottoriajo.md §2).
+  TEST_ASSERT_EQUAL_STRING("Nollaus puuttuu – sammuta moottori ja paina Nollaa", r.advice);
+  assertTextSane(r);
   // Keltainen ja punainen pysyvät, otsikko kertoo kalibroimattomuuden.
   in = running(-55.0f, -55.3f, -57.1f);
   in.zero_valid = false;
@@ -1364,7 +1378,7 @@ void test_row12_master_sensor_fault() {
 void test_row12_master_hose_off_depends_on_master_choice() {
   StatusInput in = idleSynced();
   dropPulse(in, 1, -0.3f);
-  StatusParams p;
+  StatusParams p = params();
   p.master = 1;
   g.begin(p);
   StatusResult r = hoseHold(in);
@@ -1527,7 +1541,7 @@ void test_text_extreme_values_fit() {
   assertTextSane(r);
 
   // Rivi 9 suurimmalla konfiguroitavalla rajalla ja järjettömällä rpm:llä.
-  StatusParams p;
+  StatusParams p = params();
   p.sync_rpm_max = 12000.0f;
   g.begin(p);
   r = g.step(running(-30.0f, -30.0f, -30.0f, 1.0e9f));
@@ -1563,7 +1577,7 @@ void test_text_extreme_values_fit() {
   assertTextSane(r);
 
   // Pisin odotusteksti: stable_hold_s konfiguraation ylärajalla.
-  p = StatusParams();
+  p = params();
   p.stable_hold_s = 30.0f;
   g.begin(p);
   r = g.run(idleSynced(), 29.9375f);
@@ -1571,7 +1585,7 @@ void test_text_extreme_values_fit() {
   assertTextSane(r);
 
   // Matala rpm: alarajan konfiguraation ylärajalla.
-  p = StatusParams();
+  p = params();
   p.sync_rpm_min = 3000.0f;
   p.sync_rpm_max = 12000.0f;
   g.begin(p);
@@ -1650,7 +1664,7 @@ void test_decimal_comma_formatting() {
 void test_configure_resets_timers() {
   StatusResult r = settle(idleSynced());
   TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::Synced), static_cast<int>(r.state));
-  StatusParams p;
+  StatusParams p = params();
   p.master = 1;   // esim. master vaihdettiin UI:sta (D7)
   g.sm.configure(p);
   r = g.step(idleSynced());
@@ -1708,6 +1722,8 @@ void test_deterministic() {
   // -> bitilleen samat tulokset.
   StatusMachine a;
   StatusMachine b;
+  a.configure(params());
+  b.configure(params());
   g_lcg = 99u;
   float t = 0.0f;
   int requests = 0;

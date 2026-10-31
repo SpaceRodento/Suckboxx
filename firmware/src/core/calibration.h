@@ -131,7 +131,7 @@ inline CalResult computeZero(const float (&nominal_level)[kChannels],
   return computeZero(nominal_level, max_abs_kpa, cal);
 }
 
-// Vakausikkuna: 1 s. EHDOTUS (WP-9), ei päätöslokissa. Raja zero_settle_kpa
+// Vakausikkuna: 1 s (WP-9), hyväksytty alustavasti 31.10.2026 (D15). Raja zero_settle_kpa
 // (oletus 0,1 kPa, S5a) on vaihteluväli tämän ikkunan aikana, eli tason
 // liike enintään ~0,1 kPa/s - sama kulmakerroin kuin WP-4:n kaistassa
 // (0,3 kPa / 3 s). Lyhyempi ikkuna kuin off_hold_s, jotta vakausehto kulkee

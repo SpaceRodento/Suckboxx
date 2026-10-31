@@ -37,7 +37,7 @@ tallennus RPM-laskentaan (ks. [rauta.md](rauta.md) §1.6).
 | A2 | Silikoniletku | 3 m | **sisähalkaisija 2,5 mm**, ulkohalkaisija 5–6 mm | ~5 € |
 | A3 | Läpivientinippa (bulkhead) | 3 | M5 tai ⌀4 mm letkulle, kotelon seinään | ~2 €/kpl |
 | A4 | Letkunkiristimet / nippusiteet | 12 | pienet, ⌀5–8 mm | ~3 € |
-| A5 | Letkunippa synkronointitulpan tilalle | 3 (+1 vara) | Honda BF50A: messinkinen kierrenippa **M6×1,0 (varmista! ks. §4)** × ⌀3 mm letkulle + kuparitiiviste | ~2–4 €/kpl |
+| A5 | Letkunippa synkronointitulpan tilalle | 3 (+1 vara) | Honda BF50A: messinkinen kierrenippa **M5×0,8 (nousu varmistettava! ks. §4)** × ⌀3 mm letkulle + **5 mm:n tiiviste** (alkuperäinen 90452-323-000) | ~2–4 €/kpl |
 
 ⚠ **A2 on R1:n toteutus.** Osta yksi rulla ja leikkaa kolme identtistä pätkää samalla kertaa.
 Älä osta kolmea eri letkua.
@@ -153,9 +153,14 @@ AliExpress-laadun arpominen ei kannata.
 
 ## 4. D6 — moottori: Honda BF50A (~2004)
 
-**Ratkaistu 30.10.2026:** kolme kaasutinta, imusarjassa valmiit synkronointitulpat, kierre
-todennäköisesti M6. **Ennen A5:n tilausta:** irrota yksi tulppa ja varmista kierre
-(M6×1,0 vs. M5×0,8 — moottoripyörä-Hondoissa M5 on yleinen) sekä tiivisteen koko. Alla
+**Ratkaistu 30.10.2026:** kolme kaasutinta, imusarjassa valmiit synkronointitulpat.
+**Tarkennus 31.10.2026 (D16):** tulppa on 5 × 10 mm:n ristipääruuvi ja 5 mm:n tiiviste (B,
+[bf50a-huoltotiedot.md](bf50a-huoltotiedot.md)), eli M5 eikä alun perin arvioitu M6. Nousua ei
+löytynyt mistään lähteestä; M5:n ISO-karkea 0,8 mm on päätelmä. **Ennen A5:n tilausta:** irrota
+yksi tulppa ja varmista nousu (M5×0,8-mutteri tai kierretulkki) sekä tiivisteen koko ja
+materiaali. Tasauskanavista (kohta 3) tiedetään nyt, että kaasuttimien väliset SE-letkut
+puristetaan kiinni mittauksen ajaksi, joten mukaan pieniä letkunpuristimia (määrä selviää
+moottorilta). Alla
 alkuperäinen tarkistuslista, joka on nyt kohtia 2–3 lukuun ottamatta täytetty.
 
 ### Alkuperäinen tarkistuslista

@@ -6,7 +6,7 @@
 //
 // Koko web-UI yhtenä merkkijonona flashissa (docs/firmware.md §5). Laitteen
 // AP:lla ei ole internetiä, joten sivu ei lataa mitään ulkoista.
-// Lähde 54028 tavua, sha256 e1689a8bbd0d1095.
+// Lähde 54162 tavua, sha256 5aec32259adc4eca.
 //
 // inline constexpr (C++17): yksi kopio koko ohjelmassa. Pelkkä `const char[]` olisi
 // sisäisellä linkityksellä ja kopioituisi flashiin jokaiseen käännösyksikköön, joka
@@ -831,7 +831,7 @@ html.sun .msg.ok { color: #08702f; }
     <p id="cMsg" class="msg"></p>
 
     <h3>1. Nollaus</h3>
-    <p class="note">Moottori seis, letkut saavat olla kiinni – sammuneen moottorin imusarja on ilmanpaineessa. Laite nollaa myös itse, kun moottori on ollut sammuksissa muutaman sekunnin. Nollaus on tehtävä joka käynnistyksen jälkeen, muuten vihreää ei näytetä.</p>
+    <p class="note">Moottori seis, letkut saavat olla kiinni – sammuneen moottorin imusarja on ilmanpaineessa. Laite nollaa myös itse, kun moottori on ollut sammuksissa muutaman sekunnin. Nollaus katoaa, kun laite käynnistyy uudelleen (esim. virta katkeaa tai signaalilähde vaihtuu) tai anturiasetuksia muutetaan, ja ilman sitä vihreää ei näytetä. Moottorin sammutus ei poista nollausta.</p>
     <button id="bZero" type="button" class="btn">Nollaa</button>
     <p id="zMsg" class="msg"></p>
 
@@ -1211,7 +1211,7 @@ function renderCyls(s) {
   tog(mh, 'hot', st === 'fault_master');
   txt(mh, st === 'fault_master'
     ? 'Master ei kelpaa – napauta toista sylinteriä kahdesti valitaksesi uuden masterin'
-    : 'Napauta sylinteriä vaihtaaksesi masterin · palkki ylös = imee enemmän');
+    : 'Napauta sylinteriä kahdesti vaihtaaksesi masterin · palkki ylös = imee enemmän');
 }
 
 // D7: master vaihtuu vain vahvistetusti (kaksi napautusta), ettei nollataso

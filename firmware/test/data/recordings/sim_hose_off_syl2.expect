@@ -4,6 +4,10 @@
 #   tools/replay/build/replay --sim rpm=900 fault2=1 noise=4 --seconds 5 \
 #     --seed 3 --out firmware/test/data/recordings/sim_hose_off_syl2.csv
 # zero_valid=1, gain_valid=0.
+# Odotukset on kirjoitettu SYL 1 -masterille, joka oli D7:n oletus. D16
+# (31.10.2026) vaihtoi oletuksen SYL 3:een, joten master kiinnitetään (SYL 2 ei
+# ole master kummallakaan, joten rivi 6 pysyy rivinä 6).
+set.master=0
 
 never_states=synced,near,out_of_sync,fault_sensor,fault_master   # §8: vikatila voittaa säätötilat, ei koskaan tuomiota; vain rivi 6
 flags_never=sat           # §4.7: saturaatiolippu vain pulssivista kanavista (irti oleva SYL 2 on 2700 mV:ssa)

@@ -212,6 +212,11 @@ kalibroimaton laite ei voi täyttää tätä kynnystä lainkaan → R4.
 *Nämä ovat lähtöarvoja.* S5a:n mukaan molemmat kynnykset ovat ajonaikaisesti säädettäviä, ja
 lopulliset luvut asetetaan vaiheessa 4 nauhoitetun datan perusteella.
 
+*Hondan raja (D16, 31.10.2026):* BF40A/BF50A:n synkronoinnin raja on 20 mmHg ≈ 2,67 kPa (B,
+[docs/bf50a-huoltotiedot.md](docs/bf50a-huoltotiedot.md)). Se osuu keltaiselle kaistalle
+(1,5–3,0 kPa), joten D2:n rajoja ei muuteta: vihreä on tiukempi kuin Hondan vaatimus ja täyttää
+sen aina, keltainen vain, jos spread on alle 2,67 kPa.
+
 ### D3 — Näyttötapa ✅ PÄÄTETTY 9.8.2026
 
 **Poikkeama valitusta master-kanavasta.** Nolla = master. Muut kaksi kanavaa näytetään
@@ -265,40 +270,57 @@ oletukseen signaalin muodosta (§2), ei mitattuun. Se on hyvin perusteltu oletus
   koodissa. Ne *tullaan* säätämään ensimmäisen moottorikäynnin aikana, ja jokainen uudelleenkäännös
   laiturilla on kallis. Web-UI:hin huoltosivu, arvot NVS:ään.
 - **S5b — Raakadatan rengaspuskuri alusta asti** (R3). Firmware pitää muistissa viimeiset ~10 s
-  raakanäytteitä; UI:ssa on "Tallenna" → CSV. Maksaa muutaman kilotavun RAM:ia ja yhden
+  raakanäytteitä (toteutus ~8,2 s: 8192 näytettä × 8 tavua = 64 kt staattista DRAMia, johon
+  rengas on mitoitettu, [docs/firmware.md](docs/firmware.md) §4.5); UI:ssa on "Tallenna" → CSV. Maksaa muutaman kilotavun RAM:ia ja yhden
   reitin, mutta säilyttää mahdollisuuden analysoida oikeaa dataa jälkikäteen — eli sen ainoan
   hyödyn, joka erillisestä nauhoitinvaiheesta olisi saatu. **Ilman tätä ensimmäinen moottorikäynti
   ei tuota mitään pysyvää tietoa signaalista.**
 
 ### D6 — Kohdemoottori ✅ PÄÄTETTY 30.10.2026 (kierre varmistettava)
 
-**Honda BF50A, n. 2004.** Kolme erillistä kaasutinta, imusarjassa valmiit synkronointitulpat,
-kierre todennäköisesti **M6** — *varmistettava ennen adapterien tilausta* (ks. alla).
+**Honda BF50A, n. 2004.** Kolme erillistä kaasutinta, imusarjassa valmiit synkronointitulpat:
+**5 × 10 mm:n ristipääruuvi ja 5 mm:n tiiviste** (B, D16). Kierteen nousu on *varmistettava
+ennen adapterien tilausta* (oletus M5 × 0,8, ks. alla). Alkuperäinen arvio 30.10.2026 oli
+"todennäköisesti M6".
+
+Lähteet ja luotettavuusluokat (A = Honda, B = huoltolähde, C = foorumi):
+[docs/bf50a-huoltotiedot.md](docs/bf50a-huoltotiedot.md) (verkosta 31.10.2026, ei korvaa
+Hondan korjaamokäsikirjaa).
 
 *Seuraukset:*
 
-- **Tyhjäkäynti 850–950 rpm** (omistajan tieto 30.10.2026; tarkistettava huolto-ohjeesta).
-  Synkronointi tehdään tyhjäkäynnillä, joka on D12:n arvioikkunan (500–3000 rpm) sisällä.
-  Simulaattorin oletus 850 rpm on alueen alalaidassa. DSP:n testit kattavat 600–3000 rpm,
-  ja lukitus 850 rpm:llä vie noin 0,45 s.
-- **Letkuliitos:** tulppa auki → messinkinen letkunippa (kierre × ⌀3 mm letkulle) tilalle.
-  T-haaraa tai porausta ei tarvita. → [docs/hankinnat.md](docs/hankinnat.md) A5.
-- **Kierteen varmistus:** irrota yksi tulppa ja mittaa (kierretulkki tai kokeile M6×1,0-
-  ja M5×0,8-muttereita). Moottoripyörä-Hondoissa vastaavat tulpat ovat usein M5×0,8, joten
-  "M6 ehkä" kannattaa todentaa ennen kuin tilaa kolme nippaa. Tiivisteet (kuparialuslevyt)
-  samaan kokoon.
-- **Kaasuttimet, ei ITB:** yksi synkronointiruuvi per säädettävä kaasutin. Huolto-ohjeesta
-  tarkistettava, **mikä kaasutin on kiinteä perus** (= master, D7) — oletus SYL 1 säilyy,
-  kunnes se on tarkistettu. Säätöruuvin kiertosuunta tarkistetaan samalla, jolloin
-  säätöohje voi myöhemmin sanoa "myötäpäivään/vastapäivään" eikä vain "avaa/sulje".
-- **Tasauskanavat:** ei tiedossa. Simulaattorin `xtalk`-parametri kattaa molemmat
-  vaihtoehdot; ensimmäinen nauhoitus (M6) näyttää, onko vuotopulsseja.
-- **Joutokäynti:** tarkka ohjearvo huolto-ohjeesta; se osuu joka tapauksessa D12:n
-  500–3000 rpm -ikkunaan.
+- **Tyhjäkäynti 950 ± 50 rpm vapaalla** (A, Carburetion Manual s. 7-3; D16). Omistajan tieto
+  30.10.2026 oli 850–950 rpm. Synkronointi tehdään tyhjäkäynnillä, aina samoilla kierroksilla
+  (A + B), ja se on D12:n arvioikkunan (500–3000 rpm) sisällä. Simulaattorin oletus 850 rpm on
+  Hondan alueen (900–1000 rpm) alapuolella, ja se säilyy tarkoituksella alueen alapuolisena
+  testinä. DSP:n testit kattavat 600–3000 rpm, ja lukitus 850 rpm:llä vie noin 0,45 s.
+- **Letkuliitos:** tulppa auki → messinkinen letkunippa (M5 × ⌀3 mm letkulle) ja 5 mm:n
+  tiiviste tilalle. T-haaraa tai porausta ei tarvita. → [docs/hankinnat.md](docs/hankinnat.md) A5.
+- **Kierteen varmistus:** irrota yksi tulppa ja mittaa (kierretulkki tai M5 × 0,8 -mutteri).
+  Nousua ei löytynyt mistään lähteestä; M5:n ISO-karkea nousu 0,8 mm on päätelmä. Tiiviste
+  on osaluettelossa "Washer, Sealing, 5mm" (90452-323-000), materiaali ei tiedossa.
+- **Kaasuttimet, ei ITB:** yksi synkronointiruuvi per säädettävä kaasutin. **Kiinteä perus on
+  No. 3 = alin kaasutin** (A + B, D16), joten masterin oletus on SYL 3 (D7). Säädettävät ovat
+  No. 2 ja No. 1, tässä järjestyksessä, 1/8 kierrosta kerrallaan ja kaasu auki ja kiinni
+  jokaisen säädön jälkeen (A + B). Ruuvin kiertosuuntaa ei löytynyt lähteistä: se testataan
+  moottorilta 1/8 kierroksella mittarista, ja säätöohje sanoo yhä vain "avaa/sulje".
+- **Tasauskanavat:** kaasuttimien väliset **SE-letkut** (rikastimen letkut) puristetaan kiinni
+  mittauksen ajaksi (B, D16). Muista tasauskanavista ei ole tietoa. Simulaattorin
+  `xtalk`-parametri kattaa molemmat vaihtoehdot; ensimmäinen nauhoitus (M6) näyttää, onko
+  vuotopulsseja.
+- **Koekäyttö:** huuhtelukupeilla vain tyhjäkäynti (A, Honda PCI54237: "Running the engine
+  above idle speed can damage the water pump and overheat the engine."). Korotetut kierrokset
+  vain testisäiliössä tai vesillä ([docs/moottoriajo.md](docs/moottoriajo.md) §2).
 
 ### D7 — Master-kanava ✅ PÄÄTETTY 9.8.2026
 
-**Käyttäjän valittavissa UI:sta, oletus SYL 1.** Valinta säilyy NVS:ssä.
+**Käyttäjän valittavissa UI:sta, oletus SYL 3** (D16, 31.10.2026; alun perin SYL 1). Valinta
+säilyy NVS:ssä.
+
+*Oletuksen peruste (D16):* BF50A:n kiinteä perus on alin kaasutin No. 3 (A: Honda Carburetion
+Manual s. 7-13, "The bottom carburetor is the base carburetor"; B: "The No.3 carburetor is the
+synchronization base carburetor"). Oletus on tarkistettu lähteistä mutta ei vielä moottorilta
+([docs/bf50a-huoltotiedot.md](docs/bf50a-huoltotiedot.md) §3).
 
 *Perustelu:* vastaa fyysistä säätötyötä — monessa moottorissa yhtä kaasuläppää ei voi säätää, ja
 mekaanikko tietää kumpi se on. Nollataso pysyy paikallaan koko säädön ajan.
@@ -408,6 +430,26 @@ orkestroijalle, ja orkestroija päätti ne:
 5. **Moottoriajon pöytäkirjan rajat** H1:lle, riville 9 ja D2:lle
    ([docs/moottoriajo.md](docs/moottoriajo.md) §6.1, §6.3, §6.4) hyväksytään sellaisinaan.
    Ne tarkistetaan ensimmäisestä ajosta.
+
+### D16 — BF50A:n huoltotiedot lähteistä ✅ PÄÄTETTY 31.10.2026 (tarkistettava moottorilta)
+
+Verkkotutkimus 31.10.2026 löysi BF50A:n synkronointitiedot lähteineen ja luotettavuusluokkineen
+(A = Honda, B = huoltolähde, C = foorumi): [docs/bf50a-huoltotiedot.md](docs/bf50a-huoltotiedot.md).
+Omistajan delegoinnin (D15) nojalla orkestroija päätti:
+
+1. **Masterin oletus SYL 3** (D7, ennen SYL 1). *Peruste:* alin kaasutin No. 3 on synkronoinnin
+   perus, eikä siinä ole synkronointiruuvia (A: Honda Carburetion Manual s. 7-13; B). Laitteen
+   SYL-numerot vastaavat Hondan kaasutinnumeroita, kun letkut kytketään niin (No. 1 ylin).
+   *Seuraus:* laite, jonka NVS:ssä on tallennettu konfiguraatio, pitää masterin SYL 1:ssä, kunnes
+   asetukset palautetaan oletuksiin tai master vaihdetaan. Moottoriajon ja käyttöohjeen
+   tarkistuslistoilla on siksi kohta "varmista, että master on SYL 3".
+2. **D6:n tiedot:** tulppa 5 × 10 mm ja 5 mm:n tiiviste (B), nousu varmistettava; tyhjäkäynti
+   950 ± 50 rpm vapaalla (A); SE-letkut puristetaan kiinni mittauksen ajaksi (B); huuhtelukupeilla
+   vain tyhjäkäynti (A). Simulaattorin oletus 850 rpm jää Hondan alueen alapuolelle tarkoituksella.
+3. **D2 ennallaan:** Hondan raja 20 mmHg ≈ 2,67 kPa (B) on keltaisella kaistalla (1,5–3,0 kPa).
+
+*Avoinna:* ruuvien kiertosuunta (ei löytynyt), kierteen nousu, kaasutinnumeroiden ja SE-letkujen
+fyysinen tarkistus sekä alkuperäinen korjaamokäsikirja (bf50a-huoltotiedot.md §3).
 
 ---
 
@@ -539,6 +581,7 @@ merkityksessä (nollan tunnistus vs. letkuvian tunnistus); ne saattavat tarvita 
 | 30.10.2026 | D9–D14 päätetty (SSE-transport, rivit 1+8 yhdistetty, kalibroinnin portitus, rpm-ikkuna 500–3000, MVP = satunnainen työkalu + RPM, simulaattori ensin). Firmware-arkkitehtuuri [docs/firmware.md](docs/firmware.md). Roadmap §11. |
 | 31.10.2026 | WP-8…WP-13 haaraan `dev/integraatio` ([docs/paketit.md](docs/paketit.md)): nauhoitusten toisto ja golden-testit, käytösmatriisin jälkityöt (rivit 1, 5, 6; uudet kynnykset omistajan päätettävinä), snapshotin `act`/`cond`, CI, moottoriajon pöytäkirja ja `sim_fit.py`, web-kirjastojen nosto. Yöajon jono [docs/yoajo/](docs/yoajo/). |
 | 31.10.2026 | Omistaja delegoi jatko.md:n "Avoimet 5" -kohdan päätökset orkestroijalle, ja orkestroija päätti ne (D15): rivin 7 rajat 150 / 2950 mV, WP-9:n kynnykset ja §8:n rivien 1 ja 5 tarkenteet, snapshotin `cond`-nimet, HX710B-lähteen säilytys sekä moottoriajon pöytäkirjan rajat. WP-9:n ja pöytäkirjan arvot ovat alustavia, ja ne tarkistetaan ensimmäisestä moottorinauhoituksesta. |
+| 31.10.2026 | D16: BF50A:n huoltotiedot lähteistä ([docs/bf50a-huoltotiedot.md](docs/bf50a-huoltotiedot.md)). Masterin oletus SYL 1 → SYL 3 (D7), D6:een tulppa 5 × 10 mm ja 5 mm:n tiiviste, tyhjäkäynti 950 ± 50 rpm, SE-letkut kiinni mittauksen ajaksi ja huuhtelukuppien kierrosraja. D2:een Hondan raja 2,67 kPa (rajat ennallaan) ja D5:een renkaan toteutettu pituus ~8,2 s. |
 
 ---
 
