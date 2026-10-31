@@ -118,6 +118,20 @@ class Processor {
   }
   const Calibration& calibration() const { return cal_; }
 
+#ifdef SUCKBOXX_NATIVE_TEST
+  // Vain PC:llä: nauhoituksen toisto (WP-8, test/support/recording.h). Jatkaa
+  // nauhoitetun istunnon kalibroinnilla sellaisenaan, myös zero_valid: CSV:n
+  // otsake kertoo, oliko laite nollattu tässä käynnistyksessä (D11), ja toisto
+  // näkee saman portituksen kuin laite. Laite ei kutsu tätä, vaan
+  // käynnistyksessä setCalibration (zero_valid = false). Gainille ja offsetille
+  // sama siivous kuin NVS:stä luetulle.
+  void restoreCalibration(const Calibration& cal) {
+    Calibration c = cal;
+    sanitize(c);
+    commitCal(c);
+  }
+#endif
+
   // 1 kHz. Kaikki O(kChannels): DSP:n syklirajan työ on dsp.h:n budjetissa.
   void push(const RawFrame& f) {
     ring_.push(f);  // ei-op jäädytettynä (CSV-lataus); käsittely jatkuu silti

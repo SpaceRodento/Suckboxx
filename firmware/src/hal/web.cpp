@@ -1,40 +1,53 @@
 // Suckboxx ESP32-liima - web-palvelin ja SSE. Ks. web.h.
 //
-// AsyncEventSourcen säieturva (ESPAsyncWebServer 3.6.0, tarkistettu lähteestä
-// .pio/libdeps/esp32dev/ESPAsyncWebServer/src/AsyncEventSource.cpp):
-//  - send() lukitsee asiakaslistan (_client_queue_lock, rivi 402) ja kunkin
-//    asiakkaan viestijonon (_lockmq, rivi 228). Listan ja jonojen muokkaus
-//    toisesta taskista on siis suojattu (AsyncEventSource.h:216-219).
-//  - Suojaamatta jää yhteyden katkeaminen: _onDisconnect nollaa _client-
-//    osoittimen ilman lukkoa (rivit 286-291), ja vasta sen jälkeen
-//    _handleDisconnect ottaa listalukon (rivi 357). Jos send() on samaan aikaan
-//    asiakkaan _queueMessagessa tai _runQueuessa, se lukee _clientin uudelleen
-//    (rivit 239, 312, 324) ja voi saada nullptr:n -> kaatuminen.
+// AsyncEventSourcen säieturva (ESPAsyncWebServer 3.12.1 + AsyncTCP 3.5.0,
+// tarkistettu lähteestä 31.10.2026, WP-13). Rivinumerot viittaavat tiedostoon
+// .pio/libdeps/esp32dev/ESPAsyncWebServer/src/AsyncEventSource.cpp, ellei toisin
+// mainita; AsyncTCP.cpp = .pio/libdeps/esp32dev/AsyncTCP/src/AsyncTCP.cpp.
+//  - send() lukitsee asiakaslistan (_client_queue_lock, rivi 414) ja kunkin
+//    asiakkaan viestijonon (_lockmq, rivi 226). Lukot ovat rekursiivisia
+//    (ESPAsyncWebServer.h:265). Listan ja jonojen muokkaus toisesta taskista on
+//    siis suojattu.
+//  - Suojaamatta jää yhä yhteyden katkeaminen: _onDisconnect nollaa _client-
+//    osoittimen ilman lukkoa (rivit 292-298), ja vasta sen jälkeen
+//    _handleDisconnect ottaa listalukon (rivi 371). 3.9.5:n null-tarkistukset
+//    (rivit 233, 246, 333) kaventavat ikkunaa, mutta tarkistus ja käyttö
+//    ovat erillisiä lukuja (rivit 246, 333-334), joten send() toisesta taskista
+//    samaan aikaan on yhä datakilpa. AsyncClient-olio elää, kunnes
+//    _handleDisconnect on saanut listalukon (delete c vasta _onDisconnectin
+//    jälkeen, rivi 179).
 //  - Siksi send() ja count() kutsutaan vain sbx_push-taskista, joka on samalla
 //    ytimellä kuin async_tcp (0) ja sitä korkeammalla prioriteetilla. Silloin
-//    async_tcp ei pääse käsittelemään katkeamista kesken send():n. Ainoa aukko:
-//    sbx_push odottaa lwIP:tä (tcpip_api_call, AsyncTCP.cpp:552) ja tcpip-taski
-//    (prio 18, ydin 0) jää itse odottamaan täyttä async-jonoa (AsyncTCP.cpp:148-150,
-//    CONFIG_ASYNC_TCP_QUEUE_SIZE 64). Silloin async_tcp voi ajaa. Jäännösriski on
-//    kirjaston ominaisuus (raportoitu).
-//  - _handleDisconnect poistaa listasta kesken for-silmukan ja kasvattaa sen
-//    jälkeen mitätöityä iteraattoria (rivit 359-362). Kirjaston vika, ei
-//    kierrettävissä täältä; korjattu kirjaston uudemmissa versioissa (break).
-//  - events.close():a ei kutsuta koskaan: se pitää listalukkoa (rivi 371) ja
-//    asiakkaan sulkeminen päätyy _handleDisconnectiin ottamaan saman
-//    ei-rekursiivisen std::mutexin (rivi 357) -> lukkiutuminen.
-//  - avgPacketsWaiting():a ei kutsuta: se jakaa yhdistettyjen asiakkaiden
-//    määrällä (rivit 380-396), joka on 0, kun listassa on vain sulkeutumassa
-//    oleva asiakas. AsyncClient::connected() on epätosi heti, kun lwIP-taski
-//    on käsitellyt FINin (_pcb = NULL, AsyncTCP.cpp:1044-1062, 1365-1370), mutta
-//    async_tcp poistaa asiakkaan listasta vasta myöhemmin -> jako nollalla.
+//    async_tcp ei pääse käsittelemään katkeamista kesken send():n. Kesken send():n
+//    sbx_push voi odottaa vain lukkoja, jotka async_tcp vapauttaa perittyään
+//    prioriteetin (listalukko _addClientissa ja _handleDisconnectissa, rivit 361,
+//    371; _lockmq _onAckissa ja _onPollissa, rivit 254, 280), ja lwIP:tä
+//    (tcpip_api_call, AsyncTCP.cpp:594, 616). AsyncTCP 3.3.2:ssa tcpip-taski saattoi
+//    itse jäädä odottamaan täyttä tapahtumajonoa, jolloin async_tcp pääsi ajoon;
+//    3.5.0:ssa jono on rajaton lista (AsyncTCP.cpp:201, 220-226), ja tcpip-taski
+//    odottaa enintään jonon mutexia (AsyncTCP.cpp:183-198), jota async_tcp pitää
+//    vain jonon käsittelyssä ilman takaisinkutsuja (AsyncTCP.cpp:236-296).
+//  - Jos sbx_push herää kesken async_tcp:n katkeamiskäsittelyn, asiakas ohitetaan:
+//    AsyncClient::_pcb on NULL ennen _onDisconnectia kaikilla palvelimen poluilla
+//    (sulkeminen ja FIN: _fin -> close -> AsyncTCP.cpp:660; virhe: :512), joten
+//    connected() (AsyncTCP.cpp:1387-1392, vaatii ESTABLISHED-tilan) on epätosi, ja
+//    send() kirjoittaa vain yhdistetyille (rivi 418).
+//  - events.close():a ei kutsuta koskaan. 3.7.7:stä lähtien se ei enää lukkiudu
+//    (rekursiivinen mutex), mutta AsyncClient::close() kutsuu _onDisconnectin
+//    synkronisesti (AsyncTCP.cpp:940-945, 1016-1023), ja _handleDisconnect poistaa
+//    asiakkaan listasta (rivi 374) kesken close():n for-silmukan (rivit 386-395)
+//    -> mitätöity iteraattori.
+//  - Kirjastossa korjattu, ei kiertotietä täällä: _handleDisconnectin iteraattori
+//    (break, rivi 375; 3.7.0) ja avgPacketsWaiting():n jako nollalla (rivi 409;
+//    3.9.5). avgPacketsWaiting():a ei tarvita.
 //
 // Hidas asiakas (puhelin Wi-Fin reunalla): viesti pysyy asiakaskohtaisessa
-// jonossa, kunnes TCP-kuittaus tulee (_onAck, rivit 245-269). Uusi viesti lähtee
-// heti vain, jos jonossa on alle SSE_MAX_QUEUED_MESSAGES/4 viestiä (rivi 239),
-// muuten kuittauksen tai 500 ms:n pollin yhteydessä. Täysi jono hylkää uusimman
-// viestin (rivit 217-223) - vanhat jäävät. Siksi SSE_MAX_QUEUED_MESSAGES = 8
-// (platformio.ini): enintään ~0,5 s vanhaa dataa oletuksen 32 (~2 s) sijaan.
+// jonossa, kunnes TCP-kuittaus tulee (_onAck, rivit 252-276). Uusi viesti lähtee
+// heti vain, jos jonossa on alle SSE_MAX_QUEUED_MESSAGES/4 viestiä (rivi 246),
+// muuten kuittauksen tai 500 ms:n pollin yhteydessä (_onPoll, rivit 278-284;
+// AsyncTCP.cpp:109). Täysi jono hylkää uusimman viestin (rivit 228-231) - vanhat
+// jäävät. Siksi SSE_MAX_QUEUED_MESSAGES = 8 (platformio.ini): enintään ~0,5 s
+// vanhaa dataa oletuksen 32 (~2 s) sijaan.
 
 #include "hal/web.h"
 
@@ -57,23 +70,21 @@
 #include "web/web_page.h"
 
 // Yllä oleva analyysi koskee täsmälleen näitä versioita (SUUNNITTELU.md D9).
-static_assert(ASYNCWEBSERVER_VERSION_MAJOR == 3 && ASYNCWEBSERVER_VERSION_MINOR == 6 &&
-                  ASYNCWEBSERVER_VERSION_REVISION == 0,
+static_assert(ASYNCWEBSERVER_VERSION_NUM == ASYNCWEBSERVER_VERSION_VAL(3, 12, 1),
               "ESPAsyncWebServer vaihtui: tarkista AsyncEventSourcen säieturva uudelleen");
-static_assert(ASYNCTCP_VERSION_MAJOR == 3 && ASYNCTCP_VERSION_MINOR == 3 &&
-                  ASYNCTCP_VERSION_REVISION == 2,
+static_assert(ASYNCTCP_VERSION_NUM == ASYNCTCP_VERSION_VAL(3, 5, 0),
               "AsyncTCP vaihtui: tarkista säieturva uudelleen");
 static_assert(CONFIG_ASYNC_TCP_RUNNING_CORE == 0, "async_tcp kuuluu ytimelle 0 (§4.9)");
 // Alle 8:lla ehto size < SSE_MAX_QUEUED_MESSAGES >> 2 ei koskaan toteudu, eikä
 // uusi viesti lähtisi heti vaan vasta 500 ms:n pollissa.
-static_assert(SSE_MAX_QUEUED_MESSAGES >= 8, "SSE-jono liian lyhyt (AsyncEventSource.cpp:239)");
+static_assert(SSE_MAX_QUEUED_MESSAGES >= 8, "SSE-jono liian lyhyt (AsyncEventSource.cpp:246)");
 
 namespace sbx {
 namespace hal {
 namespace {
 
 constexpr int kPushCore = CONFIG_ASYNC_TCP_RUNNING_CORE;
-constexpr int kPushPrio = CONFIG_ASYNC_TCP_PRIORITY + 1;  // 11 (AsyncTCP.h:67-69: 10)
+constexpr int kPushPrio = CONFIG_ASYNC_TCP_PRIORITY + 1;  // 11 (AsyncTCP.h:49-51: 10)
 static_assert(kPushPrio < configMAX_PRIORITIES, "sbx_push-prioriteetti");
 
 AsyncWebServer* g_server = nullptr;
@@ -96,7 +107,7 @@ std::atomic<uint32_t> g_push_us_max{0};
 
 // --- Käsittelijät (async_tcp-taski, ydin 0) ----------------------------------
 // Eivät kutsu g_eventsiä eivätkä odota mitään pitkää: async_tcp on task
-// watchdogin alla (AsyncTCP.cpp:299-310, 5 s).
+// watchdogin alla (AsyncTCP.cpp:331-352, 5 s).
 
 void sendPage(AsyncWebServerRequest* req, const char* page, size_t len) {
   // AsyncProgmemResponse lukee suoraan flashista, ei kopiota RAMiin.
@@ -110,7 +121,8 @@ void handleRoot(AsyncWebServerRequest* req) { sendPage(req, WEB_PAGE_HTML, sizeo
 void handleDiagPage(AsyncWebServerRequest* req) { sendPage(req, kDiagPage, sizeof(kDiagPage) - 1); }
 
 void sendJson(AsyncWebServerRequest* req, const char* json) {
-  // AsyncBasicResponse kopioi sisällön omaan Stringiinsä (WebResponses.cpp:254-264).
+  // AsyncBasicResponse kopioi sisällön omaan Stringiinsä (WebRequest.cpp:1208-1213,
+  // WebResponses.cpp:260-271).
   AsyncWebServerResponse* r = req->beginResponse(200, "application/json", json);
   r->addHeader("Cache-Control", "no-store");
   req->send(r);
@@ -292,13 +304,13 @@ void handleRawCsv(AsyncWebServerRequest* req) {
 }
 
 void handleDiag(AsyncWebServerRequest* req) {
-  char buf[kJsonBufLen];  // async_tcp:n pino on 16 kt (AsyncTCP.h:63-65)
+  char buf[kJsonBufLen];  // async_tcp:n pino on 16 kt (AsyncTCP.h:45-47)
   const size_t n = g_diag_json != nullptr ? g_diag_json(buf, sizeof(buf)) : 0;
   if (n == 0) {
     req->send(500, "text/plain; charset=utf-8", "diagnostiikka ei mahtunut puskuriin");
     return;
   }
-  // AsyncBasicResponse kopioi sisällön omaan Stringiinsä (WebResponses.cpp:254-264).
+  // AsyncBasicResponse kopioi sisällön omaan Stringiinsä (WebResponses.cpp:260-271).
   AsyncWebServerResponse* r = req->beginResponse(200, "application/json", buf);
   r->addHeader("Cache-Control", "no-store");
   req->send(r);
@@ -309,7 +321,7 @@ void handleNotFound(AsyncWebServerRequest* req) {
 }
 
 // Reitit rekisteröidään ennen begin()iä: palvelimen käsittelijälistaa ei saa
-// muokata, kun async_tcp jo käy sitä läpi (WebServer.cpp:149-158).
+// muokata, kun async_tcp jo käy sitä läpi (WebServer.cpp:142-151, ilman lukkoa).
 void registerRoutes(AsyncWebServer& s) {
   // Tarkemmat polut ensin: AsyncCallbackWebHandler vertaa myös etuliitettä
   // ("/api/config" osuisi muuten "/api/config/reset"iin).
@@ -397,11 +409,13 @@ bool webStart(JsonBuilder diag_json) {
   g_diag_json = diag_json;
   g_server = new AsyncWebServer(kHttpPort);
   g_events = new AsyncEventSource("/events");
-  // onConnect ajetaan async_tcp:ssä _addClientin sisällä listalukon alla
-  // (AsyncEventSource.cpp:340-351), joten asiakkaan send() on tässä turvallinen.
+  // onConnect ajetaan async_tcp:ssä _addClientissa ennen kuin asiakas lisätään
+  // listaan (AsyncEventSource.cpp:357-362), joten sbx_push ei vielä näe sitä, ja
+  // asiakkaan send() on tässä turvallinen.
   // retry: lyhentää selaimen uudelleenyhdistysviivettä katkon jälkeen.
   g_events->onConnect([](AsyncEventSourceClient* c) { c->send("{}", "hello", 0, kSseRetryMs); });
-  g_server->addHandler(g_events);  // palvelin omistaa (unique_ptr, ESPAsyncWebServer.h:822)
+  // Palvelin omistaa (unique_ptr-lista, ESPAsyncWebServer.h:1684, WebServer.cpp:97-100).
+  g_server->addHandler(g_events);
   registerRoutes(*g_server);
   g_server->begin();
   return xTaskCreatePinnedToCore(pushLoop, "sbx_push", kPushStack, nullptr,

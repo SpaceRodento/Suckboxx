@@ -73,9 +73,11 @@ inline void checkFloatCmp(bool ok, float threshold, float actual, const char* re
 
 inline void checkStr(const char* expected, const char* actual, const char* file, int line, const char* msg) {
   if (expected == nullptr || actual == nullptr || std::strcmp(expected, actual) != 0) {
-    char buf[512];
-    std::snprintf(buf, sizeof(buf), "Expected \"%s\" Was \"%s\"", expected ? expected : "(null)",
-                  actual ? actual : "(null)");
+    // Tarkkuus rajaa kummankin merkkijonon niin, ettei tuloste voi katketa
+    // (g++ 15 -Wformat-truncation, kun verrataan ~500 tavun snapshot-muotoja).
+    char buf[2100];
+    std::snprintf(buf, sizeof(buf), "Expected \"%.1024s\" Was \"%.1024s\"",
+                  expected ? expected : "(null)", actual ? actual : "(null)");
     fail(file, line, buf, msg);
   }
 }

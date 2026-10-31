@@ -130,6 +130,19 @@ enum class SyncState : uint8_t {
   FaultMaster,      // rivi 12
 };
 
+// Kanavan luokitus käytösmatriisissa (status.h), snapshotin ch[i].cond
+// (docs/firmware.md §5). UI näyttää kanavakohtaisen tilan tästä eikä päättele
+// sitä luvuista, joten pitoajat ja kynnykset ovat yhdessä paikassa (WP-10).
+enum class ChannelCond : uint8_t {
+  Ok = 0,     // pulssi ja kelvollinen keskiarvo: mukana erotuksessa (D3)
+  Sat,        // kuten Ok, mutta pulssin huippu leikkautuu (rivi 10, flag_saturation)
+  Idle,       // ei pulssia missään kanavassa (rivit 1+8, D10)
+  NoPulse,    // ei pulssia muiden pulssiessa, vielä ohimenevä (Unstable)
+  Hose,       // rivi 6: ei alipainetta muiden pulssiessa
+  Blocked,    // rivin 6 laajennus: ei pulssia, mutta taso ei nollassa (tukos?)
+  Sensor,     // rivi 7
+};
+
 constexpr int kHeadlineLen = 80;   // UTF-8 tavuina, sis. NUL
 constexpr int kAdviceLen = 112;
 
@@ -150,6 +163,12 @@ struct StatusResult {
   bool request_auto_zero = false;  // rivi 1: Processor ajaa nollauksen
   char headline[kHeadlineLen] = {0};
   char advice[kAdviceLen] = {0};
+  // Ruuvineuvo rakenteisena (WP-10): kanava ja suunta, jotka advice nimeää
+  // ("SYL n: avaa|sulje läppää – …"). -1 = ei neuvoa. Suunta vac_delta_kpa:n
+  // merkistä: d > 0 (imee enemmän kuin master) -> act_open = true.
+  int8_t act_ch = -1;
+  bool act_open = false;
+  ChannelCond ch_cond[kChannels] = {ChannelCond::Idle, ChannelCond::Idle, ChannelCond::Idle};
 };
 
 }  // namespace sbx

@@ -1,7 +1,7 @@
 #pragma once
 // Suckboxx ESP32-liima - web-palvelin ja SSE (docs/firmware.md §4.9, §5, D9).
 //
-// ESPAsyncWebServer 3.6.0 + AsyncTCP 3.3.2. Käsittelijät ajetaan async_tcp-
+// ESPAsyncWebServer 3.12.1 + AsyncTCP 3.5.0. Käsittelijät ajetaan async_tcp-
 // taskissa ytimellä 0 (CONFIG_ASYNC_TCP_RUNNING_CORE=0). SSE-viestit lähettää
 // oma sbx_push-taski samalla ytimellä async_tcp:tä korkeammalla prioriteetilla;
 // perustelu web.cpp:n alussa.

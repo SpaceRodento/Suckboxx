@@ -1,0 +1,18 @@
+# Synteettinen (EngineSim, ei oikeaa dataa): joutokäynti 900 rpm, SYL 2:n letku irti
+# koko nauhoituksen ajan (fault2=1: kanava näkee ilmanpaineen + kohinan).
+# Luotu 31.10.2026 (WP-8):
+#   tools/replay/build/replay --sim rpm=900 fault2=1 noise=4 --seconds 5 \
+#     --seed 3 --out firmware/test/data/recordings/sim_hose_off_syl2.csv
+# zero_valid=1, gain_valid=0.
+
+never_states=synced,near,out_of_sync,fault_sensor,fault_master   # §8: vikatila voittaa säätötilat, ei koskaan tuomiota; vain rivi 6
+flags_never=sat           # §4.7: saturaatiolippu vain pulssivista kanavista (irti oleva SYL 2 on 2700 mV:ssa)
+
+# Ikkunan alku (ehdotus, WP-8): DSP:n lukitus <= 3,5 sykliä + 37,5 ms (dsp.h; 0,50 s
+# 900 rpm:llä) + kHoseHoldS 0,5 s (§4.7) + kaksi tickiä = 1,11 s.
+from_s=1.2
+allowed_states=fault_hose # rivi 6
+final_state=fault_hose
+fault_ch=1                # rivi 6: "Kanava N" = SYL 2
+headline=VIKA: SYL 2 – ei alipainetta, tarkista letku   # rivi 6 (status.h, test_row6)
+advice_prefix=Letku irti tai vuotaa                      # rivi 6 (test_row6)

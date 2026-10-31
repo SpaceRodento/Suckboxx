@@ -385,6 +385,12 @@ class StatusMachine {
       cm_count_ = 0;   // keskiarvot eivät ole vertailukelpoisia pulssikatkon yli
     }
 
+    // Kanavakohtainen luokitus snapshotiin (ch[i].cond, WP-10). Sat vain, kun
+    // rivin 10 varoitus on päällä (pitoaika) ja juuri tämä kanava leikkautuu.
+    for (int i = 0; i < kChannels; ++i) {
+      r.ch_cond[i] = publicCond(cond[i], r.flag_saturation && in.ch[i].saturated);
+    }
+
     char a[8], b[8];   // fmt1-apupuskurit
     if (master_bad) {
       r.state = SyncState::FaultMaster;
@@ -576,6 +582,20 @@ class StatusMachine {
     r.worst_ch = -1;
   }
 
+  // Sisäinen luokitus -> ChannelCond (snapshotin ch[i].cond). Ei default-
+  // haaraa: uusi Cond ilman vastinetta on -Wswitch-varoitus (-Werror).
+  static ChannelCond publicCond(Cond c, bool sat) {
+    switch (c) {
+      case Cond::Ok: return sat ? ChannelCond::Sat : ChannelCond::Ok;
+      case Cond::Idle: return ChannelCond::Idle;
+      case Cond::Sensor: return ChannelCond::Sensor;
+      case Cond::HoseOff: return ChannelCond::Hose;
+      case Cond::Blocked: return ChannelCond::Blocked;
+      case Cond::Lost: return ChannelCond::NoPulse;
+    }
+    return ChannelCond::Sensor;   // ei saavuteta; tuntematon ei ole koskaan "ok"
+  }
+
   // "SYL 2", "SYL 2 ja SYL 3", "SYL 1, SYL 2 ja SYL 3" (pisin 21 tavua).
   static void channelList(char (&out)[32], const Cond (&cond)[kChannels], Cond c1, Cond c2) {
     int idx[kChannels];
@@ -642,6 +662,10 @@ class StatusMachine {
     fmt1(a, std::fabs(d));
     writeText(r.advice, sizeof(r.advice), "SYL %d: %s läppää – imee %s kPa %s kuin SYL %d", w + 1,
               more ? "avaa" : "sulje", a, more ? "enemmän" : "vähemmän", master_ + 1);
+    // Sama neuvo rakenteisena (snapshotin act, WP-10): UI merkitsee kortin
+    // tästä eikä jäsennä tekstiä. Ainoa paikka, jossa act asetetaan.
+    r.act_ch = static_cast<int8_t>(w);
+    r.act_open = more;
   }
 
   // Palauttaa flag_driftin: |y(now) - y(now - drift_window_s)| > drift_rpm,

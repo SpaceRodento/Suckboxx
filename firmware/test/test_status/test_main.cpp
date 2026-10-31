@@ -144,8 +144,28 @@ bool utf8Valid(const char* s) {
   return true;
 }
 
+// act (WP-10, firmware.md §5) on advice-tekstin ruuvineuvo rakenteisena: sama
+// kanava ja suunta, kun teksti on "SYL n: avaa|sulje läppää – …", muuten -1.
+void assertActMatchesAdvice(const StatusResult& r) {
+  int want_ch = -1;
+  bool want_open = false;
+  for (int ch = 0; ch < kChannels; ++ch) {
+    for (int open = 0; open < 2; ++open) {
+      char p[48];
+      std::snprintf(p, sizeof(p), "SYL %d: %s läppää – ", ch + 1, open == 1 ? "avaa" : "sulje");
+      if (std::strncmp(r.advice, p, std::strlen(p)) == 0) {
+        want_ch = ch;
+        want_open = open == 1;
+      }
+    }
+  }
+  TEST_ASSERT_EQUAL_INT_MESSAGE(want_ch, r.act_ch, r.advice);
+  if (want_ch >= 0) TEST_ASSERT_EQUAL_INT_MESSAGE(want_open ? 1 : 0, r.act_open ? 1 : 0, r.advice);
+}
+
 // Teksti mahtuu puskuriin katkeamatta: NUL löytyy ja tilaa jää vähintään yksi
-// tavu (snprintf olisi katkaissut täsmälleen täyteen). Lisäksi kelvollista UTF-8:aa.
+// tavu (snprintf olisi katkaissut täsmälleen täyteen). Lisäksi kelvollista UTF-8:aa,
+// ja act vastaa tekstiä.
 void assertTextSane(const StatusResult& r) {
   const size_t hl = strnlen(r.headline, sizeof(r.headline));
   const size_t al = strnlen(r.advice, sizeof(r.advice));
@@ -155,6 +175,7 @@ void assertTextSane(const StatusResult& r) {
   TEST_ASSERT_GREATER_THAN(0, static_cast<long long>(al));
   TEST_ASSERT_TRUE_MESSAGE(utf8Valid(r.headline), r.headline);
   TEST_ASSERT_TRUE_MESSAGE(utf8Valid(r.advice), r.advice);
+  assertActMatchesAdvice(r);
 }
 
 void assertNoVerdict(const StatusResult& r) {
@@ -502,6 +523,8 @@ void test_row3_synced() {
   TEST_ASSERT_FLOAT_WITHIN(1e-4f, -0.4f, r.vac_delta_kpa[2]);   // SYL 3 imee vähemmän
   TEST_ASSERT_FLOAT_WITHIN(1e-4f, 1.2f, r.spread_kpa);
   TEST_ASSERT_EQUAL_INT(1, r.worst_ch);
+  // Rivi 3: valmis, ei säätöä -> ei ruuvineuvoa, vaikka worst_ch on määritelty.
+  TEST_ASSERT_EQUAL_INT(-1, r.act_ch);
   TEST_ASSERT_FALSE(r.flag_uncal_zero);
   TEST_ASSERT_FALSE(r.flag_uncal_gain);
   TEST_ASSERT_FALSE(r.request_auto_zero);
@@ -524,6 +547,9 @@ void test_row4a_near_with_open_advice() {
   TEST_ASSERT_EQUAL_STRING("Lähellä", r.headline);
   TEST_ASSERT_EQUAL_STRING("SYL 3: avaa läppää – imee 2,1 kPa enemmän kuin SYL 1", r.advice);
   TEST_ASSERT_EQUAL_INT(2, r.worst_ch);
+  // Rivi 4a: suurin poikkeama + säätösuunta (§4.7: d > 0 -> avaa), myös rakenteisena.
+  TEST_ASSERT_EQUAL_INT(2, r.act_ch);
+  TEST_ASSERT_TRUE(r.act_open);
   TEST_ASSERT_FLOAT_WITHIN(1e-4f, 2.1f, r.spread_kpa);
   TEST_ASSERT_TRUE(r.show_bars);
   TEST_ASSERT_TRUE(r.show_verdict);
@@ -536,6 +562,8 @@ void test_row4a_near_with_close_advice() {
   StatusResult r = settle(running(-55.0f, -53.2f, -55.5f));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::Near), static_cast<int>(r.state));
   TEST_ASSERT_EQUAL_STRING("SYL 2: sulje läppää – imee 1,8 kPa vähemmän kuin SYL 1", r.advice);
+  TEST_ASSERT_EQUAL_INT(1, r.act_ch);   // §4.7: d < 0 -> sulje
+  TEST_ASSERT_FALSE(r.act_open);
   TEST_ASSERT_FLOAT_WITHIN(1e-4f, -1.8f, r.vac_delta_kpa[1]);
   TEST_ASSERT_FLOAT_WITHIN(1e-4f, 2.3f, r.spread_kpa);   // 0,5 - (-1,8)
 }
@@ -545,6 +573,8 @@ void test_row4b_out_of_sync_and_yellow_edge() {
   TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::OutOfSync), static_cast<int>(r.state));
   TEST_ASSERT_EQUAL_STRING("Ei synkronissa", r.headline);
   TEST_ASSERT_EQUAL_STRING("SYL 2: sulje läppää – imee 4,0 kPa vähemmän kuin SYL 1", r.advice);
+  TEST_ASSERT_EQUAL_INT(1, r.act_ch);   // rivi 4b: nimetty sylinteri, §4.7: d < 0 -> sulje
+  TEST_ASSERT_FALSE(r.act_open);
   TEST_ASSERT_FLOAT_WITHIN(1e-4f, 5.0f, r.spread_kpa);
   TEST_ASSERT_TRUE(r.show_bars);
   TEST_ASSERT_TRUE(r.show_verdict);
@@ -611,6 +641,9 @@ void test_master_selection_changes_deltas_and_advice() {
     for (int i = 0; i < kChannels; ++i) TEST_ASSERT_EQUAL_FLOAT(d[m][i], r.vac_delta_kpa[i]);
     TEST_ASSERT_EQUAL_INT(worst[m], r.worst_ch);
     TEST_ASSERT_EQUAL_STRING(advice[m], r.advice);
+    // D7: neuvo riippuu viitteestä (suunta d:n merkistä, §4.7).
+    TEST_ASSERT_EQUAL_INT(worst[m], r.act_ch);
+    TEST_ASSERT_EQUAL_INT(d[m][worst[m]] > 0.0f ? 1 : 0, r.act_open ? 1 : 0);
   }
 }
 
@@ -1209,6 +1242,8 @@ void test_d11_never_green_without_zero() {
                            r.advice);
   TEST_ASSERT_TRUE(r.show_verdict);
   TEST_ASSERT_TRUE(r.show_bars);
+  // D11: ero voi olla pelkkää offsetia -> nollausohje, ei ruuvineuvoa.
+  TEST_ASSERT_EQUAL_INT(-1, r.act_ch);
   assertTextSane(r);
   // Kun nollaus on tehty, sama tilanne on vihreä.
   in.zero_valid = true;
@@ -1287,6 +1322,67 @@ void test_row12_master_blocked_hose() {
   r = g.run(in, 3.5f);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::FaultMaster), static_cast<int>(r.state));
   TEST_ASSERT_EQUAL_STRING("SYL 1: ei pulssia (taso -30,0 kPa) – tarkista letku", r.advice);
+}
+
+// ---------------------------------------------------------------------------
+// Kanavakohtainen luokitus (ch_cond, snapshotin ch[i].cond, WP-10)
+// ---------------------------------------------------------------------------
+
+using sbx::ChannelCond;
+
+void assertConds(const StatusResult& r, ChannelCond c0, ChannelCond c1, ChannelCond c2) {
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(c0), static_cast<int>(r.ch_cond[0]));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(c1), static_cast<int>(r.ch_cond[1]));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(c2), static_cast<int>(r.ch_cond[2]));
+}
+
+void test_channel_cond_follows_matrix_rows() {
+  // Arvo kertoo kanavan oman tilan samoilla pitoajoilla kuin tila (firmware.md §5).
+  const ChannelCond ok = ChannelCond::Ok;
+  StatusResult r = g.step(engineOff());
+  assertConds(r, ChannelCond::Idle, ChannelCond::Idle, ChannelCond::Idle);   // rivit 1+8, D10
+  r = settle(idleSynced());
+  assertConds(r, ok, ok, ok);
+  // Rivi 6: pitoajan (kHoseHoldS) ajan ohimenevä, sitten letkuvika.
+  StatusInput in = idleSynced();
+  dropPulse(in, 1, -0.5f);
+  r = g.step(in);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::Unstable), static_cast<int>(r.state));
+  assertConds(r, ok, ChannelCond::NoPulse, ok);
+  r = hoseHold(in);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::FaultHose), static_cast<int>(r.state));
+  assertConds(r, ok, ChannelCond::Hose, ok);
+  // Rivin 6 laajennus: taso ei nollassa, off_hold_s jälkeen tukos.
+  g.begin();
+  in = idleSynced();
+  dropPulse(in, 2, -30.0f);
+  r = g.run(in, 3.5f);
+  assertConds(r, ok, ok, ChannelCond::Blocked);
+  // Rivi 7.
+  in = idleSynced();
+  sensorFault(in, 0, 3300);
+  r = g.step(in);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(SyncState::FaultMaster), static_cast<int>(r.state));
+  assertConds(r, ChannelCond::Sensor, ok, ok);   // rivi 12: masterin oma vika näkyy
+}
+
+void test_channel_cond_sat_needs_hold_and_own_clipping() {
+  // Rivi 10: Sat vasta kun flag_saturation on noussut (kSatHoldS), ja vain
+  // kanavalle, joka itse leikkautuu.
+  StatusInput in = idleSynced();
+  settle(in);
+  in.ch[1].saturated = true;
+  StatusResult r = g.run(in, 1.0f);
+  TEST_ASSERT_FALSE(r.flag_saturation);
+  assertConds(r, ChannelCond::Ok, ChannelCond::Ok, ChannelCond::Ok);
+  r = g.run(in, sbx::StatusMachine::kSatHoldS);
+  TEST_ASSERT_TRUE(r.flag_saturation);
+  assertConds(r, ChannelCond::Ok, ChannelCond::Sat, ChannelCond::Ok);
+  // Ilmanpaine (GN-anturi leikkausrajalla) ilman pulssia ei ole rivin 10 ehto.
+  StatusInput off = engineOff();
+  for (int i = 0; i < kChannels; ++i) off.ch[i].saturated = true;
+  r = g.step(off);
+  assertConds(r, ChannelCond::Idle, ChannelCond::Idle, ChannelCond::Idle);
 }
 
 // ---------------------------------------------------------------------------
@@ -1530,9 +1626,11 @@ bool sameResult(const StatusResult& a, const StatusResult& b) {
       a.show_verdict != b.show_verdict || a.worst_ch != b.worst_ch ||
       a.flag_saturation != b.flag_saturation || a.flag_uncal_zero != b.flag_uncal_zero ||
       a.flag_uncal_gain != b.flag_uncal_gain || a.flag_drift != b.flag_drift ||
-      a.request_auto_zero != b.request_auto_zero) {
+      a.request_auto_zero != b.request_auto_zero || a.act_ch != b.act_ch ||
+      a.act_open != b.act_open) {
     return false;
   }
+  if (std::memcmp(a.ch_cond, b.ch_cond, sizeof(a.ch_cond)) != 0) return false;
   if (std::memcmp(&a.spread_kpa, &b.spread_kpa, sizeof(float)) != 0) return false;
   if (std::memcmp(a.vac_delta_kpa, b.vac_delta_kpa, sizeof(a.vac_delta_kpa)) != 0) return false;
   return std::strcmp(a.headline, b.headline) == 0 && std::strcmp(a.advice, b.advice) == 0;
@@ -1645,6 +1743,8 @@ int main() {
   RUN_TEST(test_row12_master_sensor_fault);
   RUN_TEST(test_row12_master_hose_off_depends_on_master_choice);
   RUN_TEST(test_row12_master_blocked_hose);
+  RUN_TEST(test_channel_cond_follows_matrix_rows);
+  RUN_TEST(test_channel_cond_sat_needs_hold_and_own_clipping);
   RUN_TEST(test_priority_sensor_fault_beats_out_of_sync_and_green);
   RUN_TEST(test_priority_master_fault_beats_other_faults);
   RUN_TEST(test_priority_sensor_fault_beats_hose_fault);
