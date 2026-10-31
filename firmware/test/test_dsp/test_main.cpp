@@ -1323,18 +1323,19 @@ struct Ramp {
   }
 };
 
-// Kaasunlisäys: 850 -> rpm1, -55 -> -25 kPa, syvyys 20 -> 12, nousu rise ms,
+// Kaasunlisäys: idle -> rpm1, -55 -> -25 kPa, syvyys 20 -> 12, nousu rise ms,
 // pito 300 ms, paluu 700 ms.
 struct Blip {
   float rpm1;
   long t0, rise;
+  float idle = 850.0f;
   bool operator()(long t, sbx::SimParams& p) const {
     const long hold = 300, fall = 700;
     if (t < t0 || t > t0 + rise + hold + fall) return false;
     float a = 1.0f;
     if (t <= t0 + rise) a = static_cast<float>(t - t0) / static_cast<float>(rise);
     if (t > t0 + rise + hold) a = 1.0f - static_cast<float>(t - t0 - rise - hold) / static_cast<float>(fall);
-    p.rpm = 850.0f + (rpm1 - 850.0f) * a;
+    p.rpm = idle + (rpm1 - idle) * a;
     p.base_kpa = -55.0f + 30.0f * a;
     p.depth_kpa = 20.0f - 8.0f * a;
     return true;
@@ -2008,21 +2009,26 @@ void test_reconnected_hose_is_not_a_witness() {
   // irrotetuksi tasostaan (ilmanpaineessa ja muiden yläpuolella) ja asettuu
   // takaisin kytkettäessä kuten anturivian jälkeen: askel ei ole oma pulssi
   // eikä todistaja. Väärää sykliä ei saa kirjata millään kanavalla (myöskään
-  // takaisin kytketyllä); terveiden väli <= B:n raja + 150 ms.
+  // takaisin kytketyllä); terveiden väli <= B:n raja + 150 ms. Kaksi
+  // viimeistä tapausta mittaavat pudotusikkunaa: jos se jatkuisi keskikohdan
+  // yli, takaisin kytketyn kanavan lasku estäisi terveen kanavan pulssin
+  // (nousu 300 ms: 471 ms).
   struct Case {
     float idle, rpm1;
     int reps;      // 0 = Blip (pito 300, paluu 700), muuten pikablipit 150/0/300
+    long rise;     // Blip: nousu
     float xt;
     uint32_t seed;
     long t0, off, dur;  // letku irti [t0 + off, t0 + off + dur)
     int ch;
   };
   const Case cases[] = {
-      {950.0f, 2500.0f, 2, 0.0f, 1, 2523, 120, 400, 0},  // toisto 1: 2T kanavalla 2 (t0 + 617)
-      {850.0f, 3000.0f, 0, 0.0f, 3, 2571, -60, 50, 0},   // toisto 2: vuotosykli ja 2T
-      {850.0f, 3000.0f, 1, 0.0f, 1, 2512, -60, 50, 0},   {850.0f, 3000.0f, 1, 0.5f, 2, 2547, 120, 150, 2},
-      {950.0f, 2500.0f, 2, 0.3f, 3, 2531, -60, 50, 0},   {950.0f, 2500.0f, 2, 0.5f, 4, 2562, -60, 50, 1},
-      {850.0f, 3000.0f, 1, 0.3f, 5, 2539, 0, 400, 1},    {950.0f, 3000.0f, 0, 0.3f, 6, 2519, -60, 50, 2},
+      {950.0f, 2500.0f, 2, 150, 0.0f, 1, 2523, 120, 400, 0},  // toisto 1: 2T kanavalla 2 (t0 + 617)
+      {850.0f, 3000.0f, 0, 150, 0.0f, 3, 2571, -60, 50, 0},   // toisto 2: vuotosykli ja 2T
+      {850.0f, 3000.0f, 1, 150, 0.0f, 1, 2512, -60, 50, 0},   {850.0f, 3000.0f, 1, 150, 0.5f, 2, 2547, 120, 150, 2},
+      {950.0f, 2500.0f, 2, 150, 0.3f, 3, 2531, -60, 50, 0},   {950.0f, 2500.0f, 2, 150, 0.5f, 4, 2562, -60, 50, 1},
+      {850.0f, 3000.0f, 1, 150, 0.3f, 5, 2539, 0, 400, 1},    {950.0f, 3000.0f, 0, 150, 0.3f, 6, 2519, -60, 50, 2},
+      {850.0f, 1500.0f, 0, 300, 0.0f, 8, 2583, -60, 150, 0},  {850.0f, 1500.0f, 0, 300, 0.3f, 3, 2630, -60, 150, 2},
   };
   SimRun worst, worst5;
   for (const Case& k : cases) {
@@ -2037,9 +2043,13 @@ void test_reconnected_hose_is_not_a_witness() {
     o.hose_mask = 1 << k.ch;
     o.hose_t = o.t0 + k.off;
     o.hose_t2 = o.hose_t + k.dur;
-    const SimRun r = k.reps == 0 ? runSim(p, o, Blip{k.rpm1, o.t0, 150})
+    const SimRun r = k.reps == 0 ? runSim(p, o, Blip{k.rpm1, o.t0, k.rise, k.idle})
                                  : runSim(p, o, Blips{k.rpm1, o.t0, 150, 0, 300, k.reps, k.idle});
     worstOf(k.xt > 0.4f ? worst5 : worst, r);
+    // B:n raja + 150 ms: nousu >= 300 ms 300, 150 ms 400 (xtalk 0,5: 450),
+    // pika- ja tuplablipit 450 (xtalk 0,5: 750).
+    const int lim = (k.reps > 0 ? (k.xt > 0.4f ? 750 : 450) : (k.rise >= 300 ? 300 : (k.xt > 0.4f ? 450 : 400))) + 150;
+    TEST_ASSERT_LESS_OR_EQUAL(lim, static_cast<int>(r.max_gap));
   }
   msg("letku irti 50-400 ms blipin ympärillä: väärät %.0f, terveiden väli %.0f ms (xtalk 0,5: väärät %.0f, väli %.0f ms)",
       static_cast<double>(worst.wrong), static_cast<double>(worst.max_gap), static_cast<double>(worst5.wrong),
@@ -2047,8 +2057,6 @@ void test_reconnected_hose_is_not_a_witness() {
   TEST_ASSERT_EQUAL_INT(0, worst.wrong + worst5.wrong);
   TEST_ASSERT_TRUE(worst.finite && worst5.finite);
   TEST_ASSERT_FALSE_MESSAGE(worst.dropped || worst5.dropped, "has_pulse putosi terveeltä kanavalta");
-  TEST_ASSERT_LESS_OR_EQUAL(450 + 150, static_cast<int>(worst.max_gap));
-  TEST_ASSERT_LESS_OR_EQUAL(750 + 150, static_cast<int>(worst5.max_gap));
 }
 
 void test_single_witness_needs_rhythm() {
@@ -2280,6 +2288,11 @@ void test_weak_cylinder_quick_blips() {
     TEST_ASSERT_EQUAL_INT(0, worst.wrong);
     TEST_ASSERT_TRUE(worst.finite);
     TEST_ASSERT_FALSE_MESSAGE(worst.dropped, "has_pulse putosi terveeltä kanavalta");
+    // B:n pikablippiraja. Vaiennut (heikko) kanava lakkaa todistamasta,
+    // kun tämä kanava on pulssinut kahdesti ilman sitä; jos se olisi elävä
+    // pisimmän jakson (0,44 s) ajan, sen puuttuva paikka vaatisi pitkän
+    // syklin jälkeen kaikki todistajat ja muiden väli kasvaisi ~1 s:iin.
+    TEST_ASSERT_LESS_OR_EQUAL(450, static_cast<int>(worst.max_gap));
   }
 }
 
