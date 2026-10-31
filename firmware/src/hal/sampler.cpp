@@ -247,6 +247,9 @@ void readSource(RawFrame& f, int64_t now_us) {
 // Alle kCatchUpMaxUs myöhästyminen otetaan kiinni: vTaskDelayUntil palaa heti,
 // kunnes tahti on saavutettu, ja näytteet ovat oikeassa seq-järjestyksessä
 // (myöhässä, mutta korkeintaan muutaman ms). Suurempi myöhästyminen ohitetaan.
+// Tahti ankkuroidaan ennen ensimmäistä lukua, joten hidas ensimmäinen luku
+// (ADC ~1,35 ms, 30.10.2026) myöhästyttää seuraavan jakson; setup on silloin
+// vielä kesken, ja käsittelytaski laskee sen late_boot:iin (procBootDone).
 void samplerLoop(void*) {
   TickType_t wake = xTaskGetTickCount();
   vTaskDelayUntil(&wake, 1);  // ensimmäinen näyte tickin kohdalle
