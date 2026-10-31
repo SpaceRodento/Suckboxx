@@ -10,6 +10,7 @@
 //
 //   kPa ──┬──► EMA ─────────────────────────────────► level_kpa (aina voimassa)
 //         ├──► 4. kert. Butterworth-LP ──► suhteellinen Schmitt ──► syklirajat
+//         │                             └► pulssin keskikohta ───► jakso, rpm
 //         └──► suodattamaton trapetsi-integraali rajalta rajalle ──► D1-keskiarvo
 //   mV ───────► vika- (rivi 7) ja saturaatiomonitori (rivi 10)
 //
@@ -21,11 +22,18 @@
 // (DC-vahvistus 1), mutta tason muuttuessa (kaasu, rivi 5) suodatettu
 // keskiarvo jäisi ryhmäviiveen verran (~10 ms @ 40 Hz) jälkeen.
 //
+// Jakso (rpm) mitataan eri kohdasta kuin integraalin raja: pulssin
+// keskikohdasta, eli laskevan ja nousevan reunan puolivälistä tasolla
+// pohja + 0,3 x syvyys. Laukaisukynnys riippuu A-arviosta, joka on
+// muutoksissa (kaasu, rpm-pudotus) väistämättä hetken väärä; keskikohta ei
+// riipu kynnyksestä, pulssin koosta eikä leveydestä. Ilman tätä yksittäisen
+// syklin jakso heitti kaasunlisäyksessä 3-9 % (kynnys siirtyi pulssissa).
+//
 // Aika on näytenumeroina (1 näyte = 1 ms, kSampleRateHz). RawFrame.seq:iä ei
 // käytetä aikana, koska pudonneita näytteitä ei voi kuitenkaan interpoloida
 // IIR-suotimeen jälkikäteen - aukot näkyvät raw_ringin diagnostiikassa.
 //
-// Mitatut rajat (oletusparametrit; test_dsp ja EngineSim-ajot):
+// Mitatut rajat (oletusparametrit; test_dsp ja EngineSim-ajot, 1 % jitter):
 //  - Lukitus (has_pulse) käyvään signaaliin tai moottorin käynnistyessä:
 //    <= 3,5 sykliä + suotimen asettuminen 37,5 ms. Mitattu pahin: 600 rpm
 //    650 ms (3,3 sykliä), 850 rpm 470 ms (3,3), 1500 rpm 285 ms (3,6),
@@ -38,11 +46,29 @@
 //    kierroksilla 40 Hz:n alipäästö vaimentaa perustaajuutta (50 Hz -> 0,38x)
 //    ja ristivuoto vielä (1 - xtalk):lla. 90 Hz:n resonanssilla (1 m letku)
 //    6000 rpm vaatii ~8 kPa, koska resonanssi on jo lähellä perustaajuutta.
+//    Rajan lähelläkin rpm on keskikohtamerkin ansiosta < 0,5 % (6000 rpm,
+//    4 kPa, jitter 0: pahin kanava 0,45 %).
 //  - Alipaineen ramppi (kaasun liike) ei maksa yhtään sykliä. Hetkellinen
 //    askel (/api/sim) tai pulssin puolittuminen maksaa enintään 2 sykliä
 //    (väli ~3 jaksoa); has_pulse ei putoa, eikä väärää jaksoa hyväksytä.
+//  - Kierrosluvun muutokset (EngineSim, 4 siementä x xtalk 0/0,3 x 6 vaihetta):
+//    kaasunlisäys 850 -> 1500...3000 rpm, nousu 300-600 ms: pisin väli
+//    hyväksyttyjen syklien välillä <= 300 ms, paitsi 2500 rpm (<= 330 ms) ja
+//    3000 rpm xtalk 0,3:lla (<= 445 ms: pulssi kutistuu 20 -> 4,5 kPa
+//    suodatettuna kahdessa syklissä). Nousu 150 ms: <= 400 ms. Näytetty
+//    huippu-rpm >= 0,9 x todellinen. Kaasun katkaisu ja rpm-askel alas
+//    (3000/2000/6000 -> 850, /api/sim): has_pulse ei putoa, väli <= ~640 ms
+//    (4 uutta jaksoa + 1 vahvistus), näyttö uudessa kierrosluvussa (< 3 %)
+//    1 s kuluttua. Yksittäisen syklin jakso vastaa toteutunutta <= 3 %:n
+//    sisällä, paitsi kerralla vaihtuvan kierrosluvun ylittävä sykli (5-9 %:
+//    pulssi on puoliksi vanhalla, puoliksi uudella nopeudella) ja 40 kPa/300 ms
+//    alipaineramppi 3 kPa:n pulssilla (<= 10 %).
 //  - Kohinasuoja: hyst_min_kpa 0,3 kestää ~0,4 kPa RMS raakakohinan ilman
 //    yhtään väärää sykliä; 0,6-0,8 kPa:n kohina vaatii ~0,5 (S5a).
+//  - Hajonta (rivi 2): jitter 5 % -> cv 0,046, 15 % -> 0,126, 20 % -> 0,15.
+//    Suuret yksittäiset poikkeamat vaativat seuraavan jakson vahvistuksen,
+//    joten hyvin epätasaisella käynnillä osa ääripäistä jää pois ja cv
+//    lukee ~15 % todellista pienempänä.
 
 #include <cmath>
 #include <cstdint>
@@ -118,6 +144,7 @@ class ButterLp4 {
   Biquad s_[2];
 };
 
+
 // ---------------------------------------------------------------------------
 // Dsp - julkinen rajapinta docs/firmware.md §4.2.
 // ---------------------------------------------------------------------------
@@ -133,7 +160,7 @@ class Dsp {
   // toleranssia moottori juuri rajalla (esim. 6000 rpm) hylkäisi jitterin ja
   // mittauskohinan takia joka toisen syklin. Vuotopulssien (T/3) ja
   // puuttuvien rajojen (2T) torjunta ei nojaa tähän alueeseen - ne osuvat
-  // usein sen sisälle - vaan amplitudi- ja jaksosuhde-ehtoihin.
+  // usein sen sisälle - vaan pulssien ja jaksojen keskinäiseen vertailuun.
   static constexpr float kPeriodTolerance = 0.10f;
   // Syklin pienin hyväksyttävä (suodatettu) huippu-huippu = tämä x
   // hyst_min_kpa. Pelkkä hystereesi ei riitä kohinan torjuntaan: suodatettu
@@ -151,44 +178,88 @@ class Dsp {
   // satunnaisen 0,4 kPa:n "syklin", mutta ei peräkkäisiä samanmittaisia;
   // oikea moottori 4500-6000 rpm:ssä toistaa jakson muutaman prosentin tarkkuudella.
   static constexpr float kSmallPulseRatio = 1.25f;
-  // Amplitudien yhtäpitävyys peräkkäisten syklien välillä (suhde 0,7...1/0,7)
-  // lukituksen haussa. Liian pieni amplitudi syklin alussa: ensimmäinen raja
-  // voi osua vuotopulssiin (xtalk) tai pulssin alkuun - sykli on väärän
+  // Lukituksen haku: kolmen peräkkäisen rajapulssin amplitudit tämän suhteen
+  // sisällä (0,7...1/0,7). Liian pieni amplitudi syklin alussa: ensimmäinen
+  // raja voi osua vuotopulssiin (xtalk) tai pulssin alkuun - sykli on väärän
   // mittainen. Liian suuri: kynnykset ovat liian leveät ja rajoja jää
-  // välistä, jolloin "sykli" onkin useita syklejä.
+  // välistä, jolloin "sykli" onkin useita syklejä. Lukittuna samaa suhdetta
+  // käytetään "tasaisen" pulssiparin tunnistukseen (ks. confirmLocked).
   static constexpr float kEnvStableFrac = 0.7f;
-  // Lukittuna amplitudi saa muuttua syklistä toiseen enemmän (kaasunlisäys
-  // muuttaa pulssin syvyyttä 20-30 % per sykli), ja jakson mukaisilta
-  // sykleiltä (kLockPeriodWindow) yhtäpitävyyttä ei vaadita lainkaan. 0,5
-  // erottaa yhä vuotopulssin (xtalk 0,3 -> 0,3 x oma pulssi) omasta.
-  static constexpr float kEnvLockFrac = 0.5f;
-  // Lukittuna jakso, joka on tämän suhteellisen ikkunan sisällä viitteestä,
-  // päättyy oikean pulssin rajaan, vaikka sykli näyttäisi askeleen takia
-  // matalalta tai pulssi syvältä (ks. onBoundary, confirmPending). 10 % =
-  // 2 sigmaa 5 %:n jitterillä.
+  // Lukittuna rajapulssien syvyyksien (lasku huipusta pohjaan) suhde
+  // peräkkäin enintään 1 / tämä. Syvyys eikä nousu, koska alipaineen ramppi
+  // (kaasu kiinni: -15 -> -55 kPa 300 ms:ssa) kasvattaa jokaisen pulssin
+  // laskua yhtä paljon mutta pienentää nousua - nousuun perustuva vertailu
+  // hylkäsi rampilla lähes jokaisen syklin. Vuotopulssi on <= 0,37 x oma
+  // pulssi (xtalk 0,3 + suotimen ylitys), joten 0,45 erottaa sen; rpm:n
+  // putoaminen 3000 -> 850 kasvattaa suodatettua pulssia ~2x (alipäästö).
+  static constexpr float kDepthRatio = 0.45f;
+  // Lukittuna jakso tämän suhteellisen ikkunan sisällä viitteestä (viimeisin
+  // hyväksytty jakso) kirjataan heti. 10 % = 10 sigmaa 1 %:n jitterillä ja 2
+  // sigmaa 5 %:n jitterillä; laajempi ikkuna hyväksyi rpm-pudotuksessa
+  // vuotopulssien välin (T_uusi / 3 = 1,17 x T_vanha kun 3000 -> 850 rpm).
   static constexpr float kLockPeriodWindow = 0.10f;
-  // Lukittuna yli 20 % viitteestä poikkeava sykli odottaa seuraavaa rajaa
-  // (ks. onBoundary). Väärä raja jakaa oikean syklin kahteen osaan:
-  // vuotopulssin raja (pulssi syveni kerralla > 2x ristivuodon kanssa)
-  // antaa 2T/3 + T/3, alipaineen askel + vuotopulssi satunnaisen tau + (T -
-  // tau). Ilman tätä 2T/3 hyväksyttiin ja rpm hyppäsi ~4 %. Kiihdytyksessä
-  // (mitattu jopa 0,58 ja 0,73 per sykli) sykli hyväksytään yhden syklin
-  // viiveellä. 20 % = ~3 sigmaa peräkkäisten jaksojen suhteesta 5 %:n
-  // jitterillä, joten tavallinen käynti ei odota lainkaan.
+  // Kiihdytyksessä (pulssi pieneni samalla, kaasu auki) välitön ikkuna
+  // ulottuu 20 %:iin: kaasunlisäyksen ensimmäinen sykli lyhenee 10-20 %.
+  // Sama 20 % on myös pidetyn jakson "jitter"-vahvistuksen yläraja.
   static constexpr float kSplitSuspect = 0.20f;
-  // Peräkkäisten jaksojen suhde. Kampiakselin nopeus ei voi muuttua yhden
-  // syklin aikana 1,8-kertaiseksi, joten sellainen jakso on puuttuva raja
-  // (pulssi jäi kynnyksen alle) - ja 2T osuisi silti rpm-alueelle, jolloin
-  // kierrosluku näyttäisi puolet todellisesta. Rajat ovat väljät, jotta
-  // aidosti epätasainen käynti (cv 15 %, rivi 2) ei karsiudu: 1,8 ja 0,55
-  // ovat ~2,8 sigmaa peräkkäisten jaksojen suhteesta cv:llä 0,15. Kahden
-  // peräkkäisen hylkäyksen jälkeen viite vaihdetaan, jotta nopea kaasunlisäys
-  // ei jää jumiin. Sama 1,8 x jakso on lukittuna myös amplitudiarvion
-  // vanhenemisaika: jos rajaa ei ole tullut sinä aikana, pulssi on pienentynyt
-  // kynnyksen alle eikä nykyistä sykliä hyväksyttäisi kuitenkaan.
+  // Kampiakselin nopeus ei voi muuttua yhden syklin aikana 1,8-kertaiseksi
+  // eikä pudota alle 0,55-kertaiseksi (rajat ~2,8 sigmaa peräkkäisten
+  // jaksojen suhteesta cv:llä 0,15, rivi 2). Pidetyn jakson vahvistus vaatii
+  // seuraavalta jaksolta näiden sisällä pysyvää jatkoa, ja yli 1,8-kertainen
+  // hidastuminen kerralla (vain /api/sim) vahvistetaan vasta seuraavasta
+  // pulssista (ks. classify).
   static constexpr float kMaxPeriodRatio = 1.8f;
   static constexpr float kMinPeriodRatio = 0.55f;
-  static constexpr uint8_t kMaxRatioRejects = 2;
+  // A:n vaimennus lukittuna: jos rajaa ei ole tullut 1,2 x odotetun jakson
+  // aikana, A vaimenee aikavakiolla 0,3 x jakso. Kaasunlisäyksessä pulssi
+  // kutistuu (20 -> 4,5 kPa suodatettuna kahdessa syklissä), ja vanha A
+  // pitäisi kynnyksen pulssin yläpuolella; kiinteä vanhenemisaika 1,8 x jakso
+  // jäätyi kanavan ~0,9 s:ksi. Odotettu jakso = max(viite, kahden
+  // täysikokoisen pulssin väli), jotta rpm-pudotuksen jälkeen (viite vielä
+  // vanha, lyhyt) vaimennus ei käynnisty ennen uutta omaa pulssia.
+  static constexpr float kDecayStart = 1.2f;
+  static constexpr float kDecayTau = 0.3f;
+  // Raja laukesi selvästi vaimennetulla A:lla (alle 0,7) ja pulssi oli alle
+  // 0,6 x muistin A: pulssi on pienentynyt pysyvästi, ja vanha segmentti
+  // unohdetaan, jotta seuraava samankokoinen laukaisee ilman uutta odotusta.
+  static constexpr float kFreshDecay = 0.7f;
+  static constexpr float kFullPulse = 0.6f;
+  // Vaimennuksen lattia: 0,6 x kahden viimeisimmän rajapulssin syvyys
+  // (kuitenkin enintään muistin A). Kynnys pysyy silloin >= 0,39 x oma
+  // pulssi eli vuotopulssien (<= 0,37) yläpuolella, vaikka uusi oma pulssi
+  // tulee rpm-pudotuksen jälkeen moninkertaisesti viitettä myöhemmin. Lattia
+  // ei koske tilannetta, jossa taso nousee (kaasu auki, pulssi kutistuu), ja
+  // se raukeaa 3 jakson jälkeen (pulssi loppui tai kutistui kerralla).
+  static constexpr float kFloorFrac = 0.6f;
+  static constexpr float kLevelRise = 0.1f;
+  // Pulssin keskikohtamerkin taso: pohja + 0,3 x syvyys. Lähempänä pohjaa
+  // laskeva ja nouseva reuna ovat symmetrisiä, eikä alipaineen ramppi
+  // (pulssin jälkeinen taso eri kuin ennen) siirrä keskikohtaa; 0,5:llä
+  // rampin ylittävä sykli heitti 5 %.
+  static constexpr float kMarkFrac = 0.3f;
+  // Suodatetun signaalin rengaspuskuri merkin laskevan reunan jälkihakuun:
+  // pohjasta taaksepäin merkkitasolle ja viritykseen asti on <= ~60 ms
+  // vielä 300 rpm:llä (imu 100 ms).
+  static constexpr int kRing = 64;
+  // Pohjan viive merkistä enintään 0,4 x jakso. Tason askel laukaisee rajan
+  // ilman omaa pulssia, ja "pohjaksi" tulee vasta seuraavan pulssin pohja
+  // - kaukana rajasta. Oikean pulssin pohja on <= ~0,26 x jakson päässä
+  // (6000 rpm:llä perustaajuus on lähes siniaalto).
+  static constexpr float kBottomDelay = 0.4f;
+  // Omankokoinen kuoppa: min(lasku, nousu) >= 0,5 x A. Vuotopulssit ovat <=
+  // 0,37 x A (xtalk <= 0,3), joten tällainen kuoppa on oma pulssi, joka ei
+  // laukaissut (pienentyi). Rajan jälkeen 0,5 x jakson jälkeen ja tason
+  // noustessa (kaasu auki) siitä tehdään raja jälkikäteen (kaasunlisäyksen
+  // ensimmäinen pulssi on 0,6-0,7 x tyhjäkäynnin pulssi, kynnys 0,65 x A).
+  // Tasaisella tasolla jälkiraja ei laukea, jotta hystereesin määräämä
+  // vuotopulssisieto säilyy (xtalk 0,57 ei laukaise hyst_min 1,0:lla).
+  static constexpr float kOwnDip = 0.5f;
+  static constexpr float kLateStart = 0.5f;
+  // Näytön keskiarvo aloitetaan alusta, jos uusi jakso on yli 1,5 x (tai
+  // alle 0,55 x) näytettävien syklien keskijakso: kierrosluku muuttui
+  // kerralla (/api/sim, kaasun katkaisu), eikä vanhan käynnin syklejä ole
+  // syytä näyttää vielä sekunnin ajan. Hajonta (per[]) ei nollaudu.
+  static constexpr float kRestartRatio = 1.5f;
   // Rivi 10: saturaatio näkyy 1 s viimeisestä havainnosta.
   static constexpr uint32_t kSatWindowSamples = kSampleRateHz;
 
@@ -250,8 +321,9 @@ class Dsp {
   }
 
   // 1 kHz. kpa = kalibroitu paine per kanava, raw = alkuperäinen kehys (mV
-  // vikamonitoreille). O(1) per kanava; hyväksytyn syklin kohdalla
-  // O(avg_cycles + rpm_hist) <= 96 kertolaskua.
+  // vikamonitoreille). O(1) per kanava; pulssin mittaus kerran syklissä
+  // <= 2 x kRing vertailua ja hyväksytyn syklin kohdalla
+  // O(avg_cycles + rpm_hist) <= 128 kertolaskua.
   void push(const float (&kpa)[kChannels], const RawFrame& raw) {
     ++n_;
     for (int i = 0; i < kChannels; ++i) pushChannel(ch_[i], kpa[i], raw.mv[i]);
@@ -309,12 +381,17 @@ class Dsp {
   static constexpr float kPi = 3.14159265f;
 
   // Suodatetun signaalin ääriarvot ja heilahdukset yhdeltä segmentiltä
-  // (= syklirajojen väli, tai vanhenemisaika jos rajaa ei tule).
+  // (= syklirajojen väli, tai haussa vanhenemisaika jos rajaa ei tule).
   struct Seg {
     float hi = 0.0f, lo = 0.0f;
     float ru = 0.0f;    // suurin nousu: pohjasta myöhempään huippuun
     float dd = 0.0f;    // suurin lasku: huipusta myöhempään pohjaan
     bool full = false;  // alkoi syklirajalta (ei käynnistyksestä tai vanhenemisesta)
+  };
+
+  // Hyväksymistä odottava sykli (integraali, integraalin väli, jakso, min, p2p).
+  struct Cyc {
+    float integral = 0.0f, span = 0.0f, period = 0.0f, cmin = 0.0f, p2p = 0.0f;
   };
 
   struct Chan {
@@ -330,8 +407,28 @@ class Dsp {
     Seg prev, cur;
     uint32_t seg_len = 0;
     float run_hi = 0.0f, run_lo = 0.0f;
+    uint32_t t_lo = 0;           // pohjan näyteindeksi
     bool armed = false;
     uint32_t since_boundary = 0;
+
+    // A:n vaimennus lukittuna, kun odotettu raja ei tule (ks. kDecayStart).
+    float decay = 1.0f;
+    float decay_k = 1.0f;        // kerroin per näyte jaksolle decay_for
+    float decay_for = 0.0f;
+    float nat_period = 0.0f;     // kahden täysikokoisen pulssin väli
+    uint32_t nat_int = 0;
+    float nat_frac = 0.0f;
+    bool nat_valid = false;
+    float bnd_amp = 0.0f;        // vaimentamaton A rajan hetkellä
+    bool bnd_decayed = false;    // raja laukesi selvästi vaimennetulla A:lla
+    float floor_amp = 0.0f;      // vaimennuksen lattia (kFloorFrac)
+
+    // Pienet kuopat virityksen jälkeen (eivät laukaisseet rajaa).
+    float mlo = 0.0f;            // kuluvan kuopan pohja
+    uint32_t t_mlo = 0;
+    float acc_mlo = 0.0f;        // integraali kuopan pohjaan asti (jälkiraja)
+    float cur_dip = 0.0f;        // kuluvan kuopan min(lasku, nousu)
+    float max_dip = 0.0f;        // välin suurin päättynyt kuoppa
 
     // Sykliketju: edellinen raja (kokonais- + murto-osa näytteinä).
     bool chain = false;
@@ -340,25 +437,43 @@ class Dsp {
     float acc = 0.0f;            // suodattamaton integraali edellisestä rajasta, kPa*näyte
     float last_amp = 0.0f;       // edellisen raja-raja-välin amplitudi (yhtäpitävyys)
     float last_period = 0.0f;    // edellisen raja-raja-välin pituus, 0 = ei
-    float ref_period = 0.0f;     // viimeisin hyväksytty jakso, 0 = ei viitettä
-    uint8_t ratio_rejects = 0;
     bool env_from_cycle = false; // kuluva väli alkoi ketjun toiselta tai myöhemmältä rajalta
+    float fire_top = 0.0f;       // huippu ennen viimeisintä rajaa
 
-    // Ehdokassykli, joka vahvistetaan kun sen päättänyt pulssi on nähty
-    // pohjaan asti (ks. confirmPending).
+    // Rajapulssin mittaus: suodatettu signaali rengaspuskurissa, keskikohta
+    // laskevan (hf) ja nousevan reunan puolivälistä merkkitasolla.
+    float ring[kRing] = {};
+    bool wait_rise = false;      // odotetaan nousevaa reunaa merkkitasolle
+    float mark_lvl = 0.0f;
+    float pulse_depth = 0.0f;    // lasku huipusta pohjaan
+    uint32_t hf_int = 0;
+    float hf_frac = 0.0f;
+    bool m_valid = false;        // edellisen pulssin keskikohta voimassa
+    uint32_t m_int = 0;
+    float m_frac = 0.0f;
+    float last_depth = 0.0f;     // edellisen rajapulssin syvyys
+
+    // Ehdokassykli, joka vahvistetaan kun sen päättänyt pulssi on mitattu.
     bool pending = false;
-    float pend_int = 0.0f, pend_per = 0.0f, pend_min = 0.0f, pend_amp = 0.0f;
-    float fire_top = 0.0f;       // huippu ennen viimeisintä rajaa (pulssin syvyys virityksessä)
+    Cyc pend;
+    float pend_amp = 0.0f;       // syklin alkupulssin amplitudi (haun vertailu)
+    float pend_dip = 0.0f;       // syklin suurin pieni kuoppa
+    // Lukittuna viitteestä poikkeava sykli odottaa seuraavaa (ks. classify).
+    bool hold = false;
+    Cyc held;
+    bool pair = false;           // yli 1,8 x hidastunut pari odottaa seuraavaa pulssia
+    Cyc paired;
+    float last_valid = 0.0f;     // edellisen kelvollisen lukitun välin jakso
+    float ref_period = 0.0f;     // viimeisin hyväksytty jakso, 0 = ei viitettä
+    float prev_ref = 0.0f;       // sitä edeltävä hyväksytty jakso
     uint32_t since_cycle = 0;    // näytteitä viimeisestä hyväksytystä syklistä
-    // Vahvistettu mutta viitteestä paljon poikkeava sykli odottaa seuraavaa
-    // rajaa (kSplitSuspect). tent_dip = sen päättäneen pulssin syvyys.
-    bool tent = false;
-    float tent_int = 0.0f, tent_per = 0.0f, tent_min = 0.0f, tent_amp = 0.0f, tent_dip = 0.0f;
 
-    // Syklihistoria. integral/period erikseen, jotta keskiarvo on aikapainotettu
-    // eli täsmälleen avg_cycles kokonaisen syklin yli (D1). Laskurit rajaavat
-    // käytön, joten reset() ei nollaa taulukoita.
+    // Syklihistoria. integral/span erikseen, jotta keskiarvo on aikapainotettu
+    // eli täsmälleen avg_cycles kokonaisen syklin yli (D1); rpm keskikohtien
+    // jaksoista (period). Laskurit rajaavat käytön, joten reset() ei nollaa
+    // taulukoita.
     float cyc_int[kMaxAvgCycles] = {};
+    float cyc_span[kMaxAvgCycles] = {};
     float cyc_per[kMaxAvgCycles] = {};
     float cyc_min[kMaxAvgCycles] = {};
     float cyc_p2p[kMaxAvgCycles] = {};
@@ -396,6 +511,8 @@ class Dsp {
     return (n & 1) ? v[n / 2] : 0.5f * (v[n / 2 - 1] + v[n / 2]);
   }
 
+  static bool within(float p, float r, float frac) { return p <= (1.0f + frac) * r && p >= (1.0f - frac) * r; }
+
   static void segReset(Seg& s, float y, bool full) {
     s.hi = s.lo = y;
     s.ru = s.dd = 0.0f;
@@ -426,23 +543,46 @@ class Dsp {
     segReset(c.cur, 0.0f, false);
     c.seg_len = 0;
     c.run_hi = c.run_lo = 0.0f;
+    c.t_lo = 0;
     c.armed = false;
     c.since_boundary = 0;
+    c.decay = c.decay_k = 1.0f;
+    c.decay_for = c.nat_period = 0.0f;
+    c.nat_int = 0;
+    c.nat_frac = 0.0f;
+    c.nat_valid = false;
+    c.bnd_amp = 0.0f;
+    c.bnd_decayed = false;
+    c.floor_amp = 0.0f;
+    c.mlo = c.acc_mlo = c.cur_dip = c.max_dip = 0.0f;
+    c.t_mlo = 0;
     c.chain = false;
     c.b_int = 0;
     c.b_frac = 0.0f;
     c.acc = 0.0f;
     c.last_amp = 0.0f;
     c.last_period = 0.0f;
-    c.ref_period = 0.0f;
-    c.ratio_rejects = 0;
     c.env_from_cycle = false;
-    c.pending = false;
-    c.pend_int = c.pend_per = c.pend_min = c.pend_amp = 0.0f;
     c.fire_top = 0.0f;
+    c.wait_rise = false;
+    c.mark_lvl = c.pulse_depth = 0.0f;
+    c.hf_int = 0;
+    c.hf_frac = 0.0f;
+    c.m_valid = false;
+    c.m_int = 0;
+    c.m_frac = 0.0f;
+    c.last_depth = 0.0f;
+    c.pending = false;
+    c.pend = Cyc();
+    c.pend_amp = c.pend_dip = 0.0f;
+    c.hold = false;
+    c.held = Cyc();
+    c.pair = false;
+    c.paired = Cyc();
+    c.last_valid = 0.0f;
+    c.ref_period = 0.0f;
+    c.prev_ref = 0.0f;
     c.since_cycle = 0;
-    c.tent = false;
-    c.tent_int = c.tent_per = c.tent_min = c.tent_amp = c.tent_dip = 0.0f;
     c.cyc_head = c.cyc_count = 0;
     c.per_head = c.per_count = 0;
     c.sd_rpm = 0.0f;
@@ -453,7 +593,6 @@ class Dsp {
 
   static bool locked(const Chan& c) { return c.pub.has_pulse && c.ref_period > 0.0f; }
 
-
   // Pulssin huippu-huippu A kahden viimeisimmän segmentin yli.
   //
   // Lukittuna A = min(suurin nousu, suurin lasku). Jaksollisella signaalilla
@@ -461,7 +600,8 @@ class Dsp {
   // laskua, pienenee: nousua), joten minimi ei reagoi siihen - absoluuttinen
   // verhokäyrä levisi askeleen verran ja jätti pulssit kynnysten väliin
   // (0,8-1 s ilman syklejä joka kaasun liikkeellä). Pieneneminen unohtuu,
-  // kun vanha segmentti vierii pois (raja tai vanheneminen).
+  // kun vanha segmentti vierii pois rajalla; lukittuna lisäksi vaimennus ja
+  // tuore aloitus (ks. pushChannel, finishPulse).
   //
   // Haussa A = suurin nousu. Ensimmäistä laskua ei yleensä nähdä huipusta
   // asti (asettuminen päättyy mielivaltaiseen kohtaan), jolloin minimi jäisi
@@ -540,11 +680,14 @@ class Dsp {
       c.per_count = 0;
       c.sd_rpm = 0.0f;
       c.ref_period = 0.0f;
-      c.ratio_rejects = 0;
-      c.tent = false;
+      c.prev_ref = 0.0f;
+      c.hold = false;
+      c.pair = false;
+      c.nat_period = 0.0f;
     }
 
     const float y = c.lp.process(x);
+    c.ring[n_ % kRing] = y;
     const float area = 0.5f * (c.x_prev + x);  // trapetsi välille [n-1, n]
 
     if (c.settle > 0) {
@@ -580,24 +723,83 @@ class Dsp {
     // Viritys h:lla eikä D:llä, koska alipaineen kasvu kesken pulssin
     // lyhentää seuraavaa nousua askeleen verran - D:n vaatimus ohitti silloin
     // koko seuraavan pulssin.
-    const float amp = amplitude(c, locked(c));
+    const bool lock = locked(c);
+    const float amp_mem = amplitude(c, lock);
+    float amp = amp_mem;
+    if (lock) {
+      // Odotettu raja myöhässä: A vaimenee (kaasu auki -> pulssi kutistuu),
+      // mutta ei alle lattian silloin, kun taso ei nouse (rpm-pudotus:
+      // uusi oma pulssi tulee viitettä myöhemmin, välissä vuotopulsseja).
+      const float expect = c.nat_period > c.ref_period ? c.nat_period : c.ref_period;
+      if (static_cast<float>(c.since_boundary) > kDecayStart * expect) {
+        if (expect != c.decay_for) {
+          c.decay_for = expect;
+          c.decay_k = std::exp(-1.0f / (kDecayTau * expect));
+        }
+        c.decay *= c.decay_k;
+      }
+      amp = amp_mem * c.decay;
+      if (c.decay < 1.0f && c.run_hi - c.fire_top < kLevelRise * amp_mem &&
+          static_cast<float>(c.since_boundary) < 3.0f * c.decay_for) {
+        const float fl = c.floor_amp < amp_mem ? c.floor_amp : amp_mem;
+        if (fl > amp) amp = fl;
+      }
+    }
     float h = dp_.hyst_frac * amp;
     if (h < dp_.hyst_min_kpa) h = dp_.hyst_min_kpa;
     const float d = 0.5f * (amp + h);
 
     if (!c.armed) {
-      if (y < c.run_lo) c.run_lo = y;
+      if (y < c.run_lo) {
+        c.run_lo = y;
+        c.t_lo = n_;
+      }
       if (y > c.run_lo + h) {
-        // Rajan laukaissut pulssi on nyt nähty pohjaan asti.
+        // Rajan laukaissut pulssi on nyt nähty pohjaan asti: mitataan se.
         c.armed = true;
-        if (c.pending) confirmPending(c, c.fire_top - c.run_lo);
+        startPulse(c);
         c.run_hi = y;
+        c.mlo = y;
       }
       c.acc += area;
     } else {
-      if (y > c.run_hi) c.run_hi = y;
+      bool late = false;
+      if (y > c.run_hi) {
+        c.run_hi = y;
+        c.mlo = y;
+        if (c.cur_dip > c.max_dip) c.max_dip = c.cur_dip;
+        c.cur_dip = 0.0f;
+      } else if (y < c.mlo) {
+        c.mlo = y;
+        c.t_mlo = n_;
+        c.acc_mlo = c.acc + area;
+      } else {
+        // Pieni kuoppa nousee: koko min(lasku, nousu). Omankokoinen kuoppa
+        // tason noustessa (kaasu auki) puolen jakson jälkeen = pienentynyt
+        // oma pulssi, joka ei laukaissut (ks. kOwnDip).
+        float dip = c.run_hi - c.mlo;
+        if (y - c.mlo < dip) dip = y - c.mlo;
+        if (dip > c.cur_dip) c.cur_dip = dip;
+        late = lock && static_cast<float>(c.since_boundary) >= kLateStart * c.ref_period &&
+               dip >= kOwnDip * amp_mem && c.run_hi - c.fire_top >= kLevelRise * amp_mem;
+      }
       const float thr = c.run_hi - d;
-      if (y < thr) {
+      if (late) {
+        // Jälkiraja kuopan pohjaan: integraali katkaistaan siihen kohtaan,
+        // ja pulssi on jo nähty pohjaan asti, joten se mitataan heti.
+        const float integral = c.acc_mlo;
+        onBoundary(c, c.t_mlo - 1u, 1.0f, integral, c.mlo);
+        c.acc = c.acc + area - integral;
+        c.since_boundary = n_ - c.t_mlo;
+        segReset(c.cur, c.mlo, true);
+        segAdd(c.cur, y);
+        c.bnd_decayed = true;
+        c.run_lo = c.mlo;
+        c.t_lo = c.t_mlo;
+        startPulse(c);
+        c.run_hi = y;
+        c.mlo = y;
+      } else if (y < thr) {
         // Syklin raja = suodatetun signaalin laskeva ylitys. Ylityshetki
         // interpoloidaan näytteiden väliin, ja integraali katkaistaan samaan
         // kohtaan lineaarisesti interpoloidusta signaalista. Ilman tätä raja
@@ -609,37 +811,45 @@ class Dsp {
         if (f < 0.0f) f = 0.0f;
         if (f > 1.0f) f = 1.0f;
         const float part = f * c.x_prev + 0.5f * f * f * (x - c.x_prev);
-        onBoundary(c, f, c.acc + part, y);
+        if (c.cur_dip > c.max_dip) c.max_dip = c.cur_dip;
+        onBoundary(c, n_ - 1u, f, c.acc + part, y);
         c.acc = area - part;
         c.armed = false;
         c.run_lo = y;
+        c.t_lo = n_;
       } else {
         c.acc += area;
       }
     }
 
-    // Amplitudiarvion vanheneminen: jos rajaa ei tule, pulssi on pienentynyt
-    // kynnyksen alle (kaasu auki, letku vuotaa) tai loppunut. Vanha segmentti
-    // vieritetään pois, jolloin A seuraa uutta pulssia. Lukittuna aika on
-    // kMaxPeriodRatio x jakso - sitä pidempää sykliä ei hyväksyttäisi
-    // kuitenkaan. Haussa jaksoa ei tiedetä, joten käytetään pisintä sallittua.
-    uint32_t stale_n = window_n_;
-    if (locked(c)) {
-      const float s = kMaxPeriodRatio * c.ref_period;
-      if (s < static_cast<float>(window_n_)) stale_n = static_cast<uint32_t>(s) + 1u;
+    // Rajapulssin nouseva reuna merkkitasolla -> pulssi mitattu.
+    if (c.wait_rise && y >= c.mark_lvl && c.y_prev < c.mark_lvl) {
+      finishPulse(c, n_ - 1u, (c.mark_lvl - c.y_prev) / (y - c.y_prev));
     }
-    if (c.seg_len >= stale_n) {
+
+    if (locked(c)) {
+      // Lukittuna segmenttejä ei vieritetä ajan perusteella (vaimennus hoitaa
+      // pienentyneen pulssin), mutta näin pitkä väli ei ole jakso.
+      if (c.since_boundary >= window_n_) {
+        c.chain = false;
+        c.acc = 0.0f;
+        c.pending = false;
+        c.hold = false;
+        c.pair = false;
+        c.m_valid = false;
+      }
+    } else if (c.seg_len >= window_n_) {
+      // Haussa amplitudiarvio vanhenee: jos rajaa ei tule pisimmän
+      // hyväksyttävän jakson aikana, vanha segmentti vieritetään pois.
+      // Kuluvaa väliä ei arvioida (ei kokonainen raja-raja-segmentti).
       roll(c, y, false);
-      // Kuluvaa väliä ei arvioida (ei kokonainen raja-raja-segmentti). Jos
-      // sykli odotti vahvistusta, sen päättänyt "pulssi" ei noussut takaisin
-      // - tason askel eikä imupulssi - ja kSplitSuspect-sykli jää ilman
-      // ratkaisevaa seuraavaa rajaa; molemmat hylätään.
       c.env_from_cycle = false;
       c.pending = false;
-      c.tent = false;
+      c.hold = false;
       if (c.since_boundary >= window_n_) {
-        c.chain = false;  // näin pitkä väli ei ole kelvollinen jakso
+        c.chain = false;
         c.acc = 0.0f;
+        c.m_valid = false;
       }
     }
 
@@ -662,12 +872,11 @@ class Dsp {
            kSmallPulseRatio * period >= last_period;
   }
 
-  void onBoundary(Chan& c, float f, float integral, float y) {
-    // Raja on välillä [n-1, n]: kokonaisosa n-1, murto-osa f. Jakso lasketaan
+  void onBoundary(Chan& c, uint32_t b_int, float f, float integral, float y) {
+    // Raja on välillä [b_int, b_int + 1], murto-osa f. Jakso lasketaan
     // kokonaislukuerotuksena (kääntyy oikein uint32-ylivuodossa ~49 vrk:n
     // jälkeen) plus murto-osien erotus - float-aikaleima menettäisi
     // tarkkuutensa jo tunneissa.
-    const uint32_t b_int = n_ - 1u;
     // Juuri päättyneen syklin amplitudi: nousu syklin pohjasta huippuun, ja
     // lukittuna pienempi siitä ja laskusta edellisen syklin huipusta tämän
     // pohjaan, koska tason askel kasvattaa vain toista (vrt. amplitude()).
@@ -686,65 +895,48 @@ class Dsp {
     }
     float period = 0.0f;
     if (c.chain) period = static_cast<float>(b_int - c.b_int) + (f - c.b_frac);
-    c.pending = false;  // ratkeaa aina virityksessä, joka edeltää rajaa
+    c.pending = false;  // ratkeaa aina pulssin mittauksessa, joka edeltää rajaa
+    if (c.wait_rise) {
+      // Edellinen pulssi ei noussut merkkitasolle ennen uutta rajaa: sen
+      // keskikohtaa ei tunneta, joten seuraavaa jaksoa ei voi mitata.
+      c.wait_rise = false;
+      c.m_valid = false;
+    }
     // Seuraava väli arvioidaan vain, jos tämä raja oli imupulssi. Ketjun
     // ensimmäinen väli alkaa mielivaltaisesta kohdasta (käynnistys,
     // vanheneminen), ja sen amplitudi voi sattumalta osua vuotopulssin
     // kokoon - siksi arvioidaan vasta toisesta kokonaisesta välistä alkaen.
-    bool next_trusted = c.chain;
-    bool evaluate = c.chain && c.env_from_cycle;
-    if (c.tent) {
-      // Odottava sykli P1 ja juuri päättynyt väli P2. Väärän rajan
-      // tunnusmerkit: P2 on vain jakamisen jäännös (< kMinPeriodRatio x P1),
-      // tai P1:n päättänyt "pulssi" ei noussut takaisin (nousu P2:ssa < 0,7 x
-      // sen syvyys): se oli alipaineen askel. Oikea pulssi nousee yhtä
-      // paljon kuin laski, ja kiihdytyksessä jaksot lyhenevät asteittain.
-      c.tent = false;
-      const bool split = !c.chain || period < kMinPeriodRatio * c.tent_per ||
-                         c.cur.ru < kEnvStableFrac * c.tent_dip;
-      if (split) {
-        evaluate = false;  // P2 alkoi väärältä rajalta
-      } else {
-        recordCycle(c, c.tent_int, c.tent_per, c.tent_min, c.tent_amp);
-      }
-    }
-    const float ref = c.ref_period;
-    if (evaluate) {
-      // Lukittuna jakso viitteen mukaan = molemmat rajat ovat imupulsseja:
-      // vuotopulssin raja antaisi T/3 tai 2T/3, puuttuva pulssi 2T. Silloin
-      // amplitudin yhtäpitävyyttä ei vaadita, koska alipaineen askel kesken
-      // nousun tai laskun pienentää yhden syklin amplitudia hetkellisesti
-      // (mitattu: 20 -> 7,6 kPa 15 kPa:n askeleessa) eikä se tarkoita väärää rajaa.
-      const bool on_time = lock && period <= (1.0f + kLockPeriodWindow) * ref &&
-                           period >= (1.0f - kLockPeriodWindow) * ref;
-      const float frac = lock ? kEnvLockFrac : kEnvStableFrac;
+    const bool next_trusted = c.chain;
+    bool cand = false;
+    if (c.chain && c.env_from_cycle) {
+      // Haussa kolmen peräkkäisen rajapulssin on oltava samankokoisia (tämä
+      // ja edellinen alkupulssi tässä, loppupulssi vahvistuksessa). Lukittuna
+      // vertailu tehdään syvyyksillä vahvistuksessa (ks. confirmLocked).
       const bool ok_period = period >= min_period_ && period <= max_period_;
       const bool ok_amp = ampOk(amp, period, c.last_period);
-      const bool ok_env = on_time || (c.last_amp >= frac * amp && amp >= frac * c.last_amp);
-      // Liian lyhyt jakso lukittuna: tämä raja ei ollut imupulssi (alipaineen
-      // askel, vuotopulssi), joten siitä alkavaa väliä ei arvioida - se
-      // hyväksyttäisiin muuten väärällä jaksolla (mitattu 208 ms 140 ms:n
-      // sijaan). Liian pitkä jakso (puuttuva pulssi) päättyy oikeaan rajaan.
-      const bool too_short = ref > 0.0f && period < kMinPeriodRatio * ref;
-      const bool too_long = ref > 0.0f && period > kMaxPeriodRatio * ref;
-      if (lock && too_short && c.ratio_rejects < kMaxRatioRejects) next_trusted = false;
+      const bool ok_env = lock || (c.last_amp >= kEnvStableFrac * amp && amp >= kEnvStableFrac * c.last_amp);
       if (ok_period && ok_amp && ok_env) {
-        const bool ok_ratio = !too_short && !too_long;
-        if (ok_ratio || c.ratio_rejects >= kMaxRatioRejects) {
-          c.pending = true;
-          c.pend_int = integral;
-          c.pend_per = period;
-          c.pend_min = cmin;
-          c.pend_amp = amp;
-        } else {
-          ++c.ratio_rejects;
-        }
+        cand = true;
+        c.pending = true;
+        c.pend.integral = integral;
+        c.pend.span = period;
+        c.pend.period = period;
+        c.pend.cmin = cmin;
+        c.pend.p2p = amp;
+        c.pend_amp = amp;
       }
     }
+    if (!cand) c.hold = false;
     c.last_amp = amp;
     c.last_period = period;
     c.fire_top = c.run_hi;  // huippu ennen tätä rajaa
     c.env_from_cycle = next_trusted;
+    c.bnd_amp = amplitude(c, lock);
+    c.bnd_decayed = c.decay < kFreshDecay;
+    c.pend_dip = c.max_dip;
+    c.max_dip = 0.0f;
+    c.cur_dip = 0.0f;
+    c.decay = 1.0f;
     roll(c, y, true);
     c.since_boundary = 0;
     c.b_int = b_int;
@@ -752,61 +944,227 @@ class Dsp {
     c.chain = true;
   }
 
-  // Vahvistus, kun syklin päättänyt pulssi on nähty pohjaan asti (viritys).
-  //
-  // Haussa: ristivuodolla kahden vuotopulssin väli ja vuotopulssista omaan
-  // pulssiin ulottuva väli näyttävät amplitudin puolesta yhtä
-  // johdonmukaisilta - ja niiden jakso on T/3, eli rpm kolminkertainen. Ero
-  // näkyy vasta, kun rajan laukaissut pulssi on nähty pohjaan asti.
-  // Hyväksytty sykli vaatii siis kolme peräkkäistä samankokoista pulssia.
-  // Vuotopulsseja on peräkkäin enintään kaksi ja ne ovat xtalk <= 0,5:llä
-  // alle 0,7 x oma, joten kolme samankokoista voivat olla vain omia.
-  //
-  // Lukittuna: raja voi laueta myös tason askeleesta (alipaine kasvaa
-  // kerralla > 0,65 x A, esim. /api/sim). Askeleen "pulssi" on askel + oma
-  // pulssi syvä, joten yläraja hylkää syklin - mutta vain jos jaksokin
-  // poikkeaa viitteestä. Jakson mukainen raja on oikea pulssi, jonka pohjaa
-  // askel vain syvensi; askelraja taas osuu satunnaiseen kohtaan sykliä, ja
-  // jos se sattuu jakson mukaiseen kohtaan, virhe on alle kLockPeriodWindow
-  // ja seuraava sykli kompensoi sen keskiarvossa (välit ovat yhtenäiset).
-  // Hylätyn syklin jälkeinen väli alkoi samalta epäilyttävältä rajalta,
-  // joten sitäkään ei arvioida.
-  void confirmPending(Chan& c, float depth) {
-    c.pending = false;
-    const bool lock = locked(c);
-    const float lo = lock ? kEnvLockFrac : kEnvStableFrac;
-    bool ok = depth >= lo * c.pend_amp;
-    const bool on_time = lock && c.pend_per <= (1.0f + kLockPeriodWindow) * c.ref_period &&
-                         c.pend_per >= (1.0f - kLockPeriodWindow) * c.ref_period;
-    if (!on_time) ok = ok && c.pend_amp >= kEnvStableFrac * depth;
-    if (ok) {
-      const bool suspect = lock && (c.pend_per > (1.0f + kSplitSuspect) * c.ref_period ||
-                                    c.pend_per < (1.0f - kSplitSuspect) * c.ref_period);
-      if (suspect) {
-        c.tent = true;
-        c.tent_int = c.pend_int;
-        c.tent_per = c.pend_per;
-        c.tent_min = c.pend_min;
-        c.tent_amp = c.pend_amp;
-        c.tent_dip = depth;
-      } else {
-        recordCycle(c, c.pend_int, c.pend_per, c.pend_min, c.pend_amp);
+  // Rajapulssin mittaus virityshetkellä (pohja tunnetaan): merkkitason
+  // laskeva ylitys haetaan rengaspuskurista taaksepäin pohjasta, nouseva
+  // pohjan jälkeen puskurista tai seuraavista näytteistä (finishPulse).
+  void startPulse(Chan& c) {
+    c.pulse_depth = c.fire_top - c.run_lo;
+    const float lvl = c.run_lo + kMarkFrac * c.pulse_depth;
+    c.mark_lvl = lvl;
+    bool found = false;
+    for (uint32_t k = 0; k < static_cast<uint32_t>(kRing - 2); ++k) {
+      const uint32_t j1 = c.t_lo - k;
+      const uint32_t j0 = j1 - 1u;
+      if (n_ - j0 >= static_cast<uint32_t>(kRing)) break;
+      const float y0 = c.ring[j0 % kRing];
+      const float y1 = c.ring[j1 % kRing];
+      if (y0 >= lvl && y1 < lvl) {
+        c.hf_int = j0;
+        c.hf_frac = (y0 - lvl) / (y0 - y1);
+        found = true;
+        break;
       }
+    }
+    if (!found) {
+      // Lasku kesti yli puskurin (< 300 rpm): raja kelpaa laskevaksi reunaksi.
+      c.hf_int = c.b_int;
+      c.hf_frac = c.b_frac;
+    }
+    for (uint32_t j = c.t_lo; j != n_; ++j) {
+      const float y0 = c.ring[j % kRing];
+      const float y1 = c.ring[(j + 1u) % kRing];
+      if (y0 < lvl && y1 >= lvl) {
+        finishPulse(c, j, (lvl - y0) / (y1 - y0));
+        return;
+      }
+    }
+    c.wait_rise = true;
+  }
+
+  // Pulssi mitattu: keskikohta, jakso edellisestä keskikohdasta, A:n
+  // seuranta ja odottavan syklin vahvistus.
+  void finishPulse(Chan& c, uint32_t hr_int, float hr_frac) {
+    c.wait_rise = false;
+    const uint32_t ci = c.hf_int;
+    const float cf = c.hf_frac + 0.5f * (static_cast<float>(hr_int - c.hf_int) + (hr_frac - c.hf_frac));
+    const float mperiod = c.m_valid ? static_cast<float>(ci - c.m_int) + (cf - c.m_frac) : 0.0f;
+    const bool mk = mperiod > 0.0f;
+    c.m_int = ci;
+    c.m_frac = cf;
+    c.m_valid = c.chain;
+    const float depth = c.pulse_depth;
+    bool fresh = false;
+    if (depth >= kFullPulse * c.bnd_amp) {
+      // Täysikokoinen pulssi: odotettu jakso (vaimennuksen viite) = väli
+      // edelliseen täysikokoiseen. Rpm-pudotuksen jälkeen viite on vielä
+      // vanha (lyhyt), mutta omat pulssit ovat täysikokoisia ja välissä
+      // olevat vuotopulssit eivät.
+      if (c.nat_valid) {
+        const float iv = static_cast<float>(ci - c.nat_int) + (cf - c.nat_frac);
+        if (iv > 0.0f && iv < static_cast<float>(window_n_)) c.nat_period = iv;
+      }
+      c.nat_int = ci;
+      c.nat_frac = cf;
+      c.nat_valid = true;
+    } else if (c.bnd_decayed) {
+      // Pieni pulssi laukaisi vasta vaimennetulla A:lla: vanha (isompi)
+      // pulssi unohdetaan, jotta seuraava samankokoinen laukaisee.
+      segReset(c.prev, c.run_lo, true);
+      c.prev.hi = c.fire_top;
+      fresh = true;
+    }
+    if (c.pair) {
+      // Odottava pari kirjataan, ellei tämä pulssi ole moninkertaisesti
+      // syvempi (silloin pari oli vuotopulsseja ja tämä vasta oma pulssi).
+      c.pair = false;
+      c.hold = false;
+      if (depth <= c.last_depth / kDepthRatio && locked(c)) {
+        recordCycle(c, c.held);
+        recordCycle(c, c.paired);
+        c.last_valid = c.paired.period;
+      }
+    }
+    if (c.pending) {
+      c.pending = false;
+      if (mk) c.pend.period = mperiod;
+      if (locked(c)) {
+        confirmLocked(c, depth, mk);
+      } else if (mk && depth >= kEnvStableFrac * c.pend_amp && c.pend_amp >= kEnvStableFrac * depth) {
+        // Haussa: ristivuodolla kahden vuotopulssin väli ja vuotopulssista
+        // omaan pulssiin ulottuva väli näyttävät amplitudin puolesta yhtä
+        // johdonmukaisilta - ja niiden jakso on T/3, eli rpm kolminkertainen.
+        // Ero näkyy vasta, kun rajan laukaissut pulssi on nähty pohjaan asti.
+        // Hyväksytty sykli vaatii siis kolme peräkkäistä samankokoista
+        // pulssia. Vuotopulsseja on peräkkäin enintään kaksi ja ne ovat
+        // xtalk <= 0,5:llä alle 0,7 x oma, joten kolme samankokoista voivat
+        // olla vain omia.
+        c.hold = false;
+        recordCycle(c, c.pend);
+      } else {
+        // Hylätyn syklin jälkeinen väli alkoi samalta epäilyttävältä rajalta.
+        c.env_from_cycle = false;
+        c.hold = false;
+      }
+    }
+    const float base = fresh || depth > c.last_depth ? depth : c.last_depth;
+    c.floor_amp = kFloorFrac * base;
+    c.last_depth = depth;
+  }
+
+  // Lukitun syklin vahvistus. Molempien rajapulssien on oltava omia pulsseja:
+  //  - syvyydet peräkkäin 0,45...2,2-kertaiset (vuotopulssi <= 0,37 x oma);
+  //  - pohja enintään 0,4 x jakson päässä merkistä: tason askel laukaisee
+  //    rajan ilman pulssia, ja sen "pohja" on vasta seuraavan pulssin;
+  //  - jos rajapulssit eivät ole samankokoisia (kaasu), välissä ei saa olla
+  //    omankokoista kuoppaa: se on ohitettu pulssi, ja väli kaksi sykliä,
+  //    joka voi kiihdytyksessä osua vanhan viitteen pituiseksi.
+  void confirmLocked(Chan& c, float depth, bool mk) {
+    const float last = c.last_depth > 0.0f ? c.last_depth : depth;
+    bool ok = mk && depth >= kDepthRatio * last && kDepthRatio * depth <= last;
+    if (static_cast<float>(c.t_lo - c.hf_int) - c.hf_frac > kBottomDelay * c.pend.period) ok = false;
+    const bool steady = depth >= kEnvStableFrac * last && kEnvStableFrac * depth <= last;
+    const float maxd = depth > last ? depth : last;
+    const float mind = depth < last ? depth : last;
+    if (!steady && c.pend_dip >= kOwnDip * mind && c.pend_dip >= 0.4f * maxd) ok = false;
+    if (ok) {
+      classify(c, last > 0.0f ? depth / last : 1.0f);
     } else {
-      c.env_from_cycle = false;
+      c.hold = false;
+      c.last_valid = 0.0f;
     }
   }
 
-  void recordCycle(Chan& c, float integral, float period, float cmin, float cp2p) {
-    c.ref_period = period;
-    c.ratio_rejects = 0;
-    c.cyc_int[c.cyc_head] = integral;
-    c.cyc_per[c.cyc_head] = period;
-    c.cyc_min[c.cyc_head] = cmin;
-    c.cyc_p2p[c.cyc_head] = cp2p;
+  // Jaksologiikka lukittuna. Viitteen (viimeisin hyväksytty jakso) mukainen
+  // sykli kirjataan heti. Poikkeava pidetään ja ratkaistaan seuraavalla
+  // kelvollisella syklillä P:
+  //  - jatko samaan suuntaan (kiihtyy: P/H 0,55...1,2, hidastuu: 0,8...1,8)
+  //    tai molemmat viitteen ympärillä käynnin oman hajonnan sisällä ->
+  //    molemmat kirjataan ja viite vaihtuu (kierrosluku muuttui);
+  //  - muuten pidetty hylätään ja P arvioidaan itse.
+  // Tämä korvaa kiinteät suhderajat ja "kahden hylkäyksen jälkeen
+  // hyväksytään" -säännön, joka ei koskaan täyttynyt rpm-pudotuksessa
+  // (vanhenemisaika katkaisi välit) ja hyväksyi kiihdytyksessä väärän jakson.
+  // Väärä raja jakaa syklin osiin (2T/3 + T/3, askel tau + T - tau), joiden
+  // peräkkäiset suhteet eivät ole jatkoa toisilleen tai summautuvat
+  // viitejaksoon; puuttuva pulssi (2T, T) palaa viitteeseen.
+  void classify(Chan& c, float q) {
+    const float r = c.ref_period;
+    const float p = c.pend.period;
+    // Edellinen kelvollinen jakso selvästi viitettä lyhyempi: kierrokset
+    // nousevat, ja viitteen mittainen väli on silloin todennäköisemmin kaksi
+    // sykliä ohitetulla pulssilla.
+    const bool fast_before = c.last_valid > 0.0f && c.last_valid < (1.0f - kSplitSuspect) * r;
+    c.last_valid = p;
+    if (c.hold) {
+      const float h = c.held.period;
+      // Jaettu sykli: erikokoiset osat summautuvat viitejaksoon.
+      const bool split = h < r && within(h + p, r, kLockPeriodWindow) && !within(p, h, kSplitSuspect);
+      // Molemmat viitteen ympärillä: hyväksytään, jos poikkeama mahtuu käynnin
+      // omaan hajontaan (3 x cv, 5...20 %). Tasaisella käynnillä 17 %:n
+      // heitto ei ole hajontaa vaan väärä raja (vuotopulssi rpm-pudotuksessa).
+      float tol = c.pub.rpm > 0.0f ? 3.0f * c.sd_rpm / c.pub.rpm : kSplitSuspect;
+      if (tol < 0.05f) tol = 0.05f;
+      if (tol > kSplitSuspect) tol = kSplitSuspect;
+      const bool jitter = within(h, r, tol) && within(p, r, tol);
+      const bool trend = h < r ? (p >= kMinPeriodRatio * h && p <= (1.0f + kSplitSuspect) * h)
+                               : (p >= (1.0f - kSplitSuspect) * h && p <= kMaxPeriodRatio * h);
+      if (!split && (trend || jitter)) {
+        if (h > kMaxPeriodRatio * r) {
+          // Kierrokset putosivat kerralla yli 1,8-kertaisesti (vain /api/sim):
+          // uuden käynnin vuotopulssit (T/3 välein) näyttävät kahden välin
+          // ajan samalta kuin omat. Pari kirjataan vasta, kun seuraava pulssi
+          // on nähty eikä se ole moninkertaisesti syvempi (finishPulse).
+          c.pair = true;
+          c.paired = c.pend;
+          return;
+        }
+        c.hold = false;
+        recordCycle(c, c.held);
+        recordCycle(c, c.pend);
+        return;
+      }
+      c.hold = false;
+    }
+    // Pulssi pieneni selvästi (kaasu auki -> kierrokset nousevat): viitettä
+    // pidempi väli on todennäköisemmin kaksi sykliä ohitetulla pulssilla.
+    // Kun kiihdytys on jo alkanut (viite > 5 % edeltäjäänsä lyhyempi),
+    // riittää 10 %:n pienentyminen: 150 ms:n kaasunlisäyksessä nouseva taso
+    // peitti pulssin, ja kahden syklin väli osui jo lyhentyneen viitteen
+    // +10 %:n sisään. Vakiokierroksilla alipaineramppi pienentää pulssia
+    // ilman kiihdytystä, eikä sitä silloin pidetä (ramppi ei maksa sykliä).
+    const bool accel = c.prev_ref > 0.0f && r < 0.95f * c.prev_ref;
+    const bool slow_on_shrink = p > 1.03f * r && (q < kEnvStableFrac || (accel && q < 0.9f));
+    // Yli 10 % lyhyempi jakso hyväksytään heti vain, jos pulssi samalla
+    // pieneni (kaasu auki): vakioalipaineessa niin nopea kiihtyvyys ei ole
+    // mahdollinen, vaan raja on todennäköisemmin vuotopulssi.
+    const float lo = q < 0.9f ? 1.0f - kSplitSuspect : 1.0f - kLockPeriodWindow;
+    if (!fast_before && !slow_on_shrink && p <= (1.0f + kLockPeriodWindow) * r && p >= lo * r) {
+      recordCycle(c, c.pend);
+      return;
+    }
+    c.hold = true;
+    c.held = c.pend;
+  }
+
+  void recordCycle(Chan& c, const Cyc& cy) {
+    // Näyttökeskiarvo alusta, jos kierrosluku muuttui kerralla (kRestartRatio).
+    const int n0 = c.cyc_count < avg_n_ ? c.cyc_count : avg_n_;
+    if (n0 > 0) {
+      float sp = 0.0f;
+      for (int k = 0; k < n0; ++k) sp += c.cyc_per[(c.cyc_head - 1 - k + kMaxAvgCycles) % kMaxAvgCycles];
+      const float avgp = sp / static_cast<float>(n0);
+      if (cy.period > kRestartRatio * avgp || cy.period < kMinPeriodRatio * avgp) c.cyc_count = 0;
+    }
+    c.prev_ref = c.ref_period;
+    c.ref_period = cy.period;
+    c.cyc_int[c.cyc_head] = cy.integral;
+    c.cyc_span[c.cyc_head] = cy.span;
+    c.cyc_per[c.cyc_head] = cy.period;
+    c.cyc_min[c.cyc_head] = cy.cmin;
+    c.cyc_p2p[c.cyc_head] = cy.p2p;
     c.cyc_head = (c.cyc_head + 1) % kMaxAvgCycles;
     if (c.cyc_count < kMaxAvgCycles) ++c.cyc_count;
-    c.per[c.per_head] = period;
+    c.per[c.per_head] = cy.period;
     c.per_head = (c.per_head + 1) % kMaxRpmHist;
     if (c.per_count < kMaxRpmHist) ++c.per_count;
 
@@ -815,20 +1173,21 @@ class Dsp {
     c.since_cycle = 0;
 
     // Näyttöarvot avg_cycles viimeisimmän syklin yli. Keskiarvo on
-    // sum(integraali) / sum(jakso) eli aikapainotettu: sama kuin yksi
-    // integraali N kokonaisen syklin yli.
+    // sum(integraali) / sum(integraalin väli) eli aikapainotettu: sama kuin
+    // yksi integraali N kokonaisen syklin yli.
     const int n = c.cyc_count < avg_n_ ? c.cyc_count : avg_n_;
-    float s_int = 0.0f, s_per = 0.0f, s_min = 0.0f, s_p2p = 0.0f;
+    float s_int = 0.0f, s_span = 0.0f, s_per = 0.0f, s_min = 0.0f, s_p2p = 0.0f;
     for (int k = 0; k < n; ++k) {
       const int i = (c.cyc_head - 1 - k + kMaxAvgCycles) % kMaxAvgCycles;
       s_int += c.cyc_int[i];
+      s_span += c.cyc_span[i];
       s_per += c.cyc_per[i];
       s_min += c.cyc_min[i];
       s_p2p += c.cyc_p2p[i];
     }
     const float fs = static_cast<float>(kSampleRateHz);
     const float inv_n = 1.0f / static_cast<float>(n);
-    c.pub.mean_kpa = s_int / s_per;
+    c.pub.mean_kpa = s_int / s_span;
     c.pub.min_kpa = s_min * inv_n;
     c.pub.p2p_kpa = s_p2p * inv_n;
     // rpm = 120 / keskijakso (ei 120/T:n keskiarvo, joka on jitterillä harhainen
@@ -845,8 +1204,8 @@ class Dsp {
       const float avg = sum / static_cast<float>(m);
       float ss = 0.0f;
       for (int k = 0; k < m; ++k) {
-        const float d = 120.0f * fs / c.per[(c.per_head - 1 - k + kMaxRpmHist) % kMaxRpmHist] - avg;
-        ss += d * d;
+        const float dv = 120.0f * fs / c.per[(c.per_head - 1 - k + kMaxRpmHist) % kMaxRpmHist] - avg;
+        ss += dv * dv;
       }
       c.sd_rpm = std::sqrt(ss / static_cast<float>(m - 1));
     } else {
