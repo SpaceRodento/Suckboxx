@@ -43,7 +43,11 @@
 // ei omia pulsseja, ei todistaja) ja asettuu palattuaan kRing näytettä kuten
 // käynnistyksessä; D1-ketju katkeaa, joten vian ylittävää sykliä ei kirjata.
 // Takaisin kytketyn letkun tasoaskel (koko alipaine, 25-55 kPa) ei siten ole
-// oma pulssi, todistaja eikä muiden pulssin estävä pudotus. sensor_fault-lippu
+// oma pulssi, todistaja eikä muiden pulssin estävä pudotus. Asettunut kanava
+// on elävä vasta ensimmäisestä uudesta omasta pulssistaan, jonka pudotuksen
+// on oltava >= kOwnFloor x ennen vikaa mitattu oma syvyys (suotimen
+// asettumisen ylitys ei ole pulssi); ennen vikaa mitattu, vielä tuore pulssi
+// ei tee siitä pakollista todistajaa. sensor_fault-lippu
 // nousee edelleen vasta fault_hold_s:n jälkeen. has_pulsen aikakatkaisu
 // tyhjentää kanavan omien pulssien historian; kun yhdelläkään kanavalla ei
 // ole has_pulsea, myös opittu sytytysjärjestys unohdetaan (letkut voidaan
@@ -54,7 +58,9 @@
 //  - haussa (ei has_pulse) kolme peräkkäistä omaa pulssia ovat samankokoisia
 //    (jokainen pari);
 //  - todistajat (confirm): toinen kanava todistaa, kun se on elävä (asettunut,
-//    oma pulssi tämän kanavan toiseksi viimeisimmän oman pulssin jälkeen).
+//    asettumisen jälkeen oma pulssi, joka on tämän kanavan toiseksi
+//    viimeisimmän oman pulssin jälkeen). Vian jälkeen asettuvan kanavan ennen
+//    vikaa mitattu oma pulssi syklin sisällä äänestää, mutta sitä ei vaadita.
 //    Todistajan omia pulsseja on syklin sisällä täsmälleen yksi ja omalla
 //    paikallaan: tätä kanavaa seuraava sylinteri 1/3:n, edeltävä 2/3:n kohdalla
 //    +- kSlotTol. Järjestys (sylinterit + letkujen kytkentä) opitaan
@@ -67,10 +73,15 @@
 //    paikka nopeuden muutoksella korjattuna (s + (1 - jakso / edellinen oma
 //    väli) / 9) kSlotTolSingle:n sisällä: nT-välissä yksittäinen merkki osuu
 //    paikalleen (k + 1/3) / n:ssä tai (k + 2/3) / n:ssä, mutta nopeuden muutos
-//    ei selitä sen siirtymää. Ei koske sykliä, joka on epäilyttävä vain tauon
-//    vuoksi (edellinen hylätty, jakso tavallinen). Pitkä sykli tai pitkä tauko
-//    edellisestä hyväksytystä (yli kBothRatio x viite: rpm:n pudotus tai kaikki
-//    ohittivat pulsseja) vaatii kaikki elävät todistajat.
+//    ei selitä sen siirtymää. Tauon jälkeen (jakso tavallinen, mutta
+//    edellisestä hyväksytystä yli kBothRatio x viite) edellinen oma väli on
+//    usein ohitetun pulssin 2T, joten paikka tarkistetaan todistajan
+//    puolelta: jos todistajan edellinen oma väli on syklin mittainen
+//    (+-kSmallPulseRatio), tämän syklin alkupulssin on osuttava todistajan
+//    syklissä vastapaikalle (1 - s) +- kSlotTol. Pitkä sykli (yli kBothRatio x
+//    tuorein jakso: viite tai sitä lyhyempi edellinen oma väli) tai pitkä
+//    tauko edellisestä hyväksytystä (yli kBothRatio x viite: rpm:n pudotus tai
+//    kaikki ohittivat pulsseja) vaatii kaikki elävät todistajat.
 //  - varatila (ei eläviä todistajia, esim. kaksi letkua irti): kolme
 //    samankokoista omaa pulssia ja jakso edellisen oman välin ja viitteen +-
 //    kFallbackWindow sisällä.
@@ -83,7 +94,8 @@
 // Laukaisu (suhteellinen Schmitt) tarvitsee pulssin koon A. Kaasunlisäyksessä
 // kaikkien sylinterien pulssit kutistuvat yhtä aikaa: A laskee muiden kanavien
 // tuoreeseen omaan syvyyteen (peerDepth), ja jos rajaa ei tule 1,2 x jakson
-// aikana, A vaimenee (kDecayStart). Vuotopulssi saa laukaista - omistajuus
+// aikana, A vaimenee (kDecayStart; jakso = tuorein jakso, kun muut kanavat
+// pulssivat, varatilassa viite). Vuotopulssi saa laukaista - omistajuus
 // hylkää sen.
 //
 // Mitatut rajat (EngineSim -> mV -> nimellinen kPa -> Dsp, oletusparametrit:
@@ -278,7 +290,11 @@ class Dsp {
   // = 50 Hz -> 0,38); alaraja estää rajan katoamisen, jos rpm_max nostetaan.
   static constexpr float kMinGateGain = 0.25f;
   // Skaalatun rajan varassa hyväksytyn syklin jakso tämän suhteen sisällä
-  // edellisestä: kohina ei tuota peräkkäisiä samanmittaisia "syklejä".
+  // edellisestä: kohina ei tuota peräkkäisiä samanmittaisia "syklejä". Sama
+  // suhde rajaa tauon jälkeisen vastapaikan tarkistuksen (confirm) todistajan
+  // väleihin, jotka ovat yksi jakso: 0,7...1,43 otti mukaan ohitetun pulssin
+  // välejä ja hylkäsi oikeita syklejä (letku irti, xtalk 0,5: has_pulse
+  // putosi 11 -> 24 ajossa 3456:sta).
   static constexpr float kSmallPulseRatio = 1.25f;
   // Lukituksen haku: kolme peräkkäistä omaa pulssia syvyydeltään tämän suhteen
   // sisällä (moottorin käynnistyksen askel ja kohina eivät toistu tasaisina).
@@ -1065,47 +1081,45 @@ class Dsp {
   // (muuten lyhytkin vika kaasunlisäyksen lopussa jätti terveen kanavan
   // yhden todistajan varaan juuri, kun pulssit kasvavat).
   //
-  // mdev = vastapaikan poikkeama: paikka on molemminpuolinen, joten jos
-  // todistajan edellinen oma väli on syklin mittainen (+-kSmallPulseRatio),
-  // tämän syklin alkupulssin pitäisi osua todistajan syklissä paikalle
-  // 1 - (todistajan paikka). Käytetään yhden todistajan syklissä, jota
-  // nopeuskorjaus ei koske (ks. accept).
-  //
   // dev = vahvistavan todistajan suurin poikkeama nopeuden muutoksella
   // korjatusta paikasta. Kun kierrosnopeus muuttuu tasaisesti, jakso /
   // edellinen oma väli = lr ja kulmanopeus syklin alussa ~(1 + (lr - 1) / 2)
   // x keskimääräinen; kampi saavuttaa 1/3:n ja 2/3:n aikaisemmin
   // (hidastuessa) siirtymällä (1 - lr) / 2 x s(1 - s) = (1 - lr) / 9.
-  int confirm(int i, float a_new, float a_old, float period, int& nl, float& dev, float& mdev) {
+  // Tauon jälkeen (pause, ks. accept) edellinen oma väli ei kerro nopeutta,
+  // joten dev on vastapaikan poikkeama: paikka on molemminpuolinen, ja jos
+  // todistajan edellinen oma väli on syklin mittainen (+-kSmallPulseRatio),
+  // tämän syklin alkupulssin pitää osua todistajan syklissä paikalle
+  // 1 - (todistajan paikka).
+  int confirm(int i, float a_new, float a_old, float period, bool pause, int& nl, float& dev) {
     int np = 0, sum = 0;
     nl = 0;
-    dev = mdev = 0.0f;
-    const float lr = ch_[i].last_period > 0.0f ? period / ch_[i].last_period : 1.0f;
+    dev = 0.0f;
+    // Nopeuden muutoksen siirtymä (1 - lr) / 9, lr = jakso / edellinen oma väli.
+    const float skew = ch_[i].last_period > 0.0f ? (1.0f - period / ch_[i].last_period) / 9.0f : 0.0f;
     for (int j = 0; j < kChannels; ++j) {
       if (j == i) continue;
-      const Chan& o = ch_[j];
-      const bool lv = live(i, j);
-      if (!lv && o.settle == 0) continue;
-      if (lv) ++nl;
-      int n = 0;
-      float u = 0.0f, back = -1.0f;  // back: todistajan edellinen oma pulssi ennen alkua
-      for (int k = 0; k < o.own_n; ++k) {
-        const float a = age(o.own_int[k], o.own_frac[k]);
-        if (a > a_new && a < a_old) {
-          ++n;
-          u = (a_old - a) / period;
-          back = k + 1 < o.own_n ? age(o.own_int[k + 1], o.own_frac[k + 1]) - a_old : -1.0f;
-        }
+      if (live(i, j)) {
+        ++nl;
+      } else if (ch_[j].settle == 0) {
+        continue;
       }
+      float u = 0.0f, back = 0.0f;
+      const int n = ownIn(ch_[j], a_new, a_old, u, back);
       if (n == 0) continue;
+      u = (a_old - u) / period;
+      back -= a_old;  // todistajan edellinen oma pulssi ennen syklin alkua (< 0: ei tiedossa)
       const bool first = std::fabs(u - 1.0f / 3.0f) <= kSlotTol;
       if (n > 1 || !(first || std::fabs(u - 2.0f / 3.0f) <= kSlotTol)) return -1;
-      const float w = back + u * period;  // todistajan väli
-      if (back > 0.0f && w <= kSmallPulseRatio * period && kSmallPulseRatio * w >= period) {
-        const float m = std::fabs(back / w - (first ? 2.0f / 3.0f : 1.0f / 3.0f));
-        if (m > mdev) mdev = m;
+      float d = 0.0f;
+      if (!pause) {
+        d = std::fabs(u - (first ? 1.0f / 3.0f : 2.0f / 3.0f) - skew);
+      } else if (back > 0.0f) {
+        u = back + u * period;  // todistajan väli
+        if (u <= kSmallPulseRatio * period && kSmallPulseRatio * u >= period) {
+          d = std::fabs(back / u - (first ? 2.0f / 3.0f : 1.0f / 3.0f));
+        }
       }
-      const float d = std::fabs(u - (first ? 1.0f / 3.0f : 2.0f / 3.0f) - (1.0f - lr) / 9.0f);
       if (d > dev) dev = d;
       // Ääni +1: j seuraa i:tä (j = i + 1 mod 3) 1/3:n kohdalla.
       sum += (((j - i + kChannels) % kChannels == 1) == first) ? 1 : -1;
@@ -1120,6 +1134,23 @@ class Dsp {
     return against ? -1 : np;
   }
 
+  // Kanavan o omat keskikohdat välillä (ikä a_new, ikä a_old): määrä, viimeksi
+  // löydetyn ikä (a) ja sitä edeltävän oman pulssin ikä (prev, 0 = ei
+  // tiedossa). Oma funktionsa, jotta confirmin pino pysyy -O0:llakin <= 112
+  // tavussa.
+  int ownIn(const Chan& o, float a_new, float a_old, float& a, float& prev) const {
+    int n = 0;
+    for (int k = 0; k < o.own_n; ++k) {
+      const float t = age(o.own_int[k], o.own_frac[k]);
+      if (t > a_new && t < a_old) {
+        ++n;
+        a = t;
+        prev = k + 1 < o.own_n ? age(o.own_int[k + 1], o.own_frac[k + 1]) : 0.0f;
+      }
+    }
+    return n;
+  }
+
   // Syklin hyväksyntä (ks. ownPulse).
   bool accept(int i, float period, float depth, float a_new, float a_old) {
     Chan& c = ch_[i];
@@ -1128,9 +1159,16 @@ class Dsp {
     // kasvavan oman pulssin ja kaksi vuotoa rajalla 0,70 / 0,97 läpi).
     const bool three = similar(depth, c.own_d1) && similar(c.own_d1, c.own_d2) && similar(depth, c.own_d2);
     if (!c.pub.has_pulse && !three) return false;
+    // Pitkä sykli (slow) verrataan tuoreimpaan jaksoon: 2T kaasunlisäyksen
+    // jälkeen on vanhaan viitteeseen nähden tavallinen, mutta 2 x edellinen
+    // oma väli. Tauko (pause): jakso tavallinen, mutta edellisestä
+    // hyväksytystä on yli kBothRatio x viite.
+    const float since = static_cast<float>(c.since_cycle);
+    const bool slow = c.ref_period > 0.0f && period > kBothRatio * freshPeriod(c);
+    const bool susp = slow || (c.ref_period > 0.0f && since > kBothRatio * c.ref_period);
     int nl = 0;
-    float dev = 0.0f, mdev = 0.0f;
-    const int np = confirm(i, a_new, a_old, period, nl, dev, mdev);
+    float dev = 0.0f;
+    const int np = confirm(i, a_new, a_old, period, susp && !slow, nl, dev);
     if (np < 0) return false;
     if (nl == 0) {
       // Varatila: jakso edellisen oman välin (ja lukittuna viitteen) +-
@@ -1147,16 +1185,14 @@ class Dsp {
     if (np == 1 && c.pub.has_pulse && !similar(depth, c.own_d1)) return false;
     // Yksi todistaja ei riitä pelkällä paikallaan: sen on osuttava
     // nopeusmuutoksella korjattuun paikkaan (kSlotTolSingle). Sykli, joka on
-    // epäilyttävä vain tauon vuoksi (jakso tavallinen, edellinen hylätty),
-    // tarkistetaan toisin: edellinen oma väli ei silloin ennusta paikkaa
-    // (ohitettu pulssi; xtalk 0,5:n tuplablipissä letku irti has_pulse putosi),
-    // joten paikka tarkistetaan todistajan puolelta (mdev <= kSlotTol). Pitkä
-    // sykli verrataan tuoreimpaan jaksoon: 2T kaasunlisäyksen jälkeen on
-    // vanhaan viitteeseen nähden tavallinen, mutta 2 x edellinen oma väli.
-    const float since = static_cast<float>(c.since_cycle);
-    const bool slow = c.ref_period > 0.0f && period > kBothRatio * freshPeriod(c);
-    const bool susp = slow || (c.ref_period > 0.0f && since > kBothRatio * c.ref_period);
-    if (np == 1 && (slow || !susp ? dev > kSlotTolSingle : mdev > kSlotTol)) return false;
+    // epäilyttävä vain tauon vuoksi, tarkistetaan todistajan puolelta
+    // (vastapaikka, kSlotTol): edellinen oma väli on silloin usein ohitetun
+    // pulssin 2T, joka ei ennusta paikkaa (xtalk 0,5:n tuplablipissä letku
+    // irti has_pulse putosi), mutta letku irti ja xtalk 0,5 tuottivat
+    // vuodosta alkavan syklin (2/3 T), jonka todistaja osui 2/3:n
+    // toleranssiin ja alkupulssi todistajan syklissä 0,46:een (vastapaikka
+    // 1/3).
+    if (np == 1 && dev > (slow || !susp ? kSlotTolSingle : kSlotTol)) return false;
     // Pitkä sykli tai pitkä tauko edellisestä hyväksytystä (viite vanhentunut,
     // esim. kaikki kanavat ohittivat pulsseja kaasunlisäyksessä): kaikki
     // elävät todistajat.
