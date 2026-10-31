@@ -69,9 +69,10 @@
 //    kanavan paikalle); nolla ei äänestä - kuollut tai heikko kanava ei estä
 //    muita.
 //  - vähintään yksi todistaja. Yhden todistajan syklissä rajapulssit
-//    samankokoiset (kaasunlisäyksen 2T: kutistuva pulssi; ei tauon jälkeisessä
-//    syklissä, jonka aikana toinen kanava asettui vian jälkeen - sen paikka
-//    jäi tyhjäksi vian takia, ja kaasunlisäyksen lopussa pulssit kasvavat), ja
+//    samankokoiset (kaasunlisäyksen 2T: kutistuva pulssi). Poikkeus: tauon
+//    jälkeinen sykli, jonka aikana toinen kanava asettui vian jälkeen (sen
+//    paikka jäi tyhjäksi vian takia), saa kasvavan rajapulssin (1...2 x;
+//    kaasunlisäyksen lopussa pulssit kasvavat takaisin). Lisäksi
 //    todistajan paikka nopeuden muutoksella korjattuna (s + (1 - jakso /
 //    edellinen oma väli) / 9) kSlotTolSingle:n sisällä: nT-välissä
 //    yksittäinen merkki osuu paikalleen (k + 1/3) / n:ssä tai (k + 2/3) /
@@ -115,30 +116,48 @@
 //    pysähdyksen jälkeen (600-1500 rpm, xtalk 0...0,5, myös heikko sylinteri
 //    0,3-0,5 x). Heikko sylinteri (0,4-0,5 x, xtalk 0/0,3) rpm-pudotuksissa,
 //    blipeissä ja alipaineen muutoksissa: 0; samoin jitter 3 %. Anturi alas
-//    tai ylös tai letku irti 50-400 ms (ja takaisin) blipin ympärillä tai
-//    alipaineen askeleessa: 0 myös vikaantuneella kanavalla. Yksi letku irti
-//    koko ajan pika-, tupla- ja tavallisissa blipeissä 3000 rpm:ään: 0 (xtalk
-//    0,5:een asti). Kanavan rpm ei ylitä 1,05 x todellista.
-//    Hyväksytyt harvinaiset poikkeukset (kierroksen 5 laajennettu mittaus,
-//    ennen kierroksen 6 korjauksia): tauolliset tupla- ja kolmoisblipit
-//    heikon sylinterin kanssa (18/27648 ajoa) tai 3 %:n jitterillä (3/192),
-//    100 ms:n nousun blipit ja vika tuplablipin aikana (5/194400) voivat
-//    kirjata terveelle kanavalle 2T/3T-syklin.
+//    tai ylös tai letku irti 20-400 ms (ja takaisin) blipin ympärillä tai
+//    alipaineen askeleessa: 0 myös vikaantuneella kanavalla (1,32 M ajoa).
+//    Yksi letku irti koko ajan pika-, tupla- ja tavallisissa blipeissä 3000
+//    rpm:ään: 0 (xtalk 0...0,5, 138240 ajoa). Kanavan rpm ei ylitä 1,05 x
+//    todellista.
+//    Hyväksytyt harvinaiset poikkeukset, joissa terve kanava voi kirjata
+//    2T/3T- tai vuotosyklin (kierroksen 7 mittaus): heikko sylinteri (0,4-0,5
+//    x) tauollisissa tupla- ja kolmoisblipeissä (59/82944 ajoa) ja
+//    tauottomassa tuplablipissä 200 ms:n nousulla (0,4 x, xtalk 0,3:
+//    2/69120); 3 %:n jitter tauollisissa tupla- ja kolmoisblipeissä
+//    (7/12288); 100 ms:n nousun blipit (heikko sylinteri 74/41472, letku irti
+//    96/10368, xtalk 0/0,15 281/6912); yksi letku irti ja xtalk 0,5,
+//    tuplablippi 950 -> 3000 (nousu 200 ms, tauko 100 ms): 1/82944 ajoa
+//    kirjasi vuodosta alkavan syklin. Siinä ainoan todistajan edellinen oma
+//    pulssi oli 6,5 jaksoa aiemmin eikä edellinen oma väli ollut syklin
+//    mittainen, joten syklin alkua ei voi tarkistaa; tarkistus (hylkäys tai
+//    odotus todistajan seuraavaan pulssiin) maksoi letku irti -tilanteissa
+//    has_pulse-pudotuksia (18 -> 22 ajoa, 600 rpm:n joutokäynniltä 1117 ->
+//    1938) ja jopa 150 ms pidempiä välejä.
 //  - Terveen kanavan has_pulse ei putoa näissä (paitsi alla). Pisin väli:
-//    rpm-askel alas <= 2 uutta jaksoa + 30 ms (850 rpm: 311 ms, 600 rpm: 381
+//    rpm-askel alas <= 2 uutta jaksoa + 30 ms (850 rpm: 312 ms, 600 rpm: 381
 //    ms), kaasun katkaisu 4500 -> 1500 / 150 ms 288 ms; blip nousu >= 300 ms
 //    <= 296 ms, 150 ms <= 363 ms (xtalk 0,5: 412 ms), pika- ja tuplablip <= 391
 //    ms (xtalk 0,5: 568 ms); alipaineen askel <= 3,05 jaksoa (5 % jitter 3,21),
-//    ramppi 200 ms 1,05 (5 %: 1,15), 20-100 ms <= 3,07 jaksoa. Vika 50-400 ms
-//    blipin ympärillä: nousu 150 ms <= 482 ms, 300 ms <= 470 ms (xtalk 0,3:
-//    433 ms), pika- ja tuplablip <= 522 ms (xtalk 0,5: 708 ms); alipaineen
-//    askeleessa <= 4,05 jaksoa (askel 2 + vika 1); letku irrotetaan
-//    joutokäynnillä: muiden väli 145 ms (ei menetettyä sykliä).
+//    ramppi 200 ms 1,05 (5 %: 1,15), 20-100 ms <= 3,07 jaksoa. Vika 20-400 ms
+//    blipin ympärillä (1,02 M ajoa): nousu 150 ms <= 462 ms (xtalk 0,5: 529
+//    ms), 300 ms <= 354 ms (xtalk 0,3/0,5: 434 ms), pikablip <= 537 ms (xtalk
+//    0,5: 710 ms), tuplablip <= 553 ms - paitsi xtalk 0,5:n tuplablipissä
+//    3000 rpm:ään: 20-100 ms:n vika <= 983 ms (19/31104 ajoa yli 900 ms:n,
+//    has_pulse ei putoa), 250-400 ms:n vika <= 1,4 s ja has_pulse voi pudota
+//    (11/20736 ajoa). Siinä vikaantunut kanava on kuollut koko syklin ajan,
+//    terveellä on yksi todistaja, ja rajapulssien samankokoisuus hylkää
+//    oikeat syklit kaasunlisäyksen pulssien kasvaessa tai kutistuessa; muut
+//    syklit ovat 2T:itä. Alipaineen askeleessa <= 4,05 jaksoa (askel 2 + vika
+//    1); letku irrotetaan joutokäynnillä: muiden väli 145 ms (ei menetettyä
+//    sykliä).
 //  - Jokaisen kanavan rpm ja keskiarvo 1,5 s muutoksen jälkeen: rpm <= 0,39 %,
-//    keskiarvo <= 0,052 kPa; RpmEstimate 1,2 s jälkeen <= 0,7 %. (600 rpm:llä
-//    8 sykliä = 1,6 s: kaasun katkaisun 2500 -> 600 jälki näkyy 1,5 s:n
-//    kohdalla vielä 0,42 kPa:na.) Lyhyt vika ei vääristä vikaantuneen kanavan
-//    keskiarvoa (ketju katkeaa).
+//    keskiarvo <= 0,052 kPa (5 % jitter: 0,085); RpmEstimate 1,2 s jälkeen <=
+//    0,7 %. (600 rpm:llä 8 sykliä = 1,6 s, joten 1,5 s:n kohdalla näytössä on
+//    vielä muutosta edeltävä sykli: kaasun katkaisu 2500 -> 600 0,42 kPa,
+//    alipaineen askel -58 -> -45 kPa 3,3 kPa.) Lyhyt vika ei vääristä
+//    vikaantuneen kanavan keskiarvoa (ketju katkeaa).
 //  - Yksittäisen syklin jakso vs toteutunut < 3 %, paitsi kaasun katkaisu 3000
 //    -> 850 / 300 ms <= 9,6 % ja 4500 -> 1500 / 150 ms <= 9,1 % (suodatettu 4
 //    kPa:n pulssi rampin päällä siirtää keskikohtaa) sekä hetkellisen rpm-askeleen
@@ -167,13 +186,14 @@
 //    (FaultHose, rivi 6): yksi todistaja ei seuraa äkillistä hidastumista,
 //    joten rpm-pudotuksen väli on pidempi (ramppi 3000 -> 850 / 150 ms <= 422
 //    ms, askel 2500 -> 600 <= 526 ms, 6000 -> 850 <= 895 ms); xtalk 0,5:n
-//    tuplablipissä 3000 rpm:ään terveen kanavan has_pulse voi pudota (12/576
-//    ajoa, väli <= 1,4 s; sama 5a45dc7:ssä). Hetkellinen rpm-askel (vain
-//    simulaattorissa, /api/sim) letkun ollessa irti voi kirjata yhden väärän
-//    syklin (askeleet 3000 -> 850, 4500 -> 1500, 6000 -> 850, xtalk 0,3/0,5:
-//    64/2304 ajoa, sama kuin 5a45dc7; lyhyt vika askeleen kohdalla 224/24192):
-//    ensimmäinen uuden käynnin vuoto on vanhan oman pulssin kokoinen (4,8 vs
-//    5,1 kPa, leveys 9,5 vs 9,4 ms) ja osuu vanhaan jaksoon (+7 %).
+//    tuplablipissä 2000-3000 rpm:ään terveen kanavan has_pulse voi pudota
+//    (18/6912 ajoa, väli <= 1,41 s; sama kierroksella 6). Hetkellinen
+//    rpm-askel (vain simulaattorissa, /api/sim) letkun ollessa irti voi
+//    kirjata yhden väärän syklin (askeleet 3000 -> 850, 4500 -> 1500, 6000 ->
+//    850, xtalk 0,3/0,5: 64/2304 ajoa, sama kuin 5a45dc7; lyhyt vika askeleen
+//    kohdalla 224/24192): ensimmäinen uuden käynnin vuoto on vanhan oman
+//    pulssin kokoinen (4,8 vs 5,1 kPa, leveys 9,5 vs 9,4 ms) ja osuu vanhaan
+//    jaksoon (+7 %).
 //  - Kaksi letkua irti (varatila, yksi kanava): has_pulse putoaa rpm:n
 //    muuttuessa (blipit, katkaisut ja askeleet; väli <= 1,7 s) ja muutamassa
 //    alipaineen askeleessa (20/15552 ajoa); väärä sykli hetkellisessä
@@ -189,13 +209,16 @@
 //  - Heikko sylinteri (0,3-0,5 x muiden syvyydestä): oikein xtalk 0,5:een
 //    asti käynnistyksissä ja 0,3:een asti käytössä; sen oma kanava saa jäädä
 //    ilman has_pulsea (pikablipeissä ja 4500-6000 rpm:llä se putoaa usein),
-//    mutta se ei estä muita - RpmEstimate on mediaani.
-//  - Letkujen viive-ero (R1: samat letkut +-2 cm, < 0,1 ms): kaikilla
-//    letkuilla 2 ms toimii kaikkialla; yhden letkun ollessa irti (yksi
-//    todistaja, kSlotTolSingle) raja on ~1,5 ms 6000 rpm:llä ja ~2 ms 4500
-//    rpm:ään asti (2 ms 6000 rpm:llä: terve kanava ei lukitu). 3 ms:llä 4500-6000 rpm:n todistajan paikka on 0,11-0,15
-//    sivussa, jolloin has_pulse putoaa rpm-pudotuksissa ja 1/48 ajossa
-//    kirjautuu yksi vuotosykli (6000 -> 1500, xtalk 0,3).
+//    mutta se ei estä muita - RpmEstimate on mediaani. 0,4 x 6000 rpm:llä
+//    (xtalk 0,3) terveet kirjaavat 61-71 % sykleistä, has_pulse pysyy.
+//  - Letkujen viive-ero (R1: samat letkut +-2 cm, < 0,1 ms), tasainen käynti:
+//    kaikilla letkuilla 1 ms toimii kaikkialla; 2 ms 4500 rpm:ään asti (6000
+//    rpm:llä 44 % sykleistä, has_pulse pysyy, väli <= 0,48 s); 3 ms 3000
+//    rpm:ään asti (4500 rpm: ei lukitu, 6000 rpm: 31-37 % sykleistä, has_pulse
+//    67 %), ja 1/48 ajossa kirjautuu yksi vuotosykli (6000 -> 1500, xtalk 0,3).
+//    Yhden letkun ollessa irti (yksi todistaja, kSlotTolSingle): 1 ms
+//    kaikkialla; 2 ms 3000 rpm:ään asti, 4500 rpm:llä 93 % sykleistä, 6000
+//    rpm:llä terve kanava ei lukitu (raja ~1,5 ms).
 //  - Hetkellinen sammutus (simulaattori) katkaisee kesken olevan imun:
 //    600 rpm:llä 2/96 ajossa (heikon sylinterin kanssa <= 5/96) 5 % lyhyt
 //    sykli, jonka toisen merkin imua ei ole olemassa (sama 237da3a:ssa);
@@ -1224,14 +1247,16 @@ class Dsp {
     // samankokoiset kuten varatilassa. Nopeassa kaasunlisäyksessä pulssi
     // kutistuu ~2 x syklissä, kanavat ohittavat pulsseja, ja 2T-välin
     // säilynyt merkki voi osua kiihdytyksen vinouttamana 0,1:n sisään;
-    // kutistuva pulssi paljastaa tilanteen. Ei koske tauon jälkeistä sykliä,
-    // jonka aikana toinen kanava asettui vian jälkeen (resettled): sen paikka
-    // jäi tyhjäksi vian takia, ja kaasunlisäyksen lopussa pulssit kasvavat
-    // (12,96 -> 20,38 kPa) juuri silloin, kun lyhytkin vika jättää terveen
-    // kanavan yhden todistajan varaan (xtalk 0,5:n tuplablipissä has_pulse
-    // putosi, 1,4 s:n väli). Pitkässä syklissä (slow) poikkeus päästi 2T:n
-    // läpi (paikan skew-korjaus selitti sen hidastumisena).
-    if (np == 1 && c.pub.has_pulse && !similar(depth, c.own_d1) && !(susp && !slow && resettled(i, a_old))) return false;
+    // kutistuva pulssi paljastaa tilanteen. Poikkeus: tauon jälkeinen sykli,
+    // jonka aikana toinen kanava asettui vian jälkeen (resettled - sen paikka
+    // jäi tyhjäksi vian takia) ja jonka rajapulssi kasvoi enintään kaksi
+    // kEnvStableFrac-askelta (1...2,04 x). Kaasunlisäyksen lopussa pulssit
+    // kasvavat (12,96 -> 20,38 kPa) juuri silloin, kun lyhytkin vika jättää
+    // terveen kanavan yhden todistajan varaan (xtalk 0,5:n tuplablipissä
+    // has_pulse putosi, 1,4 s:n väli). Ilman rajausta poikkeus päästi 2T:n läpi
+    // pitkässä syklissä (skew-korjaus selitti sen hidastumisena), kutistuvalla
+    // pulssilla (29,3 -> 4,2 kPa) ja pienestä pulssista alkaneena (2,4 -> 12,2).
+    if (np == 1 && c.pub.has_pulse && !similar(depth, c.own_d1) && !(susp && !slow && similar(kEnvStableFrac * depth, c.own_d1) && resettled(i, a_old))) return false;
     // Yksi todistaja ei riitä pelkällä paikallaan: sen on osuttava
     // nopeusmuutoksella korjattuun paikkaan (kSlotTolSingle, tauon jälkeen
     // myös vastapaikkaan, ks. slotDev).

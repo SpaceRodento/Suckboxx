@@ -2107,10 +2107,13 @@ void test_single_witness_needs_rhythm() {
   //  - heikko sylinteri 0,5 x, pikablip 850 -> 2000: 2T kanavalla 1, todistaja
   //    u = 0,234 (kiihdytys siirsi 1/6:n 1/3:n toleranssiin);
   //  - jitter 3 %, pikablip 850 -> 2500 (syvyys 20), xtalk 0,3: sama 2T.
-  // Tarkistus ei koske sykliä, joka on pitkä vain tauon vuoksi (jakso
-  // tavallinen, edellinen hylätty): siinä nopeuden muutos edellisestä omasta
-  // välistä ei kerro todistajan paikkaa, ja xtalk 0,5:n tuplablipissä (letku
-  // irti) has_pulse putosi (viimeinen tapaus: 1,3 s:n väli).
+  // Tauon jälkeen (jakso tavallinen, edellinen hylätty) edellinen oma väli voi
+  // olla ohitetun pulssin 2T, joka ei kerro nopeuden muutoksen suuntaa: jos se
+  // on silti syklin mittainen, paikan on oltava s +- (|siirtymä| +
+  // kSlotTolSingle), ja jos todistajan edellinen oma väli on syklin mittainen,
+  // syklin alkupulssin on osuttava todistajan vastapaikalle (kSlotTol).
+  // Pelkkä korjattu paikka hylkäsi oikeita syklejä, ja xtalk 0,5:n
+  // tuplablipissä (letku irti) has_pulse putosi (1,3 s:n väli).
   struct Case {
     float rpm1, xt, jitter, d1;
     uint32_t seed;
@@ -2143,6 +2146,11 @@ void test_single_witness_needs_rhythm() {
       // säilyneen merkin 1/6:sta).
       {2000.0f, 0.0f, 0.01f, 12.0f, 1, 2537, 1, 2, -1, 850.0f, 0, 0},
       {2000.0f, 0.15f, 0.01f, 12.0f, 1, 2537, 1, 2, -1, 850.0f, 0, 0},
+      // Rytmi voi olla lyhyt 2T: letku 2 irti, tuplablippi 850 -> 3000, xtalk
+      // 0,5 - edellinen oma väli 1,8 jaksoa nopeammassa käynnissä (lr 0,83)
+      // ennusti kiihdytystä, vaikka moottori hidastui. Paikka 0,081 sivussa;
+      // ilman |siirtymä|-väljyyttä sykli hylättiin ja has_pulse putosi (1252 ms).
+      {3000.0f, 0.5f, 0.01f, 12.0f, 1, 2514, 2, 1, -1, 850.0f, 100, 0},
   };
   SimRun worst;
   for (const Case& k : cases) {
@@ -2332,8 +2340,11 @@ void test_short_fault_keeps_healthy_channels() {
   // oikeat syklit has_pulsen aikakatkaisuun asti (tarkistajan toistot alla:
   // 1,4 s:n välit, 600 rpm:llä 7 jaksoa). Nyt kanava on elävä vasta
   // asettumisen jälkeisestä omasta pulssista, ja asettumisen jälkeinen
-  // suotimen ylitys (~1 kPa) ei ole oma pulssi (kOwnFloor). Rajat: alipaineen
-  // askel 4,1 jaksoa, blipit B:n raja + 150 ms (xtalk 0,5: 750 + 150).
+  // suotimen ylitys (~1 kPa) ei ole oma pulssi (kOwnFloor). Jos vika jättää
+  // terveen kanavan tauon jälkeen yhden todistajan varaan ja vikaantunut
+  // kanava asettui syklin aikana, kasvava rajapulssi (1...2 x) ei hylkää
+  // sykliä. Rajat: alipaineen askel 4,1 jaksoa, blipit B:n raja + 150 ms
+  // (xtalk 0,5: 750 + 150).
   struct Case {
     int kind;      // 0 = alipaineen askel -37 -> -55 kPa, 1 = tuplablip
     float rpm;     // askeleen kierrosluku tai blipin huippu (joutokäynti 850)
@@ -2373,6 +2384,15 @@ void test_short_fault_keeps_healthy_channels() {
       //    has_pulse putosi; kOwnFloor 0,3: sama (anturi ylös 250 ms).
       {1, 3000.0f, 0.5f, 2, 2516, 100, 2, 0, 450, 250, 950.0f},
       {1, 3000.0f, 0.5f, 2, 2516, 100, 2, 1, 300, 250, 950.0f},
+      // Rajapulssien samankokoisuuden poikkeus (asettunut kanava) vain
+      // kasvavalle pulssille (1...2 x): ilman rajausta 2T kutistuvalla
+      // pulssilla (29,3 -> 4,2 kPa, toisen blipin alku) ja pienestä pulssista
+      // alkaneena (2,4 -> 12,2 kPa).
+      {1, 2500.0f, 0.0f, 3, 2571, 0, 0, 0, 450, 80},
+      {1, 3000.0f, 0.5f, 1, 2596, 100, 0, 2, 650, 80},
+      // Pitkä sykli (slow) ei ole tauko: jos sen paikka tarkistettaisiin
+      // tauon säännöillä (ilman rytmiä ei paikkaa), 4T kelpaisi (190 ms).
+      {1, 3000.0f, 0.5f, 1, 2598, 0, 2, 0, 450, 250},
   };
   SimRun worst;
   for (const Case& k : cases) {
