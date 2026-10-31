@@ -71,7 +71,8 @@ class EngineSim {
   static constexpr float kSensorSpanKpa = 100.0f;
   static constexpr float kAdcMaxMv = 3300.0f;
   // Anturivika (rivi 7): katkennut tai oikosuljettu ulostulo jää ADC:n laitaan,
-  // reilusti fault_lo_mv/fault_hi_mv -rajojen ulkopuolelle.
+  // reilusti fault_lo_mv/fault_hi_mv -rajojen ulkopuolelle (oletus 150 / 2950 mV,
+  // D15; huoltosivun ääriarvot 50 / 3250 mV, config.h).
   static constexpr float kSensorLowMv = 10.0f;
   static constexpr float kSensorLowMaxMv = 30.0f;
   static constexpr float kSensorHighMv = 3290.0f;

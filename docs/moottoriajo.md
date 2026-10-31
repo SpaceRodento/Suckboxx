@@ -201,8 +201,9 @@ järkevä (tyhjäkäynti 850–950 rpm D6:n mukaan, **varmistettava huolto-ohjee
 
 ## 6. Päätöspisteet
 
-Päätökset kirjataan päätöslokiin (SUUNNITTELU.md §5). Uudet kynnysarvot ovat ehdotuksia,
-kunnes omistaja on hyväksynyt ne.
+Päätökset kirjataan päätöslokiin (SUUNNITTELU.md §5). Kohtien 6.1, 6.3 ja 6.4 rajat on
+hyväksytty alustavasti 31.10.2026 (D15), ja ne tarkistetaan ensimmäisestä ajosta. Muut uudet
+kynnysarvot ovat ehdotuksia, kunnes omistaja on hyväksynyt ne.
 
 ### 6.1 H1: GN vai GPN
 
@@ -218,7 +219,7 @@ rivit `H1: tulkinta`, `≥ sat_mv näytteistä`, `saturoituvat syklit`, `syklin 
 `python tools/cycle_profile.py <sama> --open`, jossa leikkautuminen näkyy syklien litteänä
 yläreunana.
 
-*Tulkinta:*
+*Tulkinta (rajat hyväksytty alustavasti 31.10.2026; tarkistetaan ensimmäisestä ajosta):*
 - `ei`: huiput jäävät alle sat_mv:n (2680 mV, types.h). GN riittää.
 - `koskettaa`: huiput käyvät sat_mv:n yli mutta eivät litisty, eli positiivinen paine näkyy.
   GN riittää. Penkkitesti 31.10.2026 viittaa tähän: ylipaine näkyi 2726 mV:iin asti
@@ -269,8 +270,9 @@ tarkistettavaa"; D12:n ikkuna 500–3000 rpm)?
   Vertaa spreadin mediaania ja p95:tä joutokäyntiin. Vilkkuuko tila oletusrajalla
   (`replay` ilman `--set`: aika tiloittain `rpm_too_high` vs `unstable`)?
 
-*Tulkinta (ehdotus omistajalle):* jos 3000 rpm:n spread-p95 pysyy lähellä joutokäynnin arvoa
-ja syklit tunnistuvat, raja voi jäädä tai nousta. Jos hajonta kasvaa selvästi, rajaa lasketaan
+*Tulkinta (hyväksytty alustavasti 31.10.2026; tarkistetaan ensimmäisestä ajosta):* jos
+3000 rpm:n spread-p95 pysyy lähellä joutokäynnin arvoa ja syklit tunnistuvat, raja voi jäädä
+tai nousta. Jos hajonta kasvaa selvästi, rajaa lasketaan
 sille kierrosluvulle, jolla mittaus vielä pitää (vertaa 1500 ja 2000). Raja on säädettävä
 (`sync_rpm_max`, S5a).
 
@@ -289,7 +291,7 @@ luvut asetetaan vaiheessa 4 nauhoitetun datan perusteella")?
 - Vaihe 10: Δ:n muutos kierroksen osaa kohti säätölokista ja `cycle_profile.py`:n "Kanavien erot
   ajan yli" -kuvaaja.
 
-*Tulkinta (ehdotus omistajalle):*
+*Tulkinta (hyväksytty alustavasti 31.10.2026; tarkistetaan ensimmäisestä ajosta):*
 - Näytön heilunta (p95-poikkeama) on oltava selvästi vihreän rajan alla (esim. alle 1/5 eli
   0,3 kPa), muuten väri vilkkuu.
 - Vaiheiden 4 ja 5 Δ:t ovat samat ilman säätöä (toistettavuus).

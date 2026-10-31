@@ -378,6 +378,36 @@ voidaan toteuttaa ja testata ilman antureita ja ilman moottoria (D6). Simulaatto
 (todellinen keskiarvo, rpm) tekevät jokaisesta käytösmatriisin rivistä automaattisen testin.
 HX710B-lähde säilyy penkkitestiin, mutta se ei tuota syklejä (10 SPS, §3.1).
 
+### D15 — Avoimet kynnykset ja nimet ✅ PÄÄTETTY 31.10.2026 (kohdat 2 ja 5 alustavasti)
+
+Omistaja delegoi [docs/jatko.md](docs/jatko.md):n "Avoimet 5" -kohdan päätökset
+orkestroijalle, ja orkestroija päätti ne:
+
+1. **Rivin 7 rajat 150 / 2950 mV** (`fault_lo_mv` / `fault_hi_mv`, ennen 100 / 3150).
+   *Perustelu:* ADC lukee eFusen mukaan 142–3150 mV, joten vanhat rajat laukesivat vain liiman
+   raw 0 / 4095 → 0 / 3300 mV -koodauksella. Uudet rajat ovat ADC:n lukualueen sisällä ja anturin
+   laillisen alueen ulkopuolella: −100…0 kPa = 200…2700 mV, tarkkuus ±2 %FSS = ±50 mV
+   ([docs/rauta.md](docs/rauta.md) §1.2, §1.4). Yläraja on 200 mV (8 kPa) ilmanpaineen
+   pahimman lukeman (2750 mV) ja 224 mV mitatun ylipaineen (+1,2 kPa = 2726 mV) yläpuolella.
+   Alaraja on 50 mV nimellisen täyden alipaineen (−100 kPa = 200 mV) alapuolella; sama raja
+   osuu anturin −2 %FSS:n pahimpaan tapaukseen (150 mV, ei vielä vika). Joutokäynnin syvin
+   alipaine (−88 kPa = 500 mV, `config.h`) jää 300–350 mV:n päähän. Lisäksi lukeman on pysyttävä
+   rajan ulkopuolella yhtäjaksoisesti `fault_hold_s` (1 s).
+   *Seuraus:* laite, jonka NVS:ssä on tallennettu konfiguraatio, pitää vanhat 100 / 3150 mV,
+   kunnes asetukset palautetaan oletuksiin huoltosivulta tai rajat muutetaan käsin.
+2. **WP-9:n kynnykset:** `hose_hyst_kpa` 0,2 kPa (rivi 6), `drift_tau_s` 0,5 s (rivi 5) ja
+   `zero_settle_kpa` 0,1 kPa / 1 s (rivi 1 ja nollaus). §8:n riveille 1 ja 5 on lisätty
+   tarkenteet. Arvot tarkistetaan ensimmäisestä moottorinauhoituksesta.
+3. **Snapshotin `ch[i].cond`-nimet** hyväksytään sellaisinaan: `ok`, `sat`, `idle`,
+   `no_pulse`, `hose`, `blocked`, `sensor` ([docs/firmware.md](docs/firmware.md) §5). `sat` ei
+   peitä sylinterikorttia: kortti näyttää lukeman kuten `ok`-arvolla, ja leikkautuminen näkyy
+   SATUROITUU-lippuna ja huoltosivun taulukossa ("pulssi · leikkautuu").
+4. **HX710B-lähde säilyy penkkitestilähteenä** (D14), eikä sitä poisteta
+   ([docs/roadmap.md](docs/roadmap.md) P0).
+5. **Moottoriajon pöytäkirjan rajat** H1:lle, riville 9 ja D2:lle
+   ([docs/moottoriajo.md](docs/moottoriajo.md) §6.1, §6.3, §6.4) hyväksytään sellaisinaan.
+   Ne tarkistetaan ensimmäisestä ajosta.
+
 ---
 
 ## 6. Vaatimukset (kertyvä lista)
@@ -453,14 +483,14 @@ Lukema on aina D1:n **keskiarvo yli syklin**, ja näyttö on aina D3:n **poikkea
 
 | # | tilanne | miten tunnistetaan | mitä UI näyttää | mitä käyttäjä tekee |
 |---|-----|-----|-----|-----|
-| 1 | Moottori sammuksissa | kaikki kanavat 0 ± 2 kPa gauge, ei pulssia ≥3 s | "Moottori ei käy" + **automaattinen nollakalibrointi** ajetaan | käynnistää moottorin |
+| 1 | Moottori sammuksissa | kaikki kanavat 0 ± 2 kPa gauge, ei pulssia ≥3 s ja tasot paikallaan (1 s:n vaihtelu < 0,1 kPa) | "Moottori ei käy" + **automaattinen nollakalibrointi** ajetaan | käynnistää moottorin |
 | 2 | Käynnistyy / epävakaa | pulssi havaittu, mutta rpm-hajonta > 15 % | "Odota, käynti tasaantuu" + rpm harmaana, palkit piilossa | odottaa |
 | 3 | Joutokäynti vakaa, **synkronissa** | rpm 600–1200 ja vakaa ≥3 s, `spread` ≤ **1,5 kPa** | 🟢 "Synkronoitu", Δ-luvut, rpm ja ±hajonta | valmis |
 | 4a | Joutokäynti vakaa, **lähellä** | sama, `spread` **1,5–3,0 kPa** | 🟡 suurin poikkeama korostettuna + säätösuunta sanallisesti | hienosäätää |
 | 4b | Joutokäynti vakaa, **ei synkronissa** | sama, `spread` > **3,0 kPa** | 🔴 sama näkymä, voimakkaampi korostus | säätää nimettyä sylinteriä |
-| 5 | Kierrosluku ajautuu säädön aikana | rpm muuttuu > 50 rpm / 2 s | Δ-luvut **pysyvät näkyvissä** (yhteismuotoinen liike on jo poistettu), rpm korostuu muuttuvana | jatkaa säätöä |
+| 5 | Kierrosluku ajautuu säädön aikana | rpm muuttuu > 50 rpm / 2 s (suodatettu rpm) | Δ-luvut **pysyvät näkyvissä** (yhteismuotoinen liike on jo poistettu), rpm korostuu muuttuvana | jatkaa säätöä |
 | 6 | Yksi letku irti tai vuotaa | kanava 0 ± 2 kPa muiden pulssiessa | **VIKA**: "Kanava N: ei alipainetta — tarkista letku" | kytkee letkun |
-| 7 | Anturi rikki tai irti | ADC-lukema kiinni ääripäässä (< 0,10 V tai > 3,15 V) ≥ 1 s | **VIKA**: "Kanava N: anturivika" | vaihtaa anturin |
+| 7 | Anturi rikki tai irti | ADC-lukema kiinni ääripäässä (< 0,15 V tai > 2,95 V, D15) ≥ 1 s | **VIKA**: "Kanava N: anturivika" | vaihtaa anturin |
 | 8 | Kaikki letkut irti, moottori käy | kaikki kanavat 0 ± 2 kPa, mutta rpm tuntematon | "Ei mittaussignaalia — kaikki letkut irti?" | kytkee letkut |
 | 9 | Rpm liian korkea mittaukseen | rpm > 3000 | rpm näytetään, **synkronointiarvio piilotetaan** ("Säädä joutokäynnillä") | laskee kaasua |
 | 10 | Signaali saturoituu | ADC ≥ 2,68 V pulssin huipulla | varoitus: "Positiivinen paine leikkautuu (H1)" | — (kirjataan, ks. H1) |
@@ -507,6 +537,7 @@ merkityksessä (nollan tunnistus vs. letkuvian tunnistus); ne saattavat tarvita 
 | 30.10.2026 | D6: tyhjäkäynti 850–950 rpm (omistajan tieto, varmistettava huolto-ohjeesta). |
 | 30.10.2026 | D9–D14 päätetty (SSE-transport, rivit 1+8 yhdistetty, kalibroinnin portitus, rpm-ikkuna 500–3000, MVP = satunnainen työkalu + RPM, simulaattori ensin). Firmware-arkkitehtuuri [docs/firmware.md](docs/firmware.md). Roadmap §11. |
 | 31.10.2026 | WP-8…WP-13 haaraan `dev/integraatio` ([docs/paketit.md](docs/paketit.md)): nauhoitusten toisto ja golden-testit, käytösmatriisin jälkityöt (rivit 1, 5, 6; uudet kynnykset omistajan päätettävinä), snapshotin `act`/`cond`, CI, moottoriajon pöytäkirja ja `sim_fit.py`, web-kirjastojen nosto. Yöajon jono [docs/yoajo/](docs/yoajo/). |
+| 31.10.2026 | Omistaja delegoi jatko.md:n "Avoimet 5" -kohdan päätökset orkestroijalle, ja orkestroija päätti ne (D15): rivin 7 rajat 150 / 2950 mV, WP-9:n kynnykset ja §8:n rivien 1 ja 5 tarkenteet, snapshotin `cond`-nimet, HX710B-lähteen säilytys sekä moottoriajon pöytäkirjan rajat. WP-9:n ja pöytäkirjan arvot ovat alustavia, ja ne tarkistetaan ensimmäisestä moottorinauhoituksesta. |
 
 ---
 

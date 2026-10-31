@@ -172,6 +172,8 @@ class Dsp {
   Mitattu EngineSimillä: rpm-pudotus ja kaasun katkaisu ≤ 0,55 s ilman syklejä, blippaus
   850 → 3000 rpm ≤ 0,65 s, käynnistys 6000 rpm:iin 147 ms (`test_integration`: `test_wp2c_*`).
 - `sensor_fault`: mV ulkona `[fault_lo_mv, fault_hi_mv]` yhtäjaksoisesti `fault_hold_s`.
+  Oletukset 150 / 2950 mV (D15, 31.10.2026): mitatun ADC-ikkunan (eFuse 142–3150 mV) sisällä
+  ja anturin laillisen alueen (200–2700 mV ±50 mV, rauta.md §1.2, §1.4) ulkopuolella.
   `saturated`: `mv ≥ sat_mv` havaittu viimeisen 1 s aikana.
 - `RpmEstimate`: kanavien rpm:ien mediaani; `sd_rpm`/`cv` viimeisten `rpm_hist` jakson yli.
 - Laskentabudjetti: `push()` O(1) per näyte (sykliraja saa olla O(avg_cycles)).
@@ -217,8 +219,9 @@ NotStable, Mismatch, GainOutOfRange.
 
 Nollauksen vakausportti (WP-9, 31.10.2026): ilmanpaine-ehdon (|taso| ≤ `off_kpa`) lisäksi
 jokaisen kanavan tason vaihteluväli viimeisen 1 s:n aikana < `zero_settle_kpa` (oletus 0,1 kPa,
-**ehdotus**, ei päätöslokissa). Tarkistusjärjestys NotAtmosphere, NotSettled. Sama portti
-automaattiselle (rivi 1) ja käsin tehdylle nollaukselle. Ilman porttia juuri sammutetun moottorin
+hyväksytty alustavasti D15:ssä; tarkistetaan ensimmäisestä moottorinauhoituksesta).
+Tarkistusjärjestys NotAtmosphere, NotSettled. Sama portti automaattiselle (rivi 1) ja käsin
+tehdylle nollaukselle. Ilman porttia juuri sammutetun moottorin
 vielä laskeva taso kirjautui offsetiksi (EngineSim: 1,5 s sammutuksesta 2,75 kPa, purkautuva
 alipaine −10 kPa / tau 2 s 2,5 s:n kohdalla 4,1 kPa). Portin kanssa jäännös on enintään
 `zero_settle_kpa` / (e^(1 s / tau) − 1) eksponentiaalisella purkautumisella (tau 2 s: 0,15 kPa).
@@ -382,8 +385,9 @@ Pitoajat ja yhteismuotoinen muutos (WP-2c, 30.10.2026):
   1,7–2,5 kPa). Vakausajastin ei nollaudu. Yhden ruuvin säätö ei laukaise tätä.
 
 Käytösmatriisin ja kalibroinnin jälkityöt (WP-9, 31.10.2026). Uudet kynnykset ovat S5a:n
-mukaan säädettäviä (`StatusParams`, rekisteri §4.4) ja **ehdotuksia omistajalle**, eivät
-päätöslokissa; arvo 0 palauttaa WP-4:n käytöksen hystereesille ja suodatukselle.
+mukaan säädettäviä (`StatusParams`, rekisteri §4.4), ja ne on **hyväksytty alustavasti
+31.10.2026 (D15)**. Ne tarkistetaan ensimmäisestä moottorinauhoituksesta. Arvo 0 palauttaa
+WP-4:n käytöksen hystereesille ja suodatukselle.
 - Rivi 6, `hose_hyst_kpa` = 0,2 kPa: sisääntulo ennallaan (|taso| < `hose_off_kpa`
   yhtäjaksoisesti `kHoseHoldS`), poistuminen vasta kun |taso| ≥ `hose_off_kpa` + `hose_hyst_kpa`
   tai pulssi palaa. Ennen rajalla oleva taso vaihtoi otsikkoa "ei alipainetta" ↔ "ei pulssia"
@@ -510,6 +514,9 @@ AsyncTCP 3.5.0; versiot lukittu `platformio.ini`:ssä ja `static_assert`illa `ha
   10 s välein, jotta flash ei kulu (kirjoitus näkyy samplerin aukkoina). Lähteen vaihto
   tallentuu ja käynnistää laitteen uudelleen. Ilman tallennettua konfiguraatiota lähde on
   käännöksen `SBX_SAMPLE_SOURCE`, ja asetusten nollaus (`/api/config/reset`) säilyttää sen.
+  Tallennus kirjoittaa jokaisen kentän, ja lataus ohittaa vain puuttuvat avaimet, joten
+  muuttunut oletus (esim. rivin 7 rajat, D15) ei korvaa jo tallennettua arvoa. Uusi oletus
+  tulee voimaan vasta asetusten nollauksella tai käsin.
 - **Web (WP-7b, 30.10.2026):** §5:n reitit, sivu `src/web/web_page.h`:n `WEB_PAGE_HTML`ista
   raakana (ei gzip:iä, `inline constexpr`, yksi kopio flashissa). WP-7a:n diagnostiikkasivu
   on `/diag`:ssa (`/api/diag`, SSE-tapahtuma `diag` 5 Hz). `/api/raw.csv` jäädyttää renkaan
@@ -584,7 +591,8 @@ Sim-avaimet: `engine_on` (0/1), `rpm`, `jitter`, `drift`, `base`, `err1`, `err2`
   `act_open`). UI merkitsee kortin (worst-kehys, AVAA/SULJE) tästä eikä jäsennä tekstiä.
 - `ch[i].cond` (WP-10) = kanavan luokitus käytösmatriisissa (`StatusResult::ch_cond`), samoilla
   pitoajoilla ja kynnyksillä kuin `state`. UI näyttää kanavan tilan tästä eikä päättele sitä
-  pulssista, tasosta tai `hose_off_kpa`:sta. Arvonimet ovat WP-10:n ehdotus:
+  pulssista, tasosta tai `hose_off_kpa`:sta. Arvonimet on hyväksytty sellaisinaan (D15,
+  31.10.2026), ja muita arvoja ei ole:
 
   | `cond` | merkitys | §8 |
   |---|---|---|
@@ -599,6 +607,8 @@ Sim-avaimet: `engine_on` (0/1), `rpm`, `jitter`, `drift`, `base`, `err1`, `err2`
   Masterin vika (rivi 12) näkyy masterin omana `sensor`-, `hose`- tai `blocked`-arvona ja
   tilana `fault_master`; erillistä arvoa ei tarvita. `ch[i].sat` ja `ch[i].pulse` ovat DSP:n
   raakalippuja (`sat` on tosi myös ilmanpaineessa, GN-anturi), diagnostiikkaa varten.
+  `cond` = `sat` ei peitä sylinterikorttia (D15): kortti näyttää lukeman kuten `ok`-arvolla, ja
+  leikkautuminen näkyy `flags.sat`-lippuna (SATUROITUU) ja huoltosivun taulukossa.
 - `wave.s` = edellisen viestin jälkeen kertyneet desimoidut näytteet (16 näytteen
   lohkokeskiarvo → 62,5 Hz), kalibroitua kPa:ta, enintään 16 riviä.
 - Pariteetti: `test_snapshot` vertaa laitteen viestiä muotomerkkijonoihin (avaimet järjestyksessä,

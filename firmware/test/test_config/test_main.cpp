@@ -221,9 +221,9 @@ void test_ranges_match_physics_and_dsp_capacity() {
 
 void test_wp9_proposed_fields_registered() {
   // WP-9 (31.10.2026): kolme uutta kynnystä ovat S5a:n mukaan huoltosivulla
-  // säädettäviä. Oletukset ovat EHDOTUKSIA omistajalle (eivät päätöslokissa),
-  // mittausperusteet status.h:ssa ja calibration.h:ssa. Testi lukitsee ne,
-  // jotta muutos on tietoinen.
+  // säädettäviä. Oletukset on hyväksytty alustavasti 31.10.2026 (D15) ja
+  // tarkistetaan ensimmäisestä moottorinauhoituksesta; mittausperusteet
+  // status.h:ssa ja calibration.h:ssa. Testi lukitsee ne, jotta muutos on tietoinen.
   auto range = [](const char* key, float lo, float hi) {
     const int i = sbx::configFindField(key);
     TEST_ASSERT_TRUE_MESSAGE(i >= 0, key);
@@ -232,7 +232,7 @@ void test_wp9_proposed_fields_registered() {
     TEST_ASSERT_EQUAL_FLOAT_MESSAGE(hi, f.max, key);
     TEST_ASSERT_EQUAL_STRING_MESSAGE(sbx::kGroupSync, f.group, key);
   };
-  // 0 = ominaisuus pois eli WP-4:n käytös (valittavissa, jos ehdotus hylätään).
+  // 0 = ominaisuus pois eli WP-4:n käytös (valittavissa, jos nauhoitus kumoaa arvon).
   range("hose_hyst_kpa", 0.0f, 5.0f);
   range("drift_tau_s", 0.0f, 5.0f);
   // Alaraja ADC-kohinan yläpuolella: 0 tekisi nollauksesta mahdottoman.
@@ -517,10 +517,10 @@ void test_validate_cross_checks() {
   }
   {  // rivi 7 / 10: fault_lo < sat < fault_hi
     Config c;
-    c.sensor.sat_mv = 3200;  // > fault_hi 3150
+    c.sensor.sat_mv = 3200;  // > fault_hi 2950 (D15)
     expectInvalid(c, "sat_mv");
-    c.sensor.sat_mv = 3150;  // = fault_hi
-    expectInvalid(c, "3150");
+    c.sensor.sat_mv = 2950;  // = fault_hi
+    expectInvalid(c, "2950 / 2950");
     c.sensor.sat_mv = 2680;
     expectValid(c);
     // Suora kirjoitus ohi configSetin (vanha NVS-arvo): 0 / 3300 mV kytkisi
@@ -536,8 +536,8 @@ void test_validate_cross_checks() {
   }
   {  // ilmanpaine ei saa olla anturivika (rivi 1 vs. rivi 7)
     Config c;
-    c.sensor.v_zero_mv = 3200.0f;
-    c.sensor.sat_mv = 3100;
+    c.sensor.v_zero_mv = 3000.0f;  // > fault_hi 2950 (D15)
+    c.sensor.sat_mv = 2900;        // < fault_hi: järjestystarkistus ei ehdi ensin
     expectInvalid(c, "v_zero_mv");
   }
   {  // D10: hose_off ≤ off

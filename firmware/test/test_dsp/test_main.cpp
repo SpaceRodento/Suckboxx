@@ -968,7 +968,7 @@ void test_level_ema_tracks_step_with_tau() {
 
 void test_sensor_fault_after_hold_and_clears() {
   Dsp dsp;
-  SensorParams sp;  // 100...3150 mV, 1,0 s
+  SensorParams sp;  // 150...2950 mV (D15), 1,0 s
   dsp.configure(DspParams(), sp);
   float kpa[kChannels] = {-55.0f, -55.0f, -55.0f};
   RawFrame raw;
@@ -986,7 +986,7 @@ void test_sensor_fault_after_hold_and_clears() {
   TEST_ASSERT_TRUE(dsp.channel(2).sensor_fault);
   TEST_ASSERT_EQUAL_UINT16(50, dsp.channel(1).last_mv);
 
-  raw.mv[1] = 100;  // rajalla = alueella
+  raw.mv[1] = 150;  // rajalla = alueella
   dsp.push(kpa, raw);
   TEST_ASSERT_FALSE(dsp.channel(1).sensor_fault);
   TEST_ASSERT_TRUE(dsp.channel(2).sensor_fault);
@@ -1009,6 +1009,31 @@ void test_sensor_fault_after_hold_and_clears() {
   TEST_ASSERT_FALSE(dsp.channel(1).sensor_fault);
   dsp.push(kpa, raw);
   TEST_ASSERT_TRUE(dsp.channel(1).sensor_fault);
+}
+
+// Rivin 7 oletusrajat 150 / 2950 mV (D15, 31.10.2026). Päättäjät:
+//  - laillinen lukema ei ole vika: anturin alue −100…0 kPa = 200…2700 mV ja
+//    tarkkuus ±2 %FSS = ±50 mV (docs/rauta.md §1.2, §1.4), eli 150 ja 2750 mV;
+//    mitattu ylipaine +1,2 kPa = 2726 mV (docs/jatko.md, penkkitesti 31.10.2026).
+//  - ADC:n ääripään tuntumassa oleva lukema on vika, vaikka liima ei koodaisi
+//    sitä 0 / 3300 mV:ksi: mitattu eFuse-ikkuna 142…3150 mV (docs/jatko.md).
+//    D15:tä edeltäneillä rajoilla 100 / 3150 mV yksikään alla ei laukaissut.
+void test_sensor_fault_default_limits_d15() {
+  Dsp dsp;
+  dsp.configure(DspParams(), SensorParams());
+  float kpa[kChannels] = {-55.0f, -55.0f, -55.0f};
+  RawFrame raw;
+  raw.mv[0] = 150;   // −100 kPa − 2 %FSS, rajalla = alueella
+  raw.mv[1] = 2750;  // 0 kPa + 2 %FSS
+  raw.mv[2] = 2950;  // rajalla = alueella
+  for (int i = 0; i < 2000; ++i) dsp.push(kpa, raw);
+  for (int c = 0; c < kChannels; ++c) TEST_ASSERT_FALSE(dsp.channel(c).sensor_fault);
+
+  raw.mv[0] = 145;   // ADC:n alimman koodin (142 mV) yläpuolella, raw > 0
+  raw.mv[1] = 3100;  // ylimmän koodin (3150 mV) alapuolella, raw < 4095
+  raw.mv[2] = 2951;
+  for (int i = 0; i < 1000; ++i) dsp.push(kpa, raw);
+  for (int c = 0; c < kChannels; ++c) TEST_ASSERT_TRUE(dsp.channel(c).sensor_fault);
 }
 
 void test_saturation_flag_lasts_one_second() {
@@ -1443,6 +1468,7 @@ int main() {
   RUN_TEST(test_noise_and_resonance_alone_never_pulse);
   RUN_TEST(test_level_ema_tracks_step_with_tau);
   RUN_TEST(test_sensor_fault_after_hold_and_clears);
+  RUN_TEST(test_sensor_fault_default_limits_d15);
   RUN_TEST(test_saturation_flag_lasts_one_second);
   RUN_TEST(test_configure_resets_state);
   RUN_TEST(test_avg_cycles_sets_response_and_noise);

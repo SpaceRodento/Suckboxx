@@ -100,6 +100,10 @@ inline constexpr char kGroupSystem[] = "Järjestelmä";
 //     reunaan; simulaattorin SensorLow (≤ 30 mV) ja SensorHigh (≥ 3270 mV)
 //     osuvat aina. Ylärajat: 500 mV = −88 kPa (syvempää alipainetta ei
 //     joutokäynnillä ole), 2500 mV = −8 kPa (täysi kaasu, GPN:llä jo ylipaine).
+//     Oletukset 150 / 2950 mV (D15): mitatun ADC-ikkunan (eFuse 142…3150 mV,
+//     docs/jatko.md) sisällä, joten ne laukeavat ilman liiman 0 / 3300 mV
+//     -koodaustakin (hal/sampler.cpp), ja anturin laillinen alue 200…2700 mV
+//     ±50 mV (±2 %FSS, docs/rauta.md §1.2, §1.4) jää niiden väliin.
 //   - rail_nominal_mv 2500…5500: 3,3 V LDO tai 5 V -anturi (R6).
 //  Järjestelmä
 //   - push_rate_hz ≥ 4: snapshotin wave.s on enintään 16 riviä 62,5 Hz:n

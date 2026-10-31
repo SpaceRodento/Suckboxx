@@ -10,7 +10,7 @@ Tämän dokumentin paketit P0–P6 ovat anturilähtöinen näkymä samaan työh�
 
 | Paketti | M-vaihe | Tila |
 |---|---|---|
-| P0 Legacy cleanup | M3 | Bring-up-firmware korvattu (WP-7). Pinnikartta 34/35/32 koodissa ja täällä. HX710B on yhä valinnainen penkkitestilähde (D14): säilytys tai poisto on omistajan päätös. |
+| P0 Legacy cleanup | M3 | Bring-up-firmware korvattu (WP-7). Pinnikartta 34/35/32 koodissa ja täällä. HX710B säilyy valinnaisena penkkitestilähteenä (D14, D15 31.10.2026), mutta se ei ole kehityksen perusta. |
 | P1 Sensor baseline | M5 | Osittain: lepotaso 2692–2699 mV, eFuse-karakterisointi, ylipaine +1,2 kPa (H1 lievempi), kahden kanavan yhtäpitävyys 0,012 kPa. Puuttuu: painepisteet −20…−75 kPa käsipumpulla ja SYL 3. |
 | P2 Bench harness | M5 | Valmis: `tools/serial_record.py` (1 kHz USB:n kautta), `tools/cycle_profile.py`, `tools/sim_fit.py` (lepotarkistus). `tools/sensor_bench_logger.py`:tä ei tehty; serial_record korvaa sen. |
 | P3 ADC path | M4–M5 | Osittain: S&H-ylikuuluminen mitattu ja kierretty lämmittelyluvulla, kohina 3,5 mV RMS, piikit ±80–90 mV ~1/s. Puuttuu: 100 nF ja kiskomonitori (rauta). |
@@ -65,10 +65,12 @@ Tämä roadmap on jaettu työpaketteihin. Jokainen paketti on suunniteltu niin, 
 ## 4. P0 — Legacy cleanup and canonical sensor architecture
 
 ### Tavoite
-Siivota vanha HX710B-arkkitehtuuri pois ja ottaa käyttöön virallinen XGZP6847A-konfiguraatio, jonka perusteella kaikki myöhemmät testit ja validoinnit rakennetaan.
+Siivota vanha HX710B-bring-up-arkkitehtuuri pois ja ottaa käyttöön virallinen XGZP6847A-konfiguraatio, jonka perusteella kaikki myöhemmät testit ja validoinnit rakennetaan.
+
+*Päätös 31.10.2026 (SUUNNITTELU.md D15):* HX710B-lähdettä ei poisteta. Se säilyy valinnaisena penkkitestilähteenä (`source` = 2, `esp32dev_hx`, D14). Siivous koskee vain bring-up-arkkitehtuuria kehityksen perustana.
 
 ### Tehtävät
-- Hylätään vanha HX710B-bring-up -arkkitehtuuri käytännössä, eikä se enää ole kehityksen perusta.
+- Hylätään vanha HX710B-bring-up -arkkitehtuuri käytännössä, eikä se enää ole kehityksen perusta. HX710B-lähde jää penkkitestiin (D15).
 - Varmistetaan, että virallinen pinni-kartta on (protolevy, `firmware/src/hal/sampler.cpp` `kAdcCh`, penkkitesti 31.10.2026):
   - CH1 = GPIO34
   - CH2 = GPIO35 *(korjattu 31.10.2026: tässä luki GPIO39, joka on suunnitelman kiskomonitori, docs/rauta.md §2.2)*
