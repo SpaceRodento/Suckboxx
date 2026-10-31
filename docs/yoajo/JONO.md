@@ -30,18 +30,24 @@ tänne. Malli on Zignalmeisterin ja PlantMeisterin `docs/yoajo/`:sta (31.10.2026
 
 | # | Tunnus | Paketti | Laji | Laitekoodi | Riippuvuus |
 |---|---|---|---|---|---|
-| 1 | S1 | [Riippumaton katselmus: WP-9:n ja WP-10:n status- ja kalibrointimuutokset](paketit/S1-katselmus-wp9-wp10.md) | katselmus | ei | WP-9, WP-10 |
-| 2 | S2 | [DSP: voimakas positiivinen paluuaalto sotkee syklintunnistuksen](paketit/S2-dsp-paluuaalto.md) | rakennus | kyllä | WP-8 |
-| 3 | S3 | [Golden-nauhoitukset käytösmatriisin riveille](paketit/S3-golden-matriisirivit.md) | rakennus | ei | WP-8, WP-9 |
-| 4 | S4 | [Mockin ja laitteen aikajanapariteetti automaattiseksi](paketit/S4-mock-aikajanapariteetti.md) | rakennus | ei | WP-8, WP-10 |
-| 5 | S5 | [EngineSim: mitatut ADC-piikit simulaattoriin](paketit/S5-sim-adc-piikit.md) | rakennus | kyllä | WP-9 |
-| 6 | S6 | [Käyttöohje mekaanikolle](paketit/S6-kayttoohje.md) | dokumentaatio | ei | WP-9, WP-10 |
-| 7 | S7 | [Mutaatiotestauksen työkalu coreen](paketit/S7-mutaatiotyokalu.md) | rakennus | ei | – |
-| 8 | S8 | [Syötteiden robustisuus: lomakkeet ja CSV-lukija satunnaissyötteillä](paketit/S8-syotteiden-fuzzaus.md) | rakennus | jos vika löytyy | WP-8 |
-| 9 | S9 | [Konfiguraatio-JSONin puskurivara](paketit/S9-config-json-puskuri.md) | rakennus | kyllä | WP-9 |
+| 1 | S2 | [DSP: voimakas positiivinen paluuaalto sotkee syklintunnistuksen](paketit/S2-dsp-paluuaalto.md) | rakennus | kyllä | WP-8 |
+| 2 | S3 | [Golden-nauhoitukset käytösmatriisin riveille](paketit/S3-golden-matriisirivit.md) | rakennus | ei | WP-8, WP-9 |
+| 3 | S4 | [Mockin ja laitteen aikajanapariteetti automaattiseksi](paketit/S4-mock-aikajanapariteetti.md) | rakennus | ei | WP-8, WP-10 |
+| 4 | S11 | [Testien päättäjät näkyviin ja cond/tila-invariantti](paketit/S11-testien-paattajat.md) | rakennus | ei | S1 |
+| 5 | S10 | [Mockin lomakejäsennys laitteen kaltaiseksi](paketit/S10-mock-lomakkeet.md) | rakennus | ei | S8 |
+| 6 | S12 | [Letkuvian hystereesimuisti säilyy asetusmuutoksen yli](paketit/S12-hystereesimuisti.md) | rakennus | kyllä | WP-9, S1 |
+| 7 | S5 | [EngineSim: mitatut ADC-piikit simulaattoriin](paketit/S5-sim-adc-piikit.md) | rakennus | kyllä | WP-9 |
+| 8 | S13 | [Käytösmatriisin UI-sarake vastaan koodi, ja rivi 11](paketit/S13-matriisi-ui-sarake.md) | katselmus | ei | S6 |
+| 9 | S7 | [Mutaatiotestauksen työkalu coreen](paketit/S7-mutaatiotyokalu.md) | rakennus | ei | – |
+| 10 | S15 | [Korjausehdotuksen luonnos ESPAsyncWebServerille (ei lähetetä)](paketit/S15-upstream-luonnos.md) | dokumentaatio | ei | R13 |
+| 11 | S14 | [Käynnistyksen häiriöt erilleen aukko-, ohitus- ja pudotuslaskureista](paketit/S14-kaynnistyksen-laskurit.md) | rakennus | kyllä | WP-13, R13 |
 
 S2 ja S5 koskevat molemmat simulaattorin ja DSP:n käytöstä: jos molemmat ovat samana yönä
 avoimina, jälkimmäinen tarkistaa törmäyksen diffistä. S4 kirjaa S2:n tunnetun eron odotetuksi.
+
+Tehty päiväistunnossa 31.10.2026 (tiedostot [paketit/tehdyt/](paketit/tehdyt)): S1, S6, S8,
+S9. Samana päivänä tehtiin päiväistunnon omat katselmukset ja paketit R13, WP-15 ja WP-16
+([docs/paketit.md](../paketit.md)).
 
 ## Ehdotukset
 

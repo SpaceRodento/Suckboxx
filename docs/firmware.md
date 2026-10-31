@@ -532,7 +532,9 @@ AsyncTCP 3.5.0; versiot lukittu `platformio.ini`:ssä ja `static_assert`illa `ha
   rajaton tapahtumajono poistaa 3.3.2:n ainoan tunnetun aukon `sbx_push`in suojassa. Auki:
   `_onDisconnect` nollaa `_client`in yhä ilman lukkoa, ja `events.close()` mitätöi oman
   iteraattorinsa, joten `sbx_push`-järjestely ja `close()`-kielto jäävät. Analyysi rivi
-  riviltä `hal/web.cpp`:n alussa. Laitetesti ennen masteria.
+  riviltä `hal/web.cpp`:n alussa. Yhdistetty masteriin ennen laitetestiä (omistajan päätös
+  31.10.2026); riippumaton katselmus ja laitetestin tarkistuslista:
+  [katselmukset/2026-10-31-wp13-hal-kirjastot.md](katselmukset/2026-10-31-wp13-hal-kirjastot.md).
 
 ---
 

@@ -1,10 +1,16 @@
-# Työpaketit 31.10.2026 alkaen (WP-8…WP-14)
+# Työpaketit 31.10.2026 alkaen (WP-8…WP-16)
 
 Lähtötila: master `2c63e86` (M1–M3, WP-7b, WP-2c, penkkitesti 31.10.2026). Native 12/12
 kokonaisuutta vihreänä. Avoimet kohdat ovat [jatko.md](jatko.md):n listasta "Avoimet".
 Integraatiohaara `dev/integraatio`; jokainen paketti omassa haarassaan `wp/<n>-<nimi>`, ja
 orkestroija yhdistää. Tulokset ja luvut: [jatko.md](jatko.md) "Valmiit 31.10.2026". Seuraavat
 koneella tehtävät työt ovat yöjonossa [yoajo/JONO.md](yoajo/JONO.md).
+
+**Masteriin ilman laitetestiä (omistajan päätös 31.10.2026 iltapäivällä):** laitetestiä ei
+saatu heti, joten `dev/integraatio` yhdistettiin masteriin ennen sitä. Sen tilalla ovat
+riippumattomat katselmukset (S1, R13) ja WSL:n ASan/UBSan-portti jokaisen yhdistämisen
+jälkeen. Laitetesti ([jatko.md](jatko.md) "Laitetesti 1") tehdään mahdollisimman pian, ja
+löydökset korjataan masterin päälle.
 
 Painopiste: kaikki, mitä voi tehdä ilman moottoria, tehdään nyt, jotta ensimmäinen
 moottoriajo (M6) tuottaa käyttökelpoista dataa ja viritys (M7) on nopea.
@@ -16,8 +22,20 @@ moottoriajo (M6) tuottaa käyttökelpoista dataa ja viritys (M7) on nopea.
 | WP-10 | Rakenteellinen neuvo, kanavatila ja mockin pariteetti | 5, 6 | — | `snapshot.h`, `status.h` (vain `verdict`), `types.h` (`StatusResult`), `web/index.html`, `web_page.h`, `mock_server.py` | ✅ yhdistetty |
 | WP-11 | CI (GitHub Actions) | 6 | — | `.github/workflows/` | ✅ yhdistetty; ensimmäinen ajo pushin jälkeen |
 | WP-12 | Moottoriajon kenttäpaketti | 1, 2 | — | `docs/moottoriajo.md`, `tools/sim_fit.py` | ✅ yhdistetty |
-| WP-13 | HAL-huolto: ESPAsyncWebServer ja `myoh` | 9, 10 | ESP32-käännös; laitetesti ennen masteria | `src/hal/*`, `platformio.ini` | ✅ yhdistetty; laitetesti tekemättä |
+| WP-13 | HAL-huolto: ESPAsyncWebServer ja `myoh` | 9, 10 | ESP32-käännös; laitetesti | `src/hal/*`, `platformio.ini` | ✅ yhdistetty; katselmoitu (R13); laitetesti tekemättä |
 | WP-14 | Dokumentaation yhtenäistys | — | muiden paketit | `docs/roadmap.md`, `SUUNNITTELU.md` §11, `jatko.md` (orkestroija) | ✅ tämä dokumentaatio |
+| WP-15 | Omistajan päätökset kirjaksi (D15) | 5 | — | `types.h` (rivi 7), SUUNNITTELU.md §5/§8, `roadmap.md`, `firmware.md`, `moottoriajo.md` | ✅ yhdistetty |
+| WP-16 | BF50A-huoltotiedot ja käyttöohjeen UI-löydökset | 2 | WP-15, S6 | `docs/bf50a-huoltotiedot.md`, `types.h` (master), `status.h` (neuvoteksti), `web/index.html`, `moottoriajo.md`, `kayttoohje.md`, `hankinnat.md` | käynnissä |
+| S1 | Katselmus: WP-9 ja WP-10 | — | — | `docs/katselmukset/2026-10-31-status-wp9-wp10.md` | ✅ yhdistetty; ei korkeita löydöksiä |
+| R13 | Katselmus: WP-13 (HAL, kirjastot 3.12.1/3.5.0) | — | — | `docs/katselmukset/2026-10-31-wp13-hal-kirjastot.md` | ✅ yhdistetty; ei korkeita löydöksiä |
+| S2 | DSP: voimakas paluuaalto | 6 | WP-8 | `dsp.h`, DSP-testit | käynnissä |
+| S6 | Käyttöohje mekaanikolle | — | — | `docs/kayttoohje.md`, `docs/kuvat/` | ✅ yhdistetty |
+| S8 | Lomakkeiden ja CSV:n fuzzaus | — | WP-8 | `firmware/test/test_fuzz/` | ✅ yhdistetty; ei löydöksiä (ASan) |
+| S9 | Konfiguraatio-JSONin puskuri | 8 | WP-9 | `config.h` (`kConfigJsonSize` johdetaan) | ✅ yhdistetty |
+
+S-paketit tulivat yöjonosta ([yoajo/paketit/tehdyt/](yoajo/paketit/tehdyt)); ne tehtiin
+päiväistunnossa, koska laitetestiä odottaessa koneella oli tilaa. R13 on päiväistunnon oma
+katselmus, koska WP-13:n laitekoodi meni masteriin ilman laitetestiä.
 
 ## WP-8 — Nauhoitusten toisto ja golden-vektorit
 
@@ -70,11 +88,12 @@ GitHub Actions: native-testit (ASan/UBSan), `pio test -e native`, ESP32-käänn�
 ## WP-13 — HAL-huolto
 
 - ESPAsyncWebServer 3.6.0:n neljä tunnettua ongelmaa (jatko.md 10) tarkistetaan uudemmista
-  versioista lähdekoodista; versionnosto käännettynä haarassa. Masteriin vasta laitetestin jälkeen.
+  versioista lähdekoodista; versionnosto käännettynä haarassa. Alun perin masteriin vasta
+  laitetestin jälkeen; omistaja päätti 31.10.2026 yhdistää ennen laitetestiä (R13 katselmoi).
 - `myoh` ei laske käynnistyksen ensimmäisen hitaan ADC-luvun jälkeisiä kiinniottoja.
 
-## Omistajan päätettävät (ei paketeissa)
+## Omistajan päätettävät
 
-- Rivin 7 rajat: nykyiset 100 / 3150 mV vai suositus 150 / 2950 mV (jatko.md 4).
-- HX710B-lähde: säilytetäänkö penkkitestilähteenä (D14) vai poistetaanko (roadmap.md P0).
-- WP-9:n uudet kynnysarvot.
+Päätetty 31.10.2026 (D15, omistaja delegoi orkestroijalle): rivin 7 rajat 150 / 2950 mV,
+WP-9:n kynnykset ja WP-12:n pöytäkirjan rajat alustavasti, `cond`-nimet sellaisinaan,
+HX710B säilyy. Avoimet: [jatko.md](jatko.md) "Avoimet".

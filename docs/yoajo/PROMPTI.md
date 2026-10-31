@@ -88,7 +88,8 @@ Y8. **Mikä on sinun päätettävissäsi.** Mekanismi on sinun: koodin muoto, ni
     rakenne, mitattava ja muutettava oletus (puskurin koko, aikaraja). Tarkoitus on ihmisen:
     mitä laite näyttää käyttäjälle, kynnykset, joissa on arvovalinta (D2:n toleranssit,
     käytösmatriisin rajat), julkaistun rajapinnan rikkova muutos ja kaikki rautaa koskeva.
-    Päätökset ovat SUUNNITTELU.md §5:ssä (D1–D14) ja käytösmatriisissa (§8); älä kumoa niitä.
+    Päätökset ovat SUUNNITTELU.md §5:n päätöslokissa (D-numerot) ja käytösmatriisissa (§8);
+    älä kumoa niitä.
     Ihmisen kysymys menee PR:n otsikon **Kysymykset** alle vaihtoehtoineen ja suosituksineen,
     ja otat sillä välin turvallisimman peruttavan vaihtoehdon.
 
