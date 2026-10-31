@@ -8,6 +8,7 @@
 > | dokumentti | sisältö |
 > |-----|-----|
 > | tämä | päätökset, perustelut, käytösmatriisi, vaiheistus |
+> | [docs/kayttoohje.md](docs/kayttoohje.md) | **käyttöohje mekaanikolle:** turvallisuus, kytkentä, näytön tilat, kalibrointi, huoltosivu |
 > | [docs/rauta.md](docs/rauta.md) | anturivalinta, kytkentä, mitoitus, pinnijako, PCB |
 > | [docs/hankinnat.md](docs/hankinnat.md) | osaluettelo, tilauskoodit, mitä *ei* kannata ostaa |
 > | [docs/firmware.md](docs/firmware.md) | firmware-arkkitehtuuri, moduulit, rajapinnat, web-API |
