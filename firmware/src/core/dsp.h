@@ -132,26 +132,29 @@
 //    kirjasi vuodosta alkavan syklin. Siinä ainoan todistajan edellinen oma
 //    pulssi oli 6,5 jaksoa aiemmin eikä edellinen oma väli ollut syklin
 //    mittainen, joten syklin alkua ei voi tarkistaa; tarkistus (hylkäys tai
-//    odotus todistajan seuraavaan pulssiin) maksoi letku irti -tilanteissa
-//    has_pulse-pudotuksia (18 -> 22 ajoa, 600 rpm:n joutokäynniltä 1117 ->
-//    1938) ja jopa 150 ms pidempiä välejä.
+//    odotus todistajan seuraavaan pulssiin) maksoi kokeiluissa letku irti
+//    -tilanteissa has_pulse-pudotuksia (4b27feb:hen verrattuna 18 -> 22 ajoa,
+//    600 rpm:n joutokäynniltä 1117 -> 1938) ja jopa 150 ms pidempiä välejä.
 //  - Terveen kanavan has_pulse ei putoa näissä (paitsi alla). Pisin väli:
 //    rpm-askel alas <= 2 uutta jaksoa + 30 ms (850 rpm: 312 ms, 600 rpm: 381
 //    ms), kaasun katkaisu 4500 -> 1500 / 150 ms 288 ms; blip nousu >= 300 ms
 //    <= 296 ms, 150 ms <= 363 ms (xtalk 0,5: 412 ms), pika- ja tuplablip <= 391
 //    ms (xtalk 0,5: 568 ms); alipaineen askel <= 3,05 jaksoa (5 % jitter 3,21),
 //    ramppi 200 ms 1,05 (5 %: 1,15), 20-100 ms <= 3,07 jaksoa. Vika 20-400 ms
-//    blipin ympärillä (1,02 M ajoa): nousu 150 ms <= 462 ms (xtalk 0,5: 529
-//    ms), 300 ms <= 354 ms (xtalk 0,3/0,5: 434 ms), pikablip <= 537 ms (xtalk
-//    0,5: 710 ms), tuplablip <= 553 ms - paitsi xtalk 0,5:n tuplablipissä
-//    3000 rpm:ään: 20-100 ms:n vika <= 983 ms (19/31104 ajoa yli 900 ms:n,
-//    has_pulse ei putoa), 250-400 ms:n vika <= 1,4 s ja has_pulse voi pudota
-//    (11/20736 ajoa). Siinä vikaantunut kanava on kuollut koko syklin ajan,
-//    terveellä on yksi todistaja, ja rajapulssien samankokoisuus hylkää
-//    oikeat syklit kaasunlisäyksen pulssien kasvaessa tai kutistuessa; muut
-//    syklit ovat 2T:itä. Alipaineen askeleessa <= 4,05 jaksoa (askel 2 + vika
-//    1); letku irrotetaan joutokäynnillä: muiden väli 145 ms (ei menetettyä
-//    sykliä).
+//    blipin ympärillä (777600 ajoa, has_pulse ei putoa): nousu 150 ms <= 413
+//    ms (xtalk 0,5: 529 ms), 300 ms <= 354 ms (xtalk 0,3: 394, 0,5: 434 ms),
+//    pikablip <= 462 ms (xtalk 0,5: 572 ms), tuplablip <= 553 ms (xtalk 0,5
+//    tauon kanssa: 890 ms) - paitsi xtalk 0,5:n tauottomassa tuplablipissä
+//    850 -> 3000: <= 992 ms, 49/51840 ajoa yli 900 ms:n (20-100 ms:n vika
+//    16/31104, 250-400 ms 33/20736). Siinä vika jättää terveen kanavan
+//    tauon jälkeen yhden todistajan varaan toisen blipin alussa, jolloin
+//    pulssi kutistuu (22 -> 14 kPa) ja rajapulssien samankokoisuus hylkää
+//    oikean syklin; seuraavat ovat 2T:itä. Kutistuvan pulssin poikkeus (0,49
+//    ... 1 x) sulki nämä välit (<= 857 ms), mutta päästi yhden todistajan
+//    2T:itä läpi (letku irti, 100 ms:n nousu: 23 -> 26 / 2592 ajoa; rytmi ja
+//    vastapaikka kunnossa), joten sitä ei käytetä. Alipaineen askeleessa <=
+//    4,05 jaksoa (askel 2 + vika 1); letku irrotetaan joutokäynnillä: muiden
+//    väli 145 ms (ei menetettyä sykliä).
 //  - Jokaisen kanavan rpm ja keskiarvo 1,5 s muutoksen jälkeen: rpm <= 0,39 %,
 //    keskiarvo <= 0,052 kPa (5 % jitter: 0,085); RpmEstimate 1,2 s jälkeen <=
 //    0,7 %. (600 rpm:llä 8 sykliä = 1,6 s, joten 1,5 s:n kohdalla näytössä on
@@ -185,9 +188,11 @@
 //    kolmella kanavalla ja yhden letkun ollessa irti. Yksi letku irti
 //    (FaultHose, rivi 6): yksi todistaja ei seuraa äkillistä hidastumista,
 //    joten rpm-pudotuksen väli on pidempi (ramppi 3000 -> 850 / 150 ms <= 422
-//    ms, askel 2500 -> 600 <= 526 ms, 6000 -> 850 <= 895 ms); xtalk 0,5:n
-//    tuplablipissä 2000-3000 rpm:ään terveen kanavan has_pulse voi pudota
-//    (18/6912 ajoa, väli <= 1,41 s; sama kierroksella 6). Hetkellinen
+//    ms, askel 2500 -> 600 <= 526 ms, 6000 -> 850 <= 895 ms). Pika-, tupla-
+//    ja tavallisissa blipeissä 3000 rpm:ään terveen kanavan has_pulse ei
+//    putoa (145152 ajoa; kierroksella 6 xtalk 0,5:n tuplablipissä 18/6912
+//    ajoa, 1,41 s), pisin väli xtalk 0,5:n tauottomassa tuplablipissä 987 ms
+//    (tauon kanssa 890 ms). Hetkellinen
 //    rpm-askel (vain simulaattorissa, /api/sim) letkun ollessa irti voi
 //    kirjata yhden väärän syklin (askeleet 3000 -> 850, 4500 -> 1500, 6000 ->
 //    850, xtalk 0,3/0,5: 64/2304 ajoa, sama kuin 5a45dc7; lyhyt vika askeleen
