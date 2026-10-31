@@ -1928,11 +1928,12 @@ void test_dead_channel_during_blip() {
   // sytytysjärjestys sitoo todistajan omaan paikkaansa, ja tauko edellisestä
   // hyväksytystä syklistä vaatii kaikki elävät todistajat (hold-vaiheessa vanha
   // 850 rpm:n viite sai 4T-välin näyttämään tavalliselta). Kuollut kanava ei
-  // saa venyttää muiden välejä: anturi tunnistetaan heti mV:stä (ja sen
-  // palautumisen ylitys ei näy pudotuksena), irrotettu letku lakkaa
-  // todistamasta kahden syklin jälkeen nykyisellä kierrosluvulla, eikä toisen
-  // kanavan nousu (letku irti -> ilmanpaine) ole pudotus. Raja: B:n raja +
-  // 150 ms (xtalk 0,5: 450 + 150).
+  // saa venyttää muiden välejä: anturi tunnistetaan heti mV:stä ja irrotettu
+  // letku tasosta (ilmanpaine; palautumisen ylitys tai takaisinkytkennän
+  // askel ei näy pudotuksena), vaiennut kanava lakkaa todistamasta kahden
+  // syklin jälkeen nykyisellä kierrosluvulla, eikä toisen kanavan nousu
+  // (letku irti -> ilmanpaine) ole pudotus. Raja: B:n raja + 150 ms (xtalk
+  // 0,5: 450 + 150).
   struct Case {
     int mode;     // 0 = anturi alas (dur ms), 1 = letku irti koko ajan, 2 = letku irrotetaan
     float rpm1, xt;
@@ -2124,8 +2125,8 @@ void test_hose_swap_relearns_firing_order() {
   // Sytytysjärjestys ja letkujen kytkentä opitaan äänestämällä (order_,
   // kyllästys kOrderMax). Letkut 2 ja 3 vaihdetaan (F3):
   //  - käynnin aikana: väärä järjestys hylkää syklit, kunnes äänet kääntyvät
-  //    (~1,5 sykliä); ilman kyllästystä kääntyminen kesti sekunteja ja
-  //    has_pulse putosi (850 rpm: 3 s:n väli);
+  //    (~1,5 sykliä); ilman kyllästystä kääntyminen kesti yli sekunnin ja
+  //    has_pulse putosi (850 rpm: 1,4 s:n väli);
   //  - pysähdyksen aikana: kun yhdelläkään kanavalla ei ole has_pulsea,
   //    opittu järjestys unohdetaan, joten uusi käynti lukittuu D:n rajassa
   //    (ilman nollausta 850 rpm: 613 ms, 600 rpm: 856 ms).

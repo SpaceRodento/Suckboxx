@@ -32,19 +32,22 @@
 // sylinterien pulssien keskinäisestä koosta. Vertailu tehdään AINA muihin
 // kanaviin lukituksesta riippumatta - fysikaalinen tieto on olemassa
 // käynnistyksestä lähtien, joten kanava ei voi lukittua vuotojen rytmiin.
-// Tasainen kanava (letku irti) putoaa ~0 eikä estä mitään; jos kaikki muut
-// ovat tasaisia, jokainen pulssi on ehdokas (varatila). Ainoa poikkeus:
-// kanava, joka ei ole elävä (ks. todistajat alla), jätetään vertailusta, kun
-// kolmas kanava on elävä. Vuoto ei koskaan ole syklin raja eikä päivitä
-// viitteitä.
+// Tasainen kanava putoaa ~0 eikä estä mitään; jos kaikki muut ovat
+// tasaisia, jokainen pulssi on ehdokas (varatila). Ainoa poikkeus: kanava,
+// joka ei ole elävä (ks. todistajat alla), jätetään vertailusta, kun kolmas
+// kanava on elävä. Vuoto ei koskaan ole syklin raja eikä päivitä viitteitä.
 //
-// Vikaantunut kanava: anturin mV alueen ulkopuolella (rivi 7) -> kanava on
-// heti kuollut (ei vertailukanava, ei omia pulsseja, ei todistaja) ja asettuu
-// palattuaan kRing näytettä kuten käynnistyksessä; sensor_fault-lippu nousee
-// edelleen vasta fault_hold_s:n jälkeen. Irrotettu letku on tasainen; se
-// lakkaa todistamasta ja on pois vertailusta (takaisin kytkennän 55 kPa:n
-// lasku ei estä muiden pulsseja), kun muut ovat pulssineet kahdesti ilman
-// sitä. has_pulsen aikakatkaisu tyhjentää kanavan omien pulssien historian.
+// Vikaantunut kanava: anturin mV alueen ulkopuolella (rivi 7) tai letku irti
+// (kanava ilmanpaineessa: suodatettu taso yli -kVentKpa ja yli kVentKpa
+// kummankin muun yläpuolella) -> kanava on heti kuollut (ei vertailukanava,
+// ei omia pulsseja, ei todistaja) ja asettuu palattuaan kRing näytettä kuten
+// käynnistyksessä; D1-ketju katkeaa, joten vian ylittävää sykliä ei kirjata.
+// Takaisin kytketyn letkun tasoaskel (koko alipaine, 25-55 kPa) ei siten ole
+// oma pulssi, todistaja eikä muiden pulssin estävä pudotus. sensor_fault-lippu
+// nousee edelleen vasta fault_hold_s:n jälkeen. has_pulsen aikakatkaisu
+// tyhjentää kanavan omien pulssien historian; kun yhdelläkään kanavalla ei
+// ole has_pulsea, myös opittu sytytysjärjestys unohdetaan (letkut voidaan
+// kytkeä pysähdyksen aikana uudelleen).
 //
 // Sykli = kaksi peräkkäistä omaa pulssia. Kirjataan, kun
 //  - jakso on rpm-alueella ja pulssi läpäisee amplitudiehdon (ampOk);
@@ -60,9 +63,14 @@
 //    kanavan paikalle); nolla ei äänestä - kuollut tai heikko kanava ei estä
 //    muita.
 //  - vähintään yksi todistaja. Yhden todistajan syklissä rajapulssit
-//    samankokoiset (kaasunlisäyksen 2T: kutistuva pulssi). Pitkä sykli tai
-//    pitkä tauko edellisestä hyväksytystä (yli kBothRatio x viite: rpm:n pudotus
-//    tai kaikki ohittivat pulsseja) vaatii kaikki elävät todistajat.
+//    samankokoiset (kaasunlisäyksen 2T: kutistuva pulssi), ja todistajan
+//    paikka nopeuden muutoksella korjattuna (s + (1 - jakso / edellinen oma
+//    väli) / 9) kSlotTolSingle:n sisällä: nT-välissä yksittäinen merkki osuu
+//    paikalleen (k + 1/3) / n:ssä tai (k + 2/3) / n:ssä, mutta nopeuden muutos
+//    ei selitä sen siirtymää. Ei koske sykliä, joka on epäilyttävä vain tauon
+//    vuoksi (edellinen hylätty, jakso tavallinen). Pitkä sykli tai pitkä tauko
+//    edellisestä hyväksytystä (yli kBothRatio x viite: rpm:n pudotus tai kaikki
+//    ohittivat pulsseja) vaatii kaikki elävät todistajat.
 //  - varatila (ei eläviä todistajia, esim. kaksi letkua irti): kolme
 //    samankokoista omaa pulssia ja jakso edellisen oman välin ja viitteen +-
 //    kFallbackWindow sisällä.
@@ -79,46 +87,53 @@
 // hylkää sen.
 //
 // Mitatut rajat (EngineSim -> mV -> nimellinen kPa -> Dsp, oletusparametrit:
-// resonanssi, kohina, 1 % jitter; rpm-muutokset ja blipit 8 siementä x 12
-// vaihetta x xtalk 0/0,3/0,5, alipaine 4 x 6 x 3, käynnistykset 8 x 12; väärä
-// sykli = jokin merkki (loppu, loppu - jakso) osuu lähimpänä toisen sylinterin
-// imuun tai merkit eivät ole saman sylinterin peräkkäiset imut):
+// resonanssi, kohina, 1 % jitter; 8 siementä x 12 vaihetta x xtalk 0/0,3/0,5,
+// heikon sylinterin ja muut varianttiperheet xtalk 0/0,3; väärä sykli = jokin
+// merkki (loppu, loppu - jakso) osuu lähimpänä toisen sylinterin imuun tai
+// merkit eivät ole saman sylinterin peräkkäiset imut):
 //  - Väärät syklit: 0 rpm-pudotuksissa (askel, ramppi 150 ms-1 s, kaasun
-//    katkaisu 150-700 ms), blipeissä (850/950 -> 1500...3000, nousu 150-600
+//    katkaisu 100-700 ms), blipeissä (850/950 -> 1500...3000, nousu 150-600
 //    ms, pika- ja tuplablipit), alipaineen askelissa ja rampeissa (8-25 kPa,
 //    20-200 ms, 600-950 rpm, jitter 1 ja 5 %), käynnistyksissä ja 1,1-1,5 s:n
 //    pysähdyksen jälkeen (600-1500 rpm, xtalk 0...0,5, myös heikko sylinteri
-//    0,3-0,5 x), anturi alas 400 ms tai letku irti blipin aikana. Heikko
-//    sylinteri (0,5 x, xtalk 0/0,3) rpm-pudotuksissa, blipeissä ja
-//    alipaineen muutoksissa: 0. Kanavan rpm ei ylitä 1,05 x todellista.
-//  - Terveen kanavan has_pulse ei putoa näissä. Pisin väli: rpm-askel alas <= 2
-//    uutta jaksoa + 30 ms (850 rpm: 311 ms, 600 rpm: 381 ms), kaasun katkaisu
-//    4500 -> 1500 / 150 ms 288 ms; blip nousu >= 300 ms <= 296 ms, 150 ms <=
-//    363 ms (xtalk 0,5: 412 ms), pika- ja tuplablip <= 391 ms (xtalk 0,5: 568
-//    ms); alipaineen askel <= 3,04 jaksoa (5 % jitter 3,21), ramppi 200 ms 1,05,
-//    20-100 ms <= 3,04 jaksoa. Anturi alas 50-400 ms blipin aikana: muiden
-//    väli <= 445 ms (nousu 150) / 437 ms (300); letku irrotetaan blipin aikana
-//    <= 494 / 432 ms (xtalk 0,5: 567 ms); anturi alas tai letku irti 50-400
-//    ms alipaineen askeleessa: <= 4,02 jaksoa (askel 2 + vika 1); letku
-//    irrotetaan joutokäynnillä: muut jatkavat ilman taukoa (5673ef7: 572 ms).
+//    0,3-0,5 x). Heikko sylinteri (0,4-0,5 x, xtalk 0/0,3) rpm-pudotuksissa,
+//    blipeissä ja alipaineen muutoksissa: 0; samoin jitter 3 %. Anturi alas
+//    tai ylös tai letku irti 50-400 ms (ja takaisin) blipin ympärillä tai
+//    alipaineen askeleessa: 0 myös vikaantuneella kanavalla. Yksi letku irti
+//    koko ajan pika-, tupla- ja tavallisissa blipeissä 3000 rpm:ään: 0 (xtalk
+//    0,5:een asti). Kanavan rpm ei ylitä 1,05 x todellista.
+//  - Terveen kanavan has_pulse ei putoa näissä (paitsi alla). Pisin väli:
+//    rpm-askel alas <= 2 uutta jaksoa + 30 ms (850 rpm: 311 ms, 600 rpm: 381
+//    ms), kaasun katkaisu 4500 -> 1500 / 150 ms 288 ms; blip nousu >= 300 ms
+//    <= 296 ms, 150 ms <= 363 ms (xtalk 0,5: 412 ms), pika- ja tuplablip <= 391
+//    ms (xtalk 0,5: 568 ms); alipaineen askel <= 3,05 jaksoa (5 % jitter 3,21),
+//    ramppi 200 ms 1,05 (5 %: 1,15), 20-100 ms <= 3,07 jaksoa. Vika 50-400 ms
+//    blipin ympärillä: nousu 150 ms <= 482 ms, 300 ms <= 470 ms (xtalk 0,3:
+//    433 ms), pika- ja tuplablip <= 522 ms (xtalk 0,5: 708 ms); alipaineen
+//    askeleessa <= 4,05 jaksoa (askel 2 + vika 1); letku irrotetaan
+//    joutokäynnillä: muiden väli 145 ms (ei menetettyä sykliä).
 //  - Jokaisen kanavan rpm ja keskiarvo 1,5 s muutoksen jälkeen: rpm <= 0,39 %,
 //    keskiarvo <= 0,052 kPa; RpmEstimate 1,2 s jälkeen <= 0,7 %. (600 rpm:llä
 //    8 sykliä = 1,6 s: kaasun katkaisun 2500 -> 600 jälki näkyy 1,5 s:n
-//    kohdalla vielä 0,42 kPa:na.)
+//    kohdalla vielä 0,42 kPa:na.) Lyhyt vika ei vääristä vikaantuneen kanavan
+//    keskiarvoa (ketju katkeaa).
 //  - Yksittäisen syklin jakso vs toteutunut < 3 %, paitsi kaasun katkaisu 3000
 //    -> 850 / 300 ms <= 9,6 % ja 4500 -> 1500 / 150 ms <= 9,1 % (suodatettu 4
 //    kPa:n pulssi rampin päällä siirtää keskikohtaa) sekä hetkellisen rpm-askeleen
 //    ylittävä sykli <= 16,3 % ja sen naapuri <= 10,1 % - merkit silti oikeissa
 //    imuissa.
-//  - Lukitus ilmanpaineesta: 600 rpm 651 ms, 850 rpm 465 ms, 1500 rpm 270 ms,
-//    3000 rpm 157 ms (<= 3,5 sykliä + 40 ms; 3000 rpm 3,9 sykliä). Liitos
-//    käyvään 6000 rpm:ssä 109 ms (asettuminen 37,5 ms on jo ~2 sykliä).
-//    Heikon sylinterin kanssa terveet lukittuvat <= 658 ms (600 rpm).
+//  - Lukitus ilmanpaineesta: 600 rpm 653 ms, 850 rpm 467 ms, 950 rpm 418 ms,
+//    1500 rpm 270 ms, 3000 rpm 157 ms (<= 3,5 sykliä + 40 ms; 3000 rpm 3,9
+//    sykliä); 1,1-1,5 s:n pysähdyksen jälkeen 664 / 475 / 428 / 287 ms. Liitos
+//    käyvään 6000 rpm:ssä 110 ms (asettuminen 37,5 ms on jo ~2 sykliä). Heikon
+//    sylinterin kanssa terveet lukittuvat <= 664 ms (600 rpm). Letkut 2 ja 3
+//    vaihdetaan pysähdyksen aikana: lukitus <= 653 ms (600 rpm), käynnin
+//    aikana has_pulse ei putoa (väli <= 3,7 jaksoa).
 //  - Pienin havaittava imupulssi: 850-1500 rpm 1-1,5 kPa, 3000 rpm 2, 4500 rpm
 //    2,5, 6000 rpm 4,5 kPa; xtalk 0,3:lla 3 / 3,5 / 6,5 kPa (6000 rpm 4 kPa
 //    xtalk 0,3: 93 % sykleistä). Rpm-virhe rajallakin <= 1 %.
 //  - Kohina: hyst_min_kpa 0,3 kestää 0,5 kPa RMS (+ 3 kPa 112 Hz) ilman väärää
-//    sykliä; 0,6 kPa: 6 väärää 4 minuutissa (S5a: nosta hyst_min ~0,5:een).
+//    sykliä; 0,6 kPa: 6 väärää 8 minuutissa (S5a: nosta hyst_min ~0,5:een).
 //  - Hajonta (rivi 2): jitter 5 % -> cv 0,046, 15 % -> 0,140 (totuus 0,137).
 //  - Viive: sykli kirjataan, kun sen päättänyt pulssi on noussut takaisin
 //    merkkitasolle, ~15-20 ms imun keskikohdan jälkeen; uusi kierrosluku
@@ -126,28 +141,42 @@
 //
 // Suunnittelurajat:
 //  - xtalk 0,5 (omistajuuden marginaali 1 - xtalk >= 0,5 > kOwnMargin)
-//    kolmella kanavalla ja yhden letkun ollessa irti; varatila (kaksi irti)
-//    samoin, kun kierrosluku muuttuu liukuen (blipit, kaasun katkaisut).
-//    Hetkellinen rpm-askel (vain simulaattorissa, /api/sim) letkun ollessa
-//    irti voi kirjata yhden väärän syklin (yksi irti: 4500 -> 1500 xtalk 0,3
-//    4/24 ajoa, 3000 -> 850 xtalk 0,5 1/24; kaksi irti 1-4/24): ensimmäinen
-//    uuden käynnin vuoto on vanhan oman pulssin kokoinen (4,8 vs 5,1 kPa,
-//    leveys 9,5 vs 9,4 ms) ja osuu vanhaan jaksoon (+7 %); yhden irti ollessa
-//    päällekkäiset imut tekevät kuolleen sylinterin vuodosta toisella kanavalla
-//    1,6 x suuremman kuin toisella. Tila on joka tapauksessa FaultHose (rivi 6).
-//    Letku irti 50-150 ms blipin aikana: takaisin kytketty kanava itse voi
-//    kirjata yhden väärän syklin (10/1296 ajoa), koska sen ensimmäiseen
-//    pulssiin sisältyy 55 kPa:n lasku; muilla kanavilla 0.
+//    kolmella kanavalla ja yhden letkun ollessa irti. Yksi letku irti
+//    (FaultHose, rivi 6): yksi todistaja ei seuraa äkillistä hidastumista,
+//    joten rpm-pudotuksen väli on pidempi (ramppi 3000 -> 850 / 150 ms <= 422
+//    ms, askel 2500 -> 600 <= 526 ms, 6000 -> 850 <= 895 ms); xtalk 0,5:n
+//    tuplablipissä 3000 rpm:ään terveen kanavan has_pulse voi pudota (12/576
+//    ajoa, väli <= 1,4 s; sama 5a45dc7:ssä). Hetkellinen rpm-askel (vain
+//    simulaattorissa, /api/sim) letkun ollessa irti voi kirjata yhden väärän
+//    syklin (askeleet 3000 -> 850, 4500 -> 1500, 6000 -> 850, xtalk 0,3/0,5:
+//    64/2304 ajoa, sama kuin 5a45dc7; lyhyt vika askeleen kohdalla 224/24192):
+//    ensimmäinen uuden käynnin vuoto on vanhan oman pulssin kokoinen (4,8 vs
+//    5,1 kPa, leveys 9,5 vs 9,4 ms) ja osuu vanhaan jaksoon (+7 %).
+//  - Kaksi letkua irti (varatila, yksi kanava): has_pulse putoaa rpm:n
+//    muuttuessa (blipit, katkaisut ja askeleet; väli <= 1,7 s) ja muutamassa
+//    alipaineen askeleessa (20/15552 ajoa); väärä sykli hetkellisessä
+//    rpm-askeleessa (xtalk 0,3/0,5: 177/2304 ajoa) ja 150 ms:n rampissa
+//    3000 -> 850 xtalk 0,5:llä (8/288). Tasaisessa käynnissä, alipaineen
+//    muutoksissa ja xtalk 0/0,3:n blipeissä ja katkaisuissa 0. Tila on
+//    FaultHose (rivi 6).
+//  - Irrotettu letku tunnistetaan, kun muut kanavat ovat yli kVentKpa (12
+//    kPa) ilmanpaineen alapuolella: lähes täydellä kaasulla (alipaine < 12
+//    kPa) takaisinkytkennän askel on vastaavasti pieni. Kanava, joka on
+//    synkronointivirheen vuoksi yli 12 kPa muita korkeammalla JA lähellä
+//    ilmanpainetta, tulkittaisiin irrotetuksi.
 //  - Heikko sylinteri (0,3-0,5 x muiden syvyydestä): oikein xtalk 0,5:een
 //    asti käynnistyksissä ja 0,3:een asti käytössä; sen oma kanava saa jäädä
-//    ilman has_pulsea (4500-6000 rpm:llä se putoaa usein), mutta se ei estä
-//    muita - RpmEstimate on mediaani.
+//    ilman has_pulsea (pikablipeissä ja 4500-6000 rpm:llä se putoaa usein),
+//    mutta se ei estä muita - RpmEstimate on mediaani.
 //  - Letkujen viive-ero (R1: samat letkut +-2 cm, < 0,1 ms): 2 ms toimii
-//    kaikkialla; 3 ms:llä 4500-6000 rpm:n todistajan paikka on 0,11-0,15 sivussa,
-//    jolloin has_pulse putoaa (väärää sykliä ei kirjaudu).
+//    kaikkialla; 3 ms:llä 4500-6000 rpm:n todistajan paikka on 0,11-0,15
+//    sivussa, jolloin has_pulse putoaa rpm-pudotuksissa ja 1/48 ajossa
+//    kirjautuu yksi vuotosykli (6000 -> 1500, xtalk 0,3).
 //  - Hetkellinen sammutus (simulaattori) katkaisee kesken olevan imun:
-//    600 rpm:llä 2/96 ajossa 5 % lyhyt sykli, jonka toisen merkin imua ei ole
-//    olemassa (sama 237da3a:ssa).
+//    600 rpm:llä 2/96 ajossa (heikon sylinterin kanssa <= 5/96) 5 % lyhyt
+//    sykli, jonka toisen merkin imua ei ole olemassa (sama 237da3a:ssa);
+//    viisi pysähdystä ajossa: 600 rpm 11-17/96 ajoa, kaikki 60 ms:n sisällä
+//    pysähdyksestä.
 //
 // Testikoukku: jos SBX_DSP_CYCLE_HOOK(kanava, jakso, loppu_int, loppu_frac) on
 // määritelty ennen tätä otsaketta, recordCycle kutsuu sitä jokaisesta
@@ -902,13 +931,15 @@ class Dsp {
   }
 
   // Kanava j on kanavan i elävä todistaja, kun se on asettunut (anturi
-  // alueella, ks. front: ei fault_hold_s:n odotusta) ja pysyy i:n tahdissa:
-  // sillä on oma pulssi i:n toiseksi viimeisimmän oman pulssin jälkeen (ja
-  // pisimmän jakson sisällä). Irrotettu letku lakkaa todistamasta kahden
-  // syklin jälkeen nykyisellä kierrosluvulla - ei pisimmän jakson
-  // (0,44 s) jälkeen, eikä oman vanhan tahtinsa mukaan, joka kaasunlisäyksen
-  // ohitettujen pulssien jälkeen on pitkä. Lukitusta (has_pulse) ei vaadita:
-  // omat pulssit tunnistetaan fysikaalisesti (isOwn) myös haun aikana.
+  // alueella ja letku kiinni, ks. front ja push: ei fault_hold_s:n odotusta)
+  // ja pysyy i:n tahdissa: sillä on oma pulssi i:n toiseksi viimeisimmän oman
+  // pulssin jälkeen (ja pisimmän jakson sisällä). Vaiennut kanava (heikko
+  // sylinteri, ohitetut pulssit) lakkaa todistamasta kahden syklin jälkeen
+  // nykyisellä kierrosluvulla - ei pisimmän jakson (0,44 s) jälkeen, eikä
+  // oman vanhan tahtinsa mukaan, joka kaasunlisäyksen ohitettujen pulssien
+  // jälkeen on pitkä (heikon sylinterin pikablipeissä muiden väli olisi ~1
+  // s). Lukitusta (has_pulse) ei vaadita: omat pulssit tunnistetaan
+  // fysikaalisesti (isOwn) myös haun aikana.
   bool live(int i, int j) const {
     const Chan& c = ch_[i];
     const Chan& o = ch_[j];
@@ -939,18 +970,16 @@ class Dsp {
   // paljon, joten sekään ei ole oma pulssi. Pudotus (fallOf) mitataan samasta
   // ikkunasta kaikilta kanavilta (sama suodin = sama viive). Vertailu tehdään
   // aina muihin kanaviin - myös lukitsemattomiin: fysikaalinen tieto on
-  // olemassa käynnistyksestä lähtien. Tasainen kanava (letku irti) antaa ~0,
-  // joten se ei estä mitään; jos kaikki muut ovat tasaisia, jokainen pulssi
-  // on ehdokas (varatila, ks. accept). Poikkeus: kanava, joka ei ole elävä
-  // (vaiennut, asettuu anturivian jälkeen tai ei vielä pulssi), ei ole
-  // vertailukanava, kun kolmas kanava on elävä - vertailu jää silloin
-  // kanavaan, joka todistetusti tuottaa omia pulsseja. Takaisin kytketyn
-  // letkun 55 kPa:n lasku esti muuten muiden omat pulssit (alipaineen askeleen
-  // kanssa has_pulse putosi: 400 ms irti, 600 rpm, 15/432 ajoa; 2 s irti:
-  // muiden väli 609 vs 206 ms), ja vian alku ja palautumisen ylitys
-  // venyttivät muiden välejä. Kun kumpikaan muu ei ole elävä (käynnistys,
-  // moottori sammui), vertailu tehdään kaikkiin: muuten ensimmäisenä
-  // pulssiva kanava omistaisi vuodot.
+  // olemassa käynnistyksestä lähtien. Tasainen kanava antaa ~0, joten se ei
+  // estä mitään; jos kaikki muut ovat tasaisia, jokainen pulssi on ehdokas
+  // (varatila, ks. accept). Poikkeus: kanava, joka ei ole elävä (vaiennut,
+  // asettuu vian tai letkun takaisinkytkennän jälkeen, ei vielä pulssi), ei
+  // ole vertailukanava, kun kolmas kanava on elävä - vertailu jää silloin
+  // kanavaan, joka todistetusti tuottaa omia pulsseja. Vian alku ja
+  // palautumisen ylitys tai takaisin kytketyn letkun tasoaskel estivät muuten
+  // muiden omia pulsseja (alipaineen askeleen kanssa has_pulse putosi).
+  // Kun kumpikaan muu ei ole elävä (käynnistys, moottori sammui), vertailu
+  // tehdään kaikkiin: muuten ensimmäisenä pulssiva kanava omistaisi vuodot.
   bool isOwn(int i, float m_age, float width) const {
     const float fi = fallOf(ch_[i], m_age, width);
     float fo = 0.0f;
