@@ -29,18 +29,22 @@
 // keskikohtaan) on >= kOwnMargin (25 %) suurempi kuin minkään muun kanavan
 // samanaikainen pudotus: vuodolla ero on negatiivinen, yhteisellä alipaineen
 // askeleella ~0, omalla pulssilla 1 - xtalk >= 0,5. Suhde ei riipu
-// sylinterien pulssien keskinäisestä koosta. Vertailu tehdään AINA kaikkiin
-// asettuneisiin kanaviin lukituksesta riippumatta - fysikaalinen tieto on
-// olemassa käynnistyksestä lähtien, joten kanava ei voi lukittua vuotojen
-// rytmiin. Tasainen kanava (letku irti) putoaa ~0 eikä estä mitään; jos
-// kaikki muut ovat tasaisia, jokainen pulssi on ehdokas (varatila). Vuoto ei
-// koskaan ole syklin raja eikä päivitä viitteitä.
+// sylinterien pulssien keskinäisestä koosta. Vertailu tehdään AINA muihin
+// kanaviin lukituksesta riippumatta - fysikaalinen tieto on olemassa
+// käynnistyksestä lähtien, joten kanava ei voi lukittua vuotojen rytmiin.
+// Tasainen kanava (letku irti) putoaa ~0 eikä estä mitään; jos kaikki muut
+// ovat tasaisia, jokainen pulssi on ehdokas (varatila). Ainoa poikkeus:
+// kanava, joka ei ole elävä (ks. todistajat alla), jätetään vertailusta, kun
+// kolmas kanava on elävä. Vuoto ei koskaan ole syklin raja eikä päivitä
+// viitteitä.
 //
 // Vikaantunut kanava: anturin mV alueen ulkopuolella (rivi 7) -> kanava on
 // heti kuollut (ei vertailukanava, ei omia pulsseja, ei todistaja) ja asettuu
 // palattuaan kRing näytettä kuten käynnistyksessä; sensor_fault-lippu nousee
-// edelleen vasta fault_hold_s:n jälkeen. Irrotettu letku on tasainen, ja se
-// lakkaa todistamasta, kun muut ovat pulssineet kahdesti ilman sitä.
+// edelleen vasta fault_hold_s:n jälkeen. Irrotettu letku on tasainen; se
+// lakkaa todistamasta ja on pois vertailusta (takaisin kytkennän 55 kPa:n
+// lasku ei estä muiden pulsseja), kun muut ovat pulssineet kahdesti ilman
+// sitä. has_pulsen aikakatkaisu tyhjentää kanavan omien pulssien historian.
 //
 // Sykli = kaksi peräkkäistä omaa pulssia. Kirjataan, kun
 //  - jakso on rpm-alueella ja pulssi läpäisee amplitudiehdon (ampOk);
@@ -92,10 +96,11 @@
 //    4500 -> 1500 / 150 ms 288 ms; blip nousu >= 300 ms <= 296 ms, 150 ms <=
 //    363 ms (xtalk 0,5: 412 ms), pika- ja tuplablip <= 391 ms (xtalk 0,5: 568
 //    ms); alipaineen askel <= 3,04 jaksoa (5 % jitter 3,21), ramppi 200 ms 1,05,
-//    20-100 ms <= 3,04 jaksoa. Anturi alas 400 ms blipin alussa: muiden väli
-//    <= 445 ms (nousu 150) / 437 ms (300); letku irrotetaan blipin aikana <=
-//    494 / 432 ms (xtalk 0,5: 567 ms); letku irrotetaan joutokäynnillä: muut
-//    jatkavat ilman taukoa (5673ef7: 572 ms).
+//    20-100 ms <= 3,04 jaksoa. Anturi alas 50-400 ms blipin aikana: muiden
+//    väli <= 445 ms (nousu 150) / 437 ms (300); letku irrotetaan blipin aikana
+//    <= 494 / 432 ms (xtalk 0,5: 567 ms); anturi alas tai letku irti 50-400
+//    ms alipaineen askeleessa: <= 4,02 jaksoa (askel 2 + vika 1); letku
+//    irrotetaan joutokäynnillä: muut jatkavat ilman taukoa (5673ef7: 572 ms).
 //  - Jokaisen kanavan rpm ja keskiarvo 1,5 s muutoksen jälkeen: rpm <= 0,39 %,
 //    keskiarvo <= 0,052 kPa; RpmEstimate 1,2 s jälkeen <= 0,7 %. (600 rpm:llä
 //    8 sykliä = 1,6 s: kaasun katkaisun 2500 -> 600 jälki näkyy 1,5 s:n
@@ -130,6 +135,9 @@
 //    leveys 9,5 vs 9,4 ms) ja osuu vanhaan jaksoon (+7 %); yhden irti ollessa
 //    päällekkäiset imut tekevät kuolleen sylinterin vuodosta toisella kanavalla
 //    1,6 x suuremman kuin toisella. Tila on joka tapauksessa FaultHose (rivi 6).
+//    Letku irti 50-150 ms blipin aikana: takaisin kytketty kanava itse voi
+//    kirjata yhden väärän syklin (10/1296 ajoa), koska sen ensimmäiseen
+//    pulssiin sisältyy 55 kPa:n lasku; muilla kanavilla 0.
 //  - Heikko sylinteri (0,3-0,5 x muiden syvyydestä): oikein xtalk 0,5:een
 //    asti käynnistyksissä ja 0,3:een asti käytössä; sen oma kanava saa jäädä
 //    ilman has_pulsea (4500-6000 rpm:llä se putoaa usein), mutta se ei estä
@@ -395,20 +403,20 @@ class Dsp {
   // mutta yhden kanavan tunnistusvirhe jää mediaanissa vähemmistöön.
   RpmEstimate rpm() const {
     RpmEstimate est;
-    float r[kChannels];
-    float s[kChannels];
-    int nr = 0;
-    int ns = 0;
+    float v[kChannels];
+    int n = 0;
     for (int i = 0; i < kChannels; ++i) {
-      const Chan& c = ch_[i];
-      if (!c.pub.has_pulse) continue;
-      r[nr++] = c.pub.rpm;
-      if (c.per_count >= min_rpm_periods_) s[ns++] = c.sd_rpm;
+      if (ch_[i].pub.has_pulse) v[n++] = ch_[i].pub.rpm;
     }
-    if (nr == 0) return est;
-    est.rpm = median(r, nr);
-    if (ns == 0 || !(est.rpm > 0.0f)) return est;
-    est.sd_rpm = median(s, ns);
+    if (n == 0) return est;
+    est.rpm = median(v, n);
+    // Sama taulukko hajonnoille (pino <= 112 tavua -O0:llakin).
+    n = 0;
+    for (int i = 0; i < kChannels; ++i) {
+      if (ch_[i].pub.has_pulse && ch_[i].per_count >= min_rpm_periods_) v[n++] = ch_[i].sd_rpm;
+    }
+    if (n == 0 || !(est.rpm > 0.0f)) return est;
+    est.sd_rpm = median(v, n);
     est.cv = est.sd_rpm / est.rpm;
     est.valid = true;
     return est;
@@ -900,15 +908,24 @@ class Dsp {
   // pulssien keskinäisestä koosta. Alipaineen askel pudottaa kaikkia yhtä
   // paljon, joten sekään ei ole oma pulssi. Pudotus (fallOf) mitataan samasta
   // ikkunasta kaikilta kanavilta (sama suodin = sama viive). Vertailu tehdään
-  // aina kaikkiin asettuneisiin kanaviin - myös lukitsemattomiin: fysikaalinen
-  // tieto on olemassa käynnistyksestä lähtien. Tasainen kanava (letku irti)
-  // antaa ~0, joten se ei estä mitään; jos kaikki muut ovat tasaisia, jokainen
-  // pulssi on ehdokas (varatila, ks. accept).
+  // aina muihin kanaviin - myös lukitsemattomiin: fysikaalinen tieto on
+  // olemassa käynnistyksestä lähtien. Tasainen kanava (letku irti) antaa ~0,
+  // joten se ei estä mitään; jos kaikki muut ovat tasaisia, jokainen pulssi
+  // on ehdokas (varatila, ks. accept). Poikkeus: kanava, joka ei ole elävä
+  // (vaiennut, asettuu anturivian jälkeen tai ei vielä pulssi), ei ole
+  // vertailukanava, kun kolmas kanava on elävä - vertailu jää silloin
+  // kanavaan, joka todistetusti tuottaa omia pulsseja. Takaisin kytketyn
+  // letkun 55 kPa:n lasku esti muuten muiden omat pulssit (alipaineen askeleen
+  // kanssa has_pulse putosi: 400 ms irti, 600 rpm, 15/432 ajoa; 2 s irti:
+  // muiden väli 609 vs 206 ms), ja vian alku ja palautumisen ylitys
+  // venyttivät muiden välejä. Kun kumpikaan muu ei ole elävä (käynnistys,
+  // moottori sammui), vertailu tehdään kaikkiin: muuten ensimmäisenä
+  // pulssiva kanava omistaisi vuodot.
   bool isOwn(int i, float m_age, float width) const {
     const float fi = fallOf(ch_[i], m_age, width);
     float fo = 0.0f;
     for (int j = 0; j < kChannels; ++j) {
-      if (j == i || ch_[j].settle > 0) continue;
+      if (j == i || (!live(i, j) && live(i, kChannels - i - j))) continue;
       const float f = fallOf(ch_[j], m_age, width);
       if (f > fo) fo = f;
     }
@@ -1011,14 +1028,16 @@ class Dsp {
     return np >= nl || !(c.ref_period > 0.0f && (period > since ? period : since) > kBothRatio * c.ref_period);
   }
 
-  // Oma pulssi: sykli edellisestä omasta keskikohdasta tähän, kun
+  // Oma pulssi: sykli edellisestä omasta keskikohdasta tähän, kun accept
+  // hyväksyy sen:
   //  - jakso on rpm-alueella ja pulssi läpäisee amplitudiehdon (ampOk);
   //  - haussa (ei has_pulse) kolme peräkkäistä omaa pulssia ovat samankokoisia;
-  //  - muut elävät kanavat vahvistavat (confirm): vähintään yksi, ja kaikki
-  //    elävät, jos jakso on yli kBothRatio x viite (rpm:n pudotus tai ohitettu
-  //    pulssi: yksittäisen merkin paikka ei silloin enää riitä);
-  //  - varatila (ei eläviä muita kanavia, esim. kaksi letkua irti):
-  //    rajapulssit samankokoiset ja jakso viitteen +- kFallbackWindow.
+  //  - muut elävät kanavat todistavat (confirm): vähintään yksi; yhden
+  //    todistajan syklissä rajapulssit samankokoiset; kaikki elävät, jos jakso
+  //    tai tauko edellisestä hyväksytystä on yli kBothRatio x viite (rpm:n
+  //    pudotus tai ohitettu pulssi: yksittäisen merkin paikka ei silloin riitä);
+  //  - varatila (ei eläviä muita kanavia, esim. kaksi letkua irti): kolme
+  //    samankokoista ja jakso edellisen välin ja viitteen +- kFallbackWindow.
   void ownPulse(int i, uint32_t mi, float mf) {
     Chan& c = ch_[i];
     const bool cut = n_ - mi < static_cast<uint32_t>(kRing - 1);
@@ -1027,17 +1046,7 @@ class Dsp {
     if (c.own_n > 0) period = static_cast<float>(mi - c.own_int[0]) + (mf - c.own_frac[0]);
     const float depth = c.pulse_depth;
     if (c.chain && cut && c.own_n > 0 && accept(i, period, depth, age(mi, mf), age(c.own_int[0], c.own_frac[0]))) {
-      // Huippu-huippu (docs §4.2): pulssin nousu edellisen oman pulssin
-      // pohjasta, lukittuna min(nousu, lasku) - painehyppy kasvattaa vain toista.
-      const float rise = c.fire_top - c.own_lo;
-      Cyc cy;
-      cy.integral = c.acc - tail;
-      cy.period = period;
-      cy.cmin = c.run_lo;
-      cy.p2p = (c.pub.has_pulse && depth < rise) ? depth : rise;
-      cy.end_int = mi;
-      cy.end_frac = mf;
-      recordCycle(c, cy);
+      closeCycle(c, mi, mf, c.acc - tail, period);
     }
     c.acc = tail;
     c.chain = cut;
@@ -1052,6 +1061,22 @@ class Dsp {
     c.own_d2 = c.own_d1;
     c.own_d1 = depth;
     c.own_lo = c.run_lo;
+  }
+
+  // Hyväksytty sykli päättyy omaan keskikohtaan m = mi + mf. Oma funktionsa,
+  // jotta ownPulsen pino pysyy -O0:llakin <= 112 tavussa.
+  void closeCycle(Chan& c, uint32_t mi, float mf, float integral, float period) {
+    Cyc cy;
+    cy.integral = integral;
+    cy.period = period;
+    cy.cmin = c.run_lo;
+    // Huippu-huippu (docs §4.2): pulssin nousu edellisen oman pulssin
+    // pohjasta, lukittuna min(nousu, lasku) - painehyppy kasvattaa vain toista.
+    cy.p2p = c.fire_top - c.own_lo;
+    if (c.pub.has_pulse && c.pulse_depth < cy.p2p) cy.p2p = c.pulse_depth;
+    cy.end_int = mi;
+    cy.end_frac = mf;
+    recordCycle(c, cy);
   }
 
   // Pulssin amplitudiehto (kohinasuoja). Raja 3 x hyst_min_kpa koskee

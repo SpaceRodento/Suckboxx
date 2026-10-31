@@ -1075,6 +1075,7 @@ struct SimOpts {
   long check_from = -1;     // kanavien rpm/mean-tarkistus tästä hetkestä (-1 = ei)
   int hose_mask = 0;        // letku irti näillä kanavilla (bitti c) hetkestä hose_t
   long hose_t = 0;
+  long hose_t2 = -1;        // letkut takaisin tällä hetkellä (-1 = ei)
   long off_t1 = -1, off_t2 = -1;  // moottori seis [off_t1, off_t2): 0 = kylmäkäynnistys
   long watch_from = 2000;   // tiukka tarkistus ja välit tästä hetkestä
   int sens_ch = -1;         // anturi alas (SensorLow) kanavalla sens_ch [sens_t1, sens_t2)
@@ -1126,9 +1127,9 @@ SimRun runSim(sbx::SimParams p, const SimOpts& o, F sched) {
   int first_done = 0;
   for (long t = 0; t < o.total; ++t) {
     bool reconf = sched(t, p);
-    if (o.hose_mask != 0 && t == o.hose_t) {
+    if (o.hose_mask != 0 && (t == o.hose_t || t == o.hose_t2)) {
       for (int c = 0; c < kChannels; ++c) {
-        if (o.hose_mask & (1 << c)) p.fault[c] = sbx::SimFault::HoseOff;
+        if (o.hose_mask & (1 << c)) p.fault[c] = t == o.hose_t ? sbx::SimFault::HoseOff : sbx::SimFault::None;
       }
       reconf = true;
     }
@@ -1817,7 +1818,11 @@ void test_engine_start_and_restart_never_lock_on_leaks() {
                         // Heikko kanava ei saa hidastaa muita (850 rpm: 549 ms, jos sen
                         // pulssia vaadittaisiin aina), eikä se saa omistaa vuotoa, kun
                         // muut eivät vielä ole eläviä (600 rpm, siemen 3, 2510 ms).
-                        {850.0f, 0.2f, 0.5f, true, 1220, 3, 2550}, {600.0f, 0.3f, 0.3f, true, 1100, 3, 2510}};
+                        {850.0f, 0.2f, 0.5f, true, 1220, 3, 2550}, {600.0f, 0.3f, 0.3f, true, 1100, 3, 2510},
+                        // Lyhyt pysähdys (600 ms < pulse_timeout_s): has_pulse ei putoa
+                        // eikä historia tyhjene; kaikki vaikenivat, joten kaikki vertaavat
+                        // yhä toisiinsa, eikä käynnistysaskel ole kenenkään oma pulssi.
+                        {600.0f, 0.0f, 1.0f, true, 600, 5, 2621}};
   for (const Case& k : cases) {
     SimRun worst;
     for (int run = 0; run < 6; ++run) {
@@ -1943,6 +1948,35 @@ void test_dead_channel_during_blip() {
   }
 }
 
+void test_hose_pulled_at_vacuum_step() {
+  // Letku irti 400 ms alipaineen askeleen (13 kPa ylös, 600 rpm) kohdalla:
+  // askel maksaa pulssin, ja takaisin kytketyn letkun 55 kPa:n lasku osui
+  // seuraavan oman pulssin ikkunaan ja esti sen. Kaksi peräkkäistä menetettyä
+  // pulssia pudotti terveen kanavan has_pulsen (1,4 s:n väli). Vaiennut
+  // kanava ei ole vertailukanava, joten väli on askeleen oma (<= 4 jaksoa).
+  SimRun worst;
+  for (int run = 0; run < 6; ++run) {
+    sbx::SimParams p;
+    p.rpm = 600.0f;
+    p.seed = static_cast<uint32_t>(run < 2 ? 2 + 2 * run : 1 + run % 3);  // 2 ja 4: toistetapaukset
+    SimOpts o;
+    o.t0 = 2500 + static_cast<long>(periodMs(600.0f) * 3.3f / 6.0f) + (run < 2 ? 0 : 13 * run);
+    o.t_end = o.t0;
+    o.total = o.t0 + 2500;
+    o.step_t = static_cast<double>(o.t0);
+    o.hose_mask = 1 << (static_cast<int>(p.seed) % 3);
+    o.hose_t = o.t0 + 10;
+    o.hose_t2 = o.hose_t + 400;
+    worstOf(worst, runSim(p, o, Ramp{600.0f, 600.0f, -55.0f, -42.0f, 20.0f, 20.0f, o.t0, 0}));
+  }
+  msg("letku irti 400 ms askeleessa (600 rpm): väärät %.0f, muiden pisin väli %.0f ms", static_cast<double>(worst.wrong),
+      static_cast<double>(worst.max_gap));
+  TEST_ASSERT_EQUAL_INT(0, worst.wrong);
+  TEST_ASSERT_TRUE(worst.finite);
+  TEST_ASSERT_FALSE_MESSAGE(worst.dropped, "has_pulse putosi elävältä kanavalta");
+  TEST_ASSERT_LESS_OR_EQUAL(static_cast<int>(4.1f * periodMs(600.0f)), static_cast<int>(worst.max_gap));
+}
+
 void test_weak_cylinder_quick_blips() {
   // Heikko sylinteri (0,5 x, epätahdissa oleva kaasutin) ja kaksi peräkkäistä
   // pikablippiä (150 ms ylös, 300 ms alas): heikon kanavan pulssit jäävät usein
@@ -1950,19 +1984,22 @@ void test_weak_cylinder_quick_blips() {
   // Kun kaikki ohittavat pulsseja, vanha viite saa 2T-välin näyttämään
   // tavalliselta; yksi todistaja ei riitä, kun edellisestä hyväksytystä on
   // pitkä tauko. Heikon kanavan has_pulse saa pudota, muiden ei.
+  // Toistetapaukset: (siemen, alku ms, heikko kanava); 5673ef7 kirjasi 2T:n
+  // (2, 2570, 0) ja (3, 2517, 1), ilman tauko-ehtoa (1, 2622, 1).
+  const long rep[3][3] = {{2, 2570, 0}, {3, 2517, 1}, {1, 2622, 1}};
   const float pk[] = {3000.0f, 2500.0f};
   for (float rpm1 : pk) {
     SimRun worst;
-    for (int run = 0; run < 6; ++run) {
+    for (int run = 0; run < 9; ++run) {
+      const bool r = run < 3;
       sbx::SimParams p;
       p.xtalk = 0.3f;
-      // Ensimmäinen: toistetapaus (siemen 1, alku 2622 ms).
-      p.seed = static_cast<uint32_t>(1 + run % 3);
+      p.seed = static_cast<uint32_t>(r ? rep[run][0] : 1 + run % 4);
       SimOpts o;
-      o.t0 = run == 0 ? 2622 : 2500 + static_cast<long>(periodMs(850.0f) * static_cast<float>(run) / 6.0f);
+      o.t0 = r ? rep[run][1] : 2500 + static_cast<long>(periodMs(850.0f) * static_cast<float>(run - 3) / 6.0f);
       o.t_end = o.t0 + 2 * 450;
       o.total = o.t_end + 2000;
-      o.weak_ch = 1;
+      o.weak_ch = r ? static_cast<int>(rep[run][2]) : run % 3;
       o.weak_scale = 0.5f;
       worstOf(worst, runSim(p, o, Blips{rpm1, o.t0, 150, 0, 300, 2}));
     }
@@ -2645,6 +2682,7 @@ int main() {
   RUN_TEST(test_ownership_fallback_hoses_off);
   RUN_TEST(test_engine_start_and_restart_never_lock_on_leaks);
   RUN_TEST(test_dead_channel_during_blip);
+  RUN_TEST(test_hose_pulled_at_vacuum_step);
   RUN_TEST(test_weak_cylinder_quick_blips);
   RUN_TEST(test_display_right_after_rpm_jump);
   RUN_TEST(test_pulse_timeout_when_signal_goes_flat);
