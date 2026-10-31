@@ -1,10 +1,10 @@
 # Yöajon kehote (Suckboxx)
 
 Jokaisen Suckboxxin yöajon ainoa kehote. Ajastetun rutiinin konsoliteksti on lyhyt: se kertoo
-slotin ja käskee lukemaan tämän tiedoston **`origin/master`ista**. Kopio muualla ei ole
-voimassa, joten yöajo ei voi muuttaa omaa kehotettaan. Malli on Zignalmeisterin
-`docs/yoajo/PROMPTI.md`:stä (31.10.2026), kevennettynä: yöllä vain toteutetaan, ja
-päiväistunto katselmoi ja yhdistää.
+slotin ja käskee lukemaan tämän tiedoston **`origin/dev/integraatio`sta**. Kopio muualla ei ole
+voimassa, eikä yöajo voi muuttaa omaa kehotettaan, koska `dev/integraatio`on yhdistää vain
+päiväistunto (Y3, Y11). Malli on Zignalmeisterin `docs/yoajo/PROMPTI.md`:stä (31.10.2026),
+kevennettynä: yöllä vain toteutetaan, ja päiväistunto katselmoi ja yhdistää.
 
 ---
 
