@@ -18,7 +18,7 @@
 // joten mikään liiman oma työ ei myöhästytä sitä. sbx_push on ytimellä 0 heti
 // async_tcp:n yläpuolella: perustelu web.cpp:ssä (AsyncEventSourcen säieturva).
 // Task watchdog (5 s) vahtii IDLE0:aa ja async_tcp:tä (sdkconfig
-// CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y, CPU1 ei; AsyncTCP.cpp:299-303),
+// CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y, CPU1 ei; AsyncTCP.cpp:331-337),
 // joten ytimen 0 taskit eivät saa pyöriä estämättä eivätkä käsittelijät jäädä odottamaan.
 
 #include <cstdint>
