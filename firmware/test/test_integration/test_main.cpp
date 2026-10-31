@@ -613,7 +613,7 @@ void test_row7_sensor_fault_after_hold_time() {
   Bench b;
   settleSynced(b, withErr(0.0f, 0.0f, 0.0f));
   SimParams s = b.params();
-  s.fault[2] = SimFault::SensorLow;  // ~10 mV < fault_lo_mv 100
+  s.fault[2] = SimFault::SensorLow;  // ~10 mV < fault_lo_mv 150 (D15)
   b.set(s);
   const Watch w = b.watch(3.0f, SyncState::FaultSensor);
   report("rivi 7: anturi alas -> VIKA", w.settle);
@@ -628,7 +628,7 @@ void test_row7_sensor_fault_after_hold_time() {
   TEST_ASSERT_TRUE_MESSAGE(startsWith(r.advice, "Jännite "), r.advice);
   TEST_ASSERT_TRUE_MESSAGE(endsWith(r.advice, " mV – tarkista anturin johdot tai vaihda"), r.advice);
   TEST_ASSERT_NOT_NULL(std::strstr(snap(b), "\"state\":\"fault_sensor\",\"fault_ch\":2,"));
-  // Toinen anturi ylös (~3290 mV > fault_hi_mv 3150): kaksi vikaa -> yhteinen syöttö (R6).
+  // Toinen anturi ylös (~3290 mV > fault_hi_mv 2950): kaksi vikaa -> yhteinen syöttö (R6).
   s = b.params();
   s.fault[1] = SimFault::SensorHigh;
   b.set(s);
@@ -1270,8 +1270,9 @@ void test_H1_positive_offset_invisible_at_atmosphere() {
 
 // ---------------------------------------------------------------------------
 // WP-9 (jatko.md 7 ja 8): käytösmatriisin ja kalibroinnin jälkityöt.
-// Uudet kynnykset (hose_hyst_kpa, drift_tau_s, zero_settle_kpa) ovat
-// EHDOTUKSIA omistajalle; testit lukitsevat mitatun käytöksen niillä.
+// Uudet kynnykset (hose_hyst_kpa, drift_tau_s, zero_settle_kpa) on hyväksytty
+// alustavasti 31.10.2026 (D15) ja tarkistetaan ensimmäisestä
+// moottorinauhoituksesta; testit lukitsevat mitatun käytöksen niillä.
 // ---------------------------------------------------------------------------
 
 namespace {

@@ -38,8 +38,10 @@ struct RawFrame {
 struct SensorParams {
   float v_zero_mv = 2700.0f;
   float mv_per_kpa = 25.0f;
-  uint16_t fault_lo_mv = 100;    // käytösmatriisi rivi 7
-  uint16_t fault_hi_mv = 3150;   // rivi 7
+  // Rivi 7 (D15, 31.10.2026): rajat mitatun ADC-ikkunan (eFuse 142…3150 mV)
+  // sisällä ja anturin laillisen alueen (200…2700 mV, ±2 %FSS) ulkopuolella.
+  uint16_t fault_lo_mv = 150;    // käytösmatriisi rivi 7
+  uint16_t fault_hi_mv = 2950;   // rivi 7
   float fault_hold_s = 1.0f;     // rivi 7: yhtäjaksoisesti näin kauan
   uint16_t sat_mv = 2680;        // rivi 10: GN-anturi leikkaa 2700 mV:iin
   bool rail_comp = false;        // ratiometrinen korjaus rail_mv:llä (R6)
@@ -72,8 +74,8 @@ struct StatusParams {
   float drift_rpm = 50.0f;       // rivi 5: muutos yli tämän ...
   float drift_window_s = 2.0f;   // ... tämän ikkunan aikana
   bool auto_zero = true;         // rivi 1: automaattinen nollakalibrointi
-  // WP-9 (31.10.2026): EHDOTUKSIA omistajalle, eivät ole päätöslokissa.
-  // Perustelut ja mittaukset status.h:ssa ja calibration.h:ssa.
+  // WP-9: hyväksytty alustavasti 31.10.2026 (D15), tarkistetaan ensimmäisestä
+  // moottorinauhoituksesta. Perustelut ja mittaukset status.h:ssa ja calibration.h:ssa.
   float hose_hyst_kpa = 0.2f;    // rivi 6: letkuvika poistuu vasta, kun |taso| >= hose_off_kpa + tämä
   float drift_tau_s = 0.5f;      // rivi 5: rpm-arvion suodatus ennen ikkunavertailua, 0 = ei suodatusta
   float zero_settle_kpa = 0.1f;  // rivi 1 ja nollaus: tason vaihteluväli 1 s:n aikana alle tämän
