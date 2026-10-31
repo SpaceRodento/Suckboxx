@@ -116,20 +116,26 @@ class Dsp {
   // 1/xtalk-kertaisesti), alipaineaskeleella ~0 (kaikki putoavat yhtä paljon),
   // omalla pulssilla (1 - xtalk) >= 0,5 xtalk 0,5:een asti.
   static constexpr float kOwnMargin = 0.25f;
-  // "Samanaikainen" = pulssin keskikohta +- tämä x pulssin leveys (30 %:n
-  // tasolla). Kattaa letkujen viive-erot (joutokäynnillä ~4 ms), mutta jää
-  // selvästi alle T/6:n, jolloin naapurisylinterin oma pulssi ei osu ikkunaan
-  // (6000 rpm: +-1,8 ms, naapuri 6,7 ms päässä).
-  static constexpr float kSkewFrac = 0.25f;
+  // "Samanaikainen" pudotus = minimi pulssin keskikohdan +- tämän monen
+  // näytteen sisällä. Suodatetun pulssin pohja on leveä (joutokäynnillä 3 ms:n
+  // viive-ero letkuissa muuttaa sitä ~2 %), mutta 6000 rpm:llä naapurisylinterin
+  // pulssi on vain 6,7 ms päässä: leveämpi ikkuna (0,25 x pulssin leveys)
+  // kasvatti naapurin pudotusta ja hukkasi pieniä omia pulsseja (821 vs 892/1001).
+  static constexpr float kOwnHalfWindow = 1.0f;
   // Varatila, kun muut kanavat eivät kanna tietoa (kaksi letkua irti): oma
   // pulssi on >= tämä x kolmen viimeisimmän pulssin syvin. Vuotopulssi on
   // <= 0,37 x oma (xtalk 0,3 + suotimen ylitys); tämän tilan suunnitteluraja on
   // siksi xtalk 0,3.
   static constexpr float kDepthRatio = 0.45f;
-  // Varatilan jaksosuhde viitteeseen: kampiakselin nopeus ei muutu yhdessä
-  // syklissä 1,8-kertaiseksi eikä alle 0,55-kertaiseksi (~2,8 sigmaa cv:llä
-  // 0,15, rivi 2); puuttuva pulssi (2T) ja jaettu sykli jäävät rajojen ulkopuolelle.
-  static constexpr float kMaxPeriodRatio = 1.8f;
+  // Varatilassa jakso hyväksytään vain viitteen +- tämän sisällä. Yhdeltä
+  // kanavalta ei voi erottaa rpm-pudotuksen jälkeistä vuotopulssia (xtalk x
+  // kasvanut pulssi) vanhan nopeuden omasta: väli voi osua mihin tahansa
+  // 0,33...1,17 x vanhaa jaksoa. Kapea ikkuna hylkää useimmat (mitattu: 54 -> 18
+  // ajoa 192:sta); suurempi rpm-muutos maksaa lukituksen ja uuden haun.
+  static constexpr float kFallbackWindow = 0.1f;
+  // Näytön keskiarvon uudelleenaloituksen alaraja (ks. kRestartRatio):
+  // kampiakselin nopeus ei kasva syklissä 1,8-kertaiseksi (~2,8 sigmaa cv:llä
+  // 0,15, rivi 2).
   static constexpr float kMinPeriodRatio = 0.55f;
   // A:n vaimennus lukittuna: jos rajaa ei ole tullut 1,2 x viitejakson aikana,
   // A vaimenee aikavakiolla 0,3 x jakso. Kaasunlisäyksessä pulssi kutistuu (20
@@ -144,11 +150,11 @@ class Dsp {
   // Suodatetun ja suodattamattoman signaalin rengaspuskuri: merkin reunat,
   // omistajuuden ikkunat ja integraalin katkaisu ovat <= ~60 ms taaksepäin.
   static constexpr int kRing = 64;
-  // Lomituksen väljyys: peräkkäisten omien pulssien (mikä tahansa kanava) väli
-  // saa olla odotettu osuutensa syklistä (1/3 kun kaikki kanavat vahvistavat)
-  // + puoli sytytysväliä. Jitter ja kiihdytys muuttavat välejä alle 0,1 x
-  // jakso; yhden kierroksen kaikilta kanavilta ohittava väli on 2/3 x jakso.
-  static constexpr float kGapSlack = 1.0f / 6.0f;
+  // Lomituksen paikkatoleranssi (osuus jaksosta): toisen kanavan oma pulssi
+  // 1/3:n tai 2/3:n kohdalla +- tämä. Jitter 5 % (3 sigmaa), kiihdytys ja
+  // letkujen 1,5 ms:n viive-ero 6000 rpm:llä siirtävät sitä < 0,1; ohitetun
+  // pulssin välissä (2T) merkit ovat 1/6 sivussa.
+  static constexpr float kSlotTol = 0.1f;
   // Kanavan muistamat omat keskikohdat (lomitustarkistus muille kanaville):
   // kolme riittää toteamaan, osuuko väliin kaksi.
   static constexpr int kOwnHist = 3;
@@ -576,6 +582,14 @@ class Dsp {
       }
       amp *= c.decay;
     }
+    // Sylinterit jakavat kaasun, joten pulssit kutistuvat kaikilla kanavilla
+    // yhtä aikaa (kaasunlisäys). Kun muut tietoa kantavat kanavat ovat jo
+    // mitanneet uuden, pienemmän oman pulssin tämän kanavan viimeisimmän
+    // oman jälkeen, A laskee niistä suurimpaan. Tämän kanavan vuotopulssit
+    // tulevat juuri niistä sylintereistä (<= xtalk x niiden syvyys), joten ne
+    // jäävät yhä laukaisutason (A + h) / 2 alle.
+    const float peer = peerDepth(i);
+    if (peer > 0.0f && peer < amp) amp = peer;
     float h = dp_.hyst_frac * amp;
     if (h < dp_.hyst_min_kpa) h = dp_.hyst_min_kpa;
     const float d = 0.5f * (amp + h);
@@ -693,12 +707,30 @@ class Dsp {
     return hi > lo ? hi - lo : 0.0f;
   }
 
-  // Toinen kanava kantaa tietoa, kun se seuraa omia pulssejaan (has_pulse) eikä
-  // anturi ole vikaantunut. Ei amplitudivertailua: rpm-pudotuksen jälkeen
-  // muiden kanavien A on vielä vanhan, pienen pulssin kokoinen. Juuri irrotettu
-  // letku pysyy tietoa kantavana pulse_timeout_s:n, mutta sen kanavalla ei ole
-  // omia pulsseja, joten lomitusehto (ownPulse) ei silloin vahvista mitään.
-  bool informative(int j) const { return ch_[j].pub.has_pulse && !ch_[j].pub.sensor_fault; }
+  // Toinen kanava kantaa tietoa, kun se seuraa omia pulssejaan: has_pulse,
+  // anturi kunnossa ja oma pulssi pisimmän hyväksyttävän jakson sisällä. Ei
+  // amplitudi- eikä viitevertailua: rpm-pudotuksen jälkeen muiden kanavien A ja
+  // jakso ovat vielä vanhan käynnin. Ilman tuoreusehtoa irrotettu letku estäisi
+  // muiden kanavien syklit lomitusehdolla koko pulse_timeout_s:n ajan.
+  bool informative(int j) const {
+    const Chan& o = ch_[j];
+    return o.pub.has_pulse && !o.pub.sensor_fault && o.own_n > 0 &&
+           age(o.own_int[0], o.own_frac[0]) < max_period_;
+  }
+
+  // Suurin muiden tietoa kantavien kanavien oma pulssisyvyys, joka on mitattu
+  // tämän kanavan viimeisimmän oman pulssin jälkeen (0 = ei yhtään).
+  float peerDepth(int i) const {
+    const Chan& c = ch_[i];
+    const float mine = c.own_n > 0 ? age(c.own_int[0], c.own_frac[0]) : 1.0e9f;
+    float best = 0.0f;
+    for (int j = 0; j < kChannels; ++j) {
+      const Chan& o = ch_[j];
+      if (j == i || o.own_n == 0 || !informative(j)) continue;
+      if (age(o.own_int[0], o.own_frac[0]) < mine && o.own_d1 > best) best = o.own_d1;
+    }
+    return best;
+  }
 
   // Pulssin omistajuus. Sylinterien imut ovat 240 kampiasteen välein, joten
   // vuotopulssin keskellä sen aiheuttanut sylinteri on omassa imussaan ja sen
@@ -708,7 +740,7 @@ class Dsp {
   // paljon, joten sekään ei ole oma pulssi. Kun muut kanavat eivät kanna
   // tietoa (letku irti, anturivika), käytetään kanavan omaa syvyyshistoriaa.
   bool isOwn(int i, float m_age, float width, bool& info) const {
-    const float s = kSkewFrac * width > 1.0f ? kSkewFrac * width : 1.0f;
+    const float s = kOwnHalfWindow;
     float top_new = m_age - 0.5f * width;
     if (top_new < 0.0f) top_new = 0.0f;
     float lo_new = m_age - s;
@@ -725,7 +757,11 @@ class Dsp {
       if (informative(j)) info = true;
     }
     if (info) return fi > 0.0f && fi - fo >= kOwnMargin * fi;
+    // Haussa jokainen pulssi on ehdokas: kolmen samankokoisen vaatimus
+    // (ownPulse) hylkää jonot, joissa on vuotopulsseja, ja moottorin
+    // käynnistyksen askel ei saa myrkyttää syvyyshistoriaa.
     const Chan& c = ch_[i];
+    if (!c.pub.has_pulse) return true;
     const float deepest = c.depth1 > c.depth2 ? c.depth1 : c.depth2;
     return c.pulse_depth >= kDepthRatio * deepest;
   }
@@ -758,13 +794,13 @@ class Dsp {
   }
 
   // Lomitus: jokaisen tietoa kantavan toisen kanavan omia keskikohtia on
-  // välillä (ikä a_new, ikä a_old) täsmälleen yksi, eikä mikään väli kahden
-  // peräkkäisen oman pulssin välillä (mikä tahansa kanava) ole odotettua
-  // osuuttaan + kGapSlack pidempi. Jälkimmäinen paljastaa kierroksen, jonka
-  // kaikki kanavat ohittivat: jokaisessa ikkunassa on silloin yksi vanha merkki
-  // kultakin, mutta ne ovat kasautuneet välin alkuun.
+  // välillä (ikä a_new, ikä a_old) täsmälleen yksi, ja ne ovat sylinterien
+  // vuorossa: 1/3:n ja 2/3:n kohdalla jaksoa (yksi vahvistava kanava: jommassa
+  // kummassa). Ohitetun pulssin 2T-välissä jokin merkki on aina 1/6 jaksoa
+  // sivussa paikastaan - myös kun kaikki kanavat ohittivat saman kierroksen ja
+  // jokaisen ikkunaan osui yksi merkki kultakin.
   bool interleaved(int i, float a_new, float a_old, float period) const {
-    float marks[kChannels - 1];
+    float u[kChannels - 1];
     int nm = 0;
     for (int j = 0; j < kChannels; ++j) {
       if (j == i || !informative(j)) continue;
@@ -774,26 +810,18 @@ class Dsp {
         const float a = age(o.own_int[k], o.own_frac[k]);
         if (a > a_new && a < a_old) {
           ++n;
-          marks[nm] = a;
+          u[nm] = (a_old - a) / period;
         }
       }
       if (n != 1) return false;
       ++nm;
     }
-    if (nm == 2 && marks[1] > marks[0]) {
-      const float t = marks[0];
-      marks[0] = marks[1];
-      marks[1] = t;
+    if (nm == 2) {
+      const float lo = u[0] < u[1] ? u[0] : u[1];
+      const float hi = u[0] < u[1] ? u[1] : u[0];
+      return std::fabs(lo - 1.0f / 3.0f) <= kSlotTol && std::fabs(hi - 2.0f / 3.0f) <= kSlotTol;
     }
-    float prev = a_old;
-    float widest = 0.0f;
-    for (int k = 0; k < nm; ++k) {
-      if (prev - marks[k] > widest) widest = prev - marks[k];
-      prev = marks[k];
-    }
-    if (prev - a_new > widest) widest = prev - a_new;
-    const float share = static_cast<float>(kChannels - nm) / static_cast<float>(kChannels);
-    return widest <= (share + kGapSlack) * period;
+    return nm == 0 || std::fabs(u[0] - 1.0f / 3.0f) <= kSlotTol || std::fabs(u[0] - 2.0f / 3.0f) <= kSlotTol;
   }
 
   // Oma pulssi: sykli edellisestä omasta keskikohdasta tähän.
@@ -820,8 +848,8 @@ class Dsp {
       if (ok && info) {
         ok = interleaved(i, age(mi, mf), age(c.own_int[0], c.own_frac[0]), period);
       } else if (ok && c.pub.has_pulse) {
-        ok = similar(depth, c.own_d1) && period <= kMaxPeriodRatio * c.ref_period &&
-             period >= kMinPeriodRatio * c.ref_period;
+        ok = similar(depth, c.own_d1) && period <= (1.0f + kFallbackWindow) * c.ref_period &&
+             period >= (1.0f - kFallbackWindow) * c.ref_period;
       }
       if (ok) {
         Cyc cy;
@@ -869,15 +897,22 @@ class Dsp {
     // kanavan, jakson ja loppumerkin kanssa. Määrittelemättömänä ei koodia.
     SBX_DSP_CYCLE_HOOK(static_cast<int>(&c - ch_), cy.period, cy.end_int, cy.end_frac);
 #endif
-    // Näyttökeskiarvo alusta, jos kierrosluku muuttui kerralla (kRestartRatio).
-    if (periodJumped(c, cy.period)) c.cyc_count = 0;
+    // Näytön keskiarvo alkaa alusta, jos kierrosluku muuttui kerralla yli
+    // kRestartRatio-kertaisesti, ja hypännyt sykli jätetään siitä pois: askeleen
+    // ylittävä sykli on osin vanhaa käyntiä ja pysyisi 600 rpm:llä 8 syklin
+    // näytössä 1,6 s. Näyttö pysyy silloin yhden syklin vanhoissa arvoissa.
+    const bool jumped = periodJumped(c, cy.period);
+    if (jumped) {
+      c.cyc_count = 0;
+    } else {
+      c.cyc_int[c.cyc_head] = cy.integral;
+      c.cyc_per[c.cyc_head] = cy.period;
+      c.cyc_min[c.cyc_head] = cy.cmin;
+      c.cyc_p2p[c.cyc_head] = cy.p2p;
+      c.cyc_head = (c.cyc_head + 1) % kMaxAvgCycles;
+      if (c.cyc_count < kMaxAvgCycles) ++c.cyc_count;
+    }
     c.ref_period = cy.period;
-    c.cyc_int[c.cyc_head] = cy.integral;
-    c.cyc_per[c.cyc_head] = cy.period;
-    c.cyc_min[c.cyc_head] = cy.cmin;
-    c.cyc_p2p[c.cyc_head] = cy.p2p;
-    c.cyc_head = (c.cyc_head + 1) % kMaxAvgCycles;
-    if (c.cyc_count < kMaxAvgCycles) ++c.cyc_count;
     c.per[c.per_head] = cy.period;
     c.per_head = (c.per_head + 1) % kMaxRpmHist;
     if (c.per_count < kMaxRpmHist) ++c.per_count;
@@ -885,7 +920,7 @@ class Dsp {
     ++c.pub.cycles;
     c.pub.has_pulse = true;
     c.since_cycle = 0;
-    publishAverages(c);
+    if (!jumped) publishAverages(c);
     c.sd_rpm = rpmSpread(c);
   }
 
