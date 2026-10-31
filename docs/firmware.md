@@ -615,6 +615,12 @@ Sim-avaimet: `engine_on` (0/1), `rpm`, `jitter`, `drift`, `base`, `err1`, `err2`
   [tools/native_test/unity.h](../tools/native_test/unity.h) — käytä vain niitä.
   Windowsilla molemmat ajetaan WSL:ssä (MinGW-g++:sta puuttuu ASan), Git Bashista
   `wsl --cd "$(pwd -W)" -- bash tools/run_native_tests.sh`.
+- **Fuzz (S8):** `test_fuzz` syöttää lomakkeiden jäsentimille (`applyConfigForm`,
+  `applyMasterForm`, `simApplyForm`) ja nauhoituslukijalle (`recording.h`) deterministisiä
+  pseudosatunnaisia syötteitä (kiinteät siemenet, vähintään 10 000 tapausta jäsennintä kohden)
+  tarkan kokoisissa keko-puskureissa, joten ASan huomaa yhdenkin tavun ylityksen. Pidempi
+  tutkiva ajo: `SBX_FUZZ_SCALE=20` (tapausmäärän kerroin) ja `SBX_FUZZ_SEED=0x…` (XOR
+  siemeniin). Epäonnistunut tapaus tulostaa syötteensä.
 - **GCC 8.4:** `tools/check_core_gcc84.sh [x.h …]` kääntää jokaisen core-headerin yksinään
   ESP32:n omalla kääntäjällä samoilla varoituksilla. Native-g++ on uudempi eikä huomaa
   §1:n kohdan 6 rajoituksia (esim. liukulukujen `std::to_chars`). Vaatii PlatformIOn
