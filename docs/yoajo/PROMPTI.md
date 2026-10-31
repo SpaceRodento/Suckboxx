@@ -6,6 +6,13 @@ voimassa, eikä yöajo voi muuttaa omaa kehotettaan, koska `dev/integraatio`on y
 päiväistunto (Y3, Y11). Malli on Zignalmeisterin `docs/yoajo/PROMPTI.md`:stä (31.10.2026),
 kevennettynä: yöllä vain toteutetaan, ja päiväistunto katselmoi ja yhdistää.
 
+**Käynnistys (31.10.2026 alkaen käsin, ajastettuja rutiineja ei ole):** avaa claude.ai:ssa
+pilvisessio repoon `SpaceRodento/Suckboxx` ja anna kehotteeksi:
+
+> Lue docs/yoajo/PROMPTI.md haarasta origin/dev/integraatio ja toimi sen mukaan. Tee yksi paketti.
+
+Useampi rinnakkainen sessio on sallittu: varaus (Y4) estää päällekkäisyyden.
+
 ---
 
 ## Yhteiset säännöt
