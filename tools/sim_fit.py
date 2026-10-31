@@ -1298,6 +1298,11 @@ def to_json(o) -> object:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Windowsin putkessa (esim. "--form | tr") stdout on cp1252, joka ei osaa
+    # raportin miinusmerkkiä (U+2212) eikä ääkkösiä.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(
         description="EngineSimin parametrit Suckboxxin raakanauhoituksesta (/api/sim-lomake)")
     ap.add_argument("csv", help="/api/raw.csv tai tools/serial_record.py:n tallenne")
