@@ -113,5 +113,7 @@ jobs:
         run: python3 tools/embed_web.py --check
       - name: mock_server.py --check-config
         run: python3 tools/mock_server.py --check-config
+      - name: mock_server.py --check-snapshot
+        run: python3 tools/mock_server.py --check-snapshot
       - name: py_compile tools/**/*.py
         run: find tools -name '*.py' -print0 | xargs -0 python3 -m py_compile

@@ -586,7 +586,7 @@ Sim-avaimet: `engine_on` (0/1), `rpm`, `jitter`, `drift`, `base`, `err1`, `err2`
   | `native` | `tools/run_native_tests.sh` |
   | `pio-native` | `pio test -d firmware -e native` (PlatformIO 6.1.19) |
   | `esp32` (matriisi) | `pio run -d firmware -e <env>` jokaiselle ESP32-ympäristölle, RAM ja flash ajon yhteenvetoon; `check_core_gcc84.sh` kerran |
-  | `web` (Python 3.10 ja 3.14) | `embed_web.py --check`, `mock_server.py --check-config`, `py_compile` kaikille `tools/**/*.py` |
+  | `web` (Python 3.10 ja 3.14) | `embed_web.py --check`, `mock_server.py --check-config` ja `--check-snapshot`, `py_compile` kaikille `tools/**/*.py` |
 
   Uudet `firmware/test/test_*/`-kansiot ja Python-työkalut tulevat mukaan ilman
   muutoksia; uusi ESP32-`[env:...]` lisätään `esp32`-jobin matriisiin. Runner on
