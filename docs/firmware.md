@@ -274,7 +274,10 @@ Muoto (WP-3:n toteutus, kirjattu 30.10.2026):
 
 - `v` = `kConfigSchemaVersion`. `type` ∈ `float`, `u8`, `u16`, `bool`; bool-kentän `def` ja
   `value` ovat `true`/`false`, `min`/`max` silloin 0/1. Kentät rekisterin järjestyksessä, ja
-  UI ryhmittelee `group`in mukaan. Puskuri: `kConfigJsonSize`.
+  UI ryhmittelee `group`in mukaan. Puskuri: `kConfigJsonSize`, joka johdetaan kenttälistasta
+  käännösaikana (S9, 31.10.2026), joten uusi kenttä ei vaadi nostoa käsin. `test_config` todistaa
+  kentittäin, ettei JSON ylitä rajaa millään alueen arvolla. Keon katto `kConfigJsonMaxSize`
+  (8192) on `static_assert`.
 - UI tuntee nimeltä vain kaksi valintakenttää, `source` ja `master`, joiden vaihtoehtojen
   nimet ovat UI:ssa.
 - `POST /api/config` on atominen: kaikki kentät sovelletaan Configin kopioon, sitten

@@ -270,7 +270,7 @@ inline void jsonNumber(JsonWriter& w, FieldType t, float v) {
   }
 }
 
-inline const char* typeName(FieldType t) {
+constexpr const char* typeName(FieldType t) {  // constexpr: kConfigJsonSize (S9)
   switch (t) {
     case FieldType::Float: return "float";
     case FieldType::U8: return "u8";
@@ -527,10 +527,119 @@ inline size_t configToJson(const Config& c, char* buf, size_t n) {
   return w.ok() ? w.length() : 0;
 }
 
-// Puskuri configToJson:lle (GET /api/config, ei näytepolulla). Pahin tapaus
-// (kaikki liukuluvut 6 merkitsevällä numerolla) on 5470 tavua 35 kentällä
-// (WP-9, 31.10.2026), mitattu test_config:ssa; 6144 jättää varaa ~4 uudelle
-// kentälle (~170 t/kenttä). Testi kaatuu, jos vara putoaa alle 512 tavun.
-constexpr size_t kConfigJsonSize = 6144;
+// ---------------------------------------------------------------------------
+// configToJsonin puskurin koko johdetaan kenttälistasta käännösaikana (S9).
+//
+// Ennen S9:ää koko oli käsin valittu 6144, ja pahin tapaus oli 5470 tavua
+// 35 kentällä (WP-9, 31.10.2026), joten muutama uusi kenttä olisi vaatinut
+// noston. Nyt jokainen SBX_CONFIG_FIELDS-rivi kasvattaa kConfigJsonSizea oman
+// ylärajansa verran: merkkijonot lasketaan tarkasti escapauksineen ja luvut
+// tyypin ja alueen [min, max] leveimmän muotoilun mukaan. test_config todistaa
+// kentittäin, ettei configToJson ylitä rajaa millään alueen arvolla, joten
+// ylivuoto jää testiin eikä pääse laitteelle.
+//
+// Raja koskee arvoja alueella [min, max]. Processor ottaa käyttöön vain
+// configValidaten hyväksymän Configin, ja configValidate tarkistaa jokaisen
+// kentän alueen, joten laitteen GET /api/config ei saa koon takia 0:aa (500).
+// ---------------------------------------------------------------------------
+namespace detail {
+
+// JsonWriter::writeStringin tuottama pituus lainausmerkkeineen: " ja \ kahtena,
+// ohjausmerkki < 0x20 kuutena (\u00XX), muut tavut (myös UTF-8) sellaisenaan.
+constexpr size_t jsonStringLength(const char* s) {
+  size_t n = 2;
+  for (; *s != '\0'; ++s) {
+    const unsigned char c = static_cast<unsigned char>(*s);
+    n += (c == '"' || c == '\\') ? 2u : (c < 0x20 ? 6u : 1u);
+  }
+  return n;
+}
+
+// "%ld"-muotoillun kokonaisluvun pituus etumerkkeineen.
+constexpr size_t jsonIntWidth(long v) {
+  size_t n = v < 0 ? 2u : 1u;
+  for (long a = v < 0 ? -v : v; a >= 10; a /= 10) ++n;
+  return n;
+}
+
+// jsonNumber(Float) = valueTrim(v, 6 - k), jossa k on kokonaisosan numerot
+// (jsonDecimals, enintään 6). Ennen trimmausta "%.*f" antaa k numeroa, +1 jos
+// pyöristys kantaa (9.999996 -> "10.00000"), sekä pisteen ja 6 - k desimaalia:
+// k < 6 -> enintään 8 merkkiä, k >= 6 -> ei desimaaleja, enintään k + 1.
+// jsonDecimalsin float-jako voi arvioida k:n vain yläkanttiin (kymmenen potenssit
+// ovat floatina tarkkoja ja pyöristys monotoninen), mikä vähentää desimaaleja;
+// trimmaus ja "-0" -> "0" vain lyhentävät. Miinusmerkki +1.
+constexpr size_t jsonFloatWidth(float mn, float mx) {
+  float m = mn < 0.0f ? -mn : mn;
+  if ((mx < 0.0f ? -mx : mx) > m) m = mx < 0.0f ? -mx : mx;
+  size_t k = 1;
+  for (; m >= 10.0f; m /= 10.0f) ++k;
+  return (mn < 0.0f ? 1u : 0u) + (k + 1 > 8 ? k + 1 : 8u);
+}
+
+// Luvun leveys, kun arvo on alueella [mn, mx]. U8/U16 kirjoitetaan "%ld":llä,
+// joten leveämpi päätepiste on raja. Bool: "false".
+constexpr size_t jsonNumberWidth(FieldType t, float mn, float mx) {
+  switch (t) {
+    case FieldType::Float: return jsonFloatWidth(mn, mx);
+    case FieldType::U8:
+    case FieldType::U16: {
+      const size_t a = jsonIntWidth(static_cast<long>(mn));
+      const size_t b = jsonIntWidth(static_cast<long>(mx));
+      return a > b ? a : b;
+    }
+    case FieldType::Bool: return sizeof("false") - 1;
+  }
+  return 0;
+}
+
+// Yhden kenttäobjektin yläraja ilman erottavaa pilkkua. Kiinteä osa vastaa
+// configToJsonin key()-kutsuja järjestyksessä; min/max kirjoitetaan Bool-kentällä
+// U8:na (0/1) kuten configToJsonissa.
+constexpr size_t configFieldJsonBound(const char* key, const char* label, const char* unit,
+                                      const char* group, FieldType t, float mn, float mx) {
+  const size_t range_w = jsonNumberWidth(t == FieldType::Bool ? FieldType::U8 : t, mn, mx);
+  const size_t value_w = jsonNumberWidth(t, mn, mx);
+  return sizeof("{\"key\":,\"label\":,\"unit\":,\"group\":,\"type\":,"
+                "\"min\":,\"max\":,\"def\":,\"value\":}") - 1 +
+         jsonStringLength(key) + jsonStringLength(label) + jsonStringLength(unit) +
+         jsonStringLength(group) + jsonStringLength(typeName(t)) + 2 * range_w + 2 * value_w;
+}
+
+// Kenttäkohtaiset ylärajat rekisterin järjestyksessä (test_config vertaa
+// jokaista mitattuun). Vain käännösaikainen käyttö laitteella: ei flashia.
+inline constexpr size_t kConfigFieldJsonBound[] = {
+#define SBX_CFG_JSON_BOUND(id, member, key, type, mn, mx, group, unit, label) \
+  configFieldJsonBound(key, label, unit, group, FieldType::type, mn, mx),
+    SBX_CONFIG_FIELDS(SBX_CFG_JSON_BOUND)
+#undef SBX_CFG_JSON_BOUND
+};
+static_assert(sizeof(kConfigFieldJsonBound) / sizeof(kConfigFieldJsonBound[0]) ==
+                  static_cast<size_t>(kConfigFieldCount),
+              "kenttärajoja eri määrä kuin kenttiä");
+
+// {"v":<versio>,"fields":[<kentät pilkuin erotettuina>]} + NUL.
+constexpr size_t configJsonBound() {
+  size_t n = sizeof("{\"v\":,\"fields\":[]}") - 1 + jsonIntWidth(kConfigSchemaVersion);
+  for (int i = 0; i < kConfigFieldCount; ++i) n += kConfigFieldJsonBound[i] + (i > 0 ? 1u : 0u);
+  return n + 1;
+}
+
+}  // namespace detail
+
+// Puskuri configToJson:lle (GET /api/config, ei näytepolulla; test_config
+// tulostaa koon). web.cpp varaa sen keosta pyynnön ajaksi async_tcp-taskissa,
+// ja AsyncBasicResponse kopioi JSONin vielä omaan Stringiinsä (ESPAsyncWebServer
+// 3.12.1, WebResponses.cpp:260-263), joten hetkellinen huippu on ~2 x koko.
+constexpr size_t kConfigJsonSize = detail::configJsonBound();
+
+// Keon kestävyyden katto (S9:n ehdotus, ei D-päätös). Vapaa keko on laitteella
+// ~89 kt (jatko.md), ja laitetestin raja minimille on 40 kt. 8 kt:n puskuri ja
+// sen kopio (~16 kt hetkellisesti) mahtuvat siihen väliin. Katto tulee vastaan
+// noin 13 uuden kentän jälkeen (~167 t/kenttä); silloin päätetään erikseen,
+// kasvatetaanko kattoa vai tiivistetäänkö JSONia (rajapintamuutos).
+constexpr size_t kConfigJsonMaxSize = 8192;
+static_assert(kConfigJsonSize <= kConfigJsonMaxSize,
+              "konfiguraatio-JSON kasvoi yli keon katon kConfigJsonMaxSize: ks. config.h (S9)");
 
 }  // namespace sbx
