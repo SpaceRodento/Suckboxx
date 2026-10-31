@@ -1094,6 +1094,7 @@ struct SimOpts {
   bool first_disp = false;  // kanavan ensimmäinen uuden käynnin näyttöarvo (t0:n jälkeen)
   long swap_t = -1;         // letkut 2 ja 3 vaihdetaan tällä hetkellä (kanavat 1 <-> 2, -1 = ei)
   long p2p_at = -1;         // kanavien p2p_kpa talteen tällä hetkellä (-1 = ei)
+  bool sens_watch = false;  // vikaantuvan anturin kanavaakin seurataan (has_pulse, väärät syklit)
 };
 
 bool finiteState(const ChannelState& s) {
@@ -1131,7 +1132,7 @@ SimRun runSim(sbx::SimParams p, const SimOpts& o, F sched) {
   // Seuraamatta: irrotetut letkut, vikaantuva anturi ja heikko sylinteri (sen
   // kanava saa jäädä ilman has_pulsea, mutta ei saa kirjata väärää sykliä).
   int skip = o.hose_mask;
-  if (o.sens_ch >= 0) skip |= 1 << o.sens_ch;
+  if (o.sens_ch >= 0 && !o.sens_watch) skip |= 1 << o.sens_ch;
   if (o.weak_ch >= 0) skip |= 1 << o.weak_ch;
   int first_done = 0;
   for (long t = 0; t < o.total; ++t) {
@@ -2356,9 +2357,10 @@ void test_short_fault_keeps_healthy_channels() {
   // suotimen ylitys (~1 kPa) ei ole oma pulssi (kOwnFloor). Jos vika jättää
   // terveen kanavan tauon jälkeen yhden todistajan varaan, kasvava
   // rajapulssi (1...2 x) ei hylkää sykliä. Rajat: alipaineen askel 4,1
-  // jaksoa, blipit B:n raja + 150 ms (xtalk 0,5: 750 + 150).
+  // jaksoa, blipit B:n raja + 150 ms (tuplablip xtalk 0,5: 750 + 150, blippi
+  // nousulla 300 ms: 300 + 150).
   struct Case {
-    int kind;      // 0 = alipaineen askel -37 -> -55 kPa, 1 = tuplablip
+    int kind;      // 0 = alipaineen askel -37 -> -55 kPa, 1 = tuplablip, 2 = blippi (nousu 300 ms)
     float rpm;     // askeleen kierrosluku tai blipin huippu (joutokäynti 850)
     float xt;
     uint32_t seed;
@@ -2392,8 +2394,11 @@ void test_short_fault_keeps_healthy_channels() {
       {1, 2500.0f, 0.0f, 2, 2518, 0, 2, 0, 450, 80},
       //  - letku irti 400 ms, pudotusikkuna keskikohdan yli: 798 ms;
       {1, 1500.0f, 0.0f, 1, 2509, 0, 1, 2, 300, 400},
-      //  - asettuvan kanavan ennen vikaa mitattu pulssi ei äänestä: 1299 ms ja
-      //    has_pulse putosi; kOwnFloor 0,3: sama (anturi ylös 250 ms).
+      //  - asettuvan kanavan ennen vikaa mitattu pulssi ei äänestä: kierroksen
+      //    6 koodissa 1299 ms ja has_pulse putosi; kOwnFloor 0,3: sama (anturi
+      //    ylös 250 ms). Tauon jälkeisen kasvavan pulssin poikkeus kattaa nämä
+      //    nyt; ks. 2500 rpm:n tuplablippi (xtalk 0,3) alla ja
+      //    test_faulted_channel_relocks_on_small_pulses.
       {1, 3000.0f, 0.5f, 2, 2516, 100, 2, 0, 450, 250, 950.0f},
       {1, 3000.0f, 0.5f, 2, 2516, 100, 2, 1, 300, 250, 950.0f},
       // Rajapulssien samankokoisuuden poikkeus (tauon jälkeen) vain
@@ -2407,13 +2412,20 @@ void test_short_fault_keeps_healthy_channels() {
       {1, 3000.0f, 0.5f, 1, 2598, 0, 2, 0, 450, 250},
       // A:n vaimennus tuoreimmasta jaksosta, kun muut kanavat pulssivat: jos
       // odotus laskettaisiin vanhasta viitteestä, terveen kanavan pienet
-      // pulssit jäisivät toisen blipin aikana tunnistamatta (1400 ms, has_pulse
-      // putosi).
+      // pulssit jäisivät tunnistamatta (kierroksen 6 koodissa tässä 1400 ms ja
+      // has_pulse putosi; nyt ks. viimeinen tapaus).
       {1, 3000.0f, 0.5f, 1, 2622, 100, 0, 1, 200, 250},
       // Letku irti 400 ms toisen blipin ajan (950 -> 3000, xtalk 0,5): kanava
       // on kuollut koko syklin ajan, terveen pulssi kasvaa takaisin (1304 ms ja
       // has_pulse putosi, kun poikkeus vaati vian jälkeisen asettumisen).
       {1, 3000.0f, 0.5f, 1, 2586, 100, 0, 2, 300, 400, 950.0f},
+      // Anturi alas 80 ms tuplablipin lopussa (850 -> 2500, xtalk 0,3): jos
+      // asettuvan kanavan ennen vikaa mitattu pulssi ei äänestäisi, terveelle
+      // jäisi yksi todistaja ja se kirjaisi väärän syklin (myös d6986bc).
+      {1, 2500.0f, 0.3f, 3, 2572, 0, 0, 0, 650, 80},
+      // Letku irti 400 ms 300 ms:n nousun blipin alussa (850 -> 2500, xtalk
+      // 0,5): A:n vaimennus vanhasta viitteestä venytti välin 359 -> 455 ms.
+      {2, 2500.0f, 0.5f, 2, 2532, 0, 0, 2, -30, 400},
   };
   SimRun worst;
   for (const Case& k : cases) {
@@ -2442,6 +2454,12 @@ void test_short_fault_keeps_healthy_channels() {
       o.step_t = static_cast<double>(o.t0);
       r = runSim(p, o, Ramp{k.rpm, k.rpm, -37.0f, -55.0f, 20.0f, 20.0f, o.t0, 0});
       lim = static_cast<int>(4.1f * periodMs(k.rpm));
+    } else if (k.kind == 2) {
+      o.t_end = o.t0 + 1300;
+      o.total = o.t_end + 2000;
+      p.rpm = k.idle;
+      r = runSim(p, o, Blip{k.rpm, o.t0, 300, k.idle});
+      lim = 450;
     } else {
       o.t_end = o.t0 + 2 * (450 + k.gap) - k.gap;
       o.total = o.t_end + 2000;
@@ -2456,6 +2474,37 @@ void test_short_fault_keeps_healthy_channels() {
     TEST_ASSERT_FALSE_MESSAGE(r.dropped, "has_pulse putosi terveeltä kanavalta");
     TEST_ASSERT_LESS_OR_EQUAL(lim, static_cast<int>(r.max_gap));
   }
+  TEST_ASSERT_EQUAL_INT(0, worst.wrong);
+  TEST_ASSERT_TRUE(worst.finite);
+}
+
+void test_faulted_channel_relocks_on_small_pulses() {
+  // Lyhyt anturivika (alas 250 ms) kaasua avattaessa: kanava palaa, kun sen
+  // pulssit ovat kutistuneet 20 -> 4 kPa (0,2 x ennen vikaa mitattu oma
+  // syvyys). Asettumisen jälkeinen ensimmäinen oma pulssi vaatii vain
+  // kOwnFloor (0,1) x vanhan syvyyden: suotimen asettumisen ylitys (~1 kPa)
+  // ei ole pulssi, mutta todellinen pieni pulssi on. 0,3:lla kanava ei
+  // löytänyt pulssejaan ennen has_pulsen aikakatkaisua.
+  SimRun worst;
+  for (int run = 0; run < 6; ++run) {
+    sbx::SimParams p;
+    p.seed = static_cast<uint32_t>(1 + run % 2);
+    p.xtalk = run < 3 ? 0.0f : 0.3f;
+    SimOpts o;
+    o.t0 = 2500 + static_cast<long>(periodMs(850.0f) * static_cast<float>(run % 3) / 3.0f);
+    o.t_end = o.t0 + 300;
+    o.total = o.t_end + 2500;
+    o.sens_ch = run % 3;
+    o.sens_kind = sbx::SimFault::SensorLow;
+    o.sens_t1 = o.t0 - 100;
+    o.sens_t2 = o.sens_t1 + 250;
+    o.sens_watch = true;
+    const SimRun r = runSim(p, o, Ramp{850.0f, 2000.0f, -55.0f, -25.0f, 20.0f, 4.0f, o.t0, 300});
+    msg("anturivika kanavalla %.0f kaasua avattaessa (20 -> 4 kPa): has_pulse putosi %.0f, pisin väli %.0f ms",
+        static_cast<double>(o.sens_ch), r.dropped ? 1.0 : 0.0, static_cast<double>(r.max_gap));
+    worstOf(worst, r);
+  }
+  TEST_ASSERT_FALSE_MESSAGE(worst.dropped, "vikaantunut kanava ei palannut pieniin pulsseihin");
   TEST_ASSERT_EQUAL_INT(0, worst.wrong);
   TEST_ASSERT_TRUE(worst.finite);
 }
@@ -3208,6 +3257,7 @@ int main() {
   RUN_TEST(test_short_fault_keeps_healthy_channels);
   RUN_TEST(test_single_witness_needs_rhythm);
   RUN_TEST(test_hose_swap_relearns_firing_order);
+  RUN_TEST(test_faulted_channel_relocks_on_small_pulses);
   RUN_TEST(test_weak_cylinder_quick_blips);
   RUN_TEST(test_display_right_after_rpm_jump);
   RUN_TEST(test_pulse_timeout_when_signal_goes_flat);
