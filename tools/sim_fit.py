@@ -36,6 +36,11 @@ Käyttö:
   python tools/sim_fit.py nauhoitus.csv --start 5 --end 35
   python tools/sim_fit.py joutokaynti.csv --zero-from lepo.csv
   python tools/sim_fit.py 2026-11-07_lepo.csv          # lepotila tunnistetaan itse
+  tools/replay/build/replay --sim $(python tools/sim_fit.py x.csv --form | tr '&' ' ') \\
+      --seconds 30 --out x_sim.csv                      # EngineSim-vastine toistoon (WP-8)
+
+tools/replay --sim -viennin otsakkeen sim= (totuus) vertaillaan arvioihin
+automaattisesti (ristiintodennus, docs/moottoriajo.md).
 
 Vaatii numpyn ja scipyn. Syklintunnistus tuodaan tools/cycle_profile.py:stä.
 """
@@ -529,8 +534,20 @@ def resonance(x: np.ndarray, r: dict, fs: float, band: tuple[float, float],
         return out
     sel = (f >= band[0]) & (f <= band[1])
     fb, pb = f[sel], p[sel]
-    k = int(np.argmax(pb))
     floor = float(np.median(pb))
+    # Korkein kaistan sisäinen paikallinen maksimi: kaistan reunalle laskeva
+    # jäännös (pulssin yläpää) ei ole piikki. Reuna valitaan vain, jos sisältä
+    # ei löydy mitään.
+    inner = [i for i in range(1, len(pb) - 1) if pb[i] >= pb[i - 1] and pb[i] >= pb[i + 1]]
+    k = max(inner, key=lambda i: pb[i]) if inner else int(np.argmax(pb))
+    if floor > 0 and 10.0 * math.log10(pb[k] / floor) < PROM_MIN_DB:
+        # Yläreunaa kohti nouseva teho = soiminen kaistan yläpuolella; se ratkaisee
+        # ennen alareunaa, jossa on aina pulssin syklikohtaisen vaihtelun jäännöstä.
+        last = len(pb) - 1
+        if pb[last] >= pb[last - 1] and 10.0 * math.log10(pb[last] / floor) >= PROM_MIN_DB:
+            k = last
+        elif pb[0] >= pb[1] and 10.0 * math.log10(pb[0] / floor) >= PROM_MIN_DB:
+            k = 0
     prom = 10.0 * math.log10(pb[k] / floor) if floor > 0 else 0.0
     f_pk = float(fb[k])
     if 0 < k < len(pb) - 1:
@@ -539,12 +556,19 @@ def resonance(x: np.ndarray, r: dict, fs: float, band: tuple[float, float],
         if den < 0:
             f_pk += 0.5 * (la - lc) / den * float(f[1] - f[0])
     out.update({"hz_spec": f_pk, "prom_db": prom, "segments": nseg})
-    if k == 0 or k == len(pb) - 1:
-        out["why"] = f"piikki kaistan {band[0]:g}–{band[1]:g} Hz reunalla (todellinen piikki kaistan ulkopuolella?)"
+    hint = (" (lyhyt letku soi korkeammalla: kokeile --res-band 50 490)"
+            if band[1] < 0.45 * fs else "")
+    if k == 0:
+        out["why"] = (f"ei resonanssipiikkiä {band[0]:g}–{band[1]:g} Hz:n kaistalla: teho vain "
+                      f"nousee alareunaa kohti (pulssin syklikohtainen vaihtelu){hint}")
+        return out
+    if k == len(pb) - 1:
+        out["why"] = (f"teho suurin kaistan yläreunalla {band[1]:g} Hz: soiminen on "
+                      f"kaistan yläpuolella{hint}")
         return out
     if prom < PROM_MIN_DB:
         out["why"] = (f"ei resonanssipiikkiä {band[0]:g}–{band[1]:g} Hz:n kaistalla "
-                      f"(korkein {prom:.1f} dB < {PROM_MIN_DB:g} dB)")
+                      f"(korkein {prom:.1f} dB < {PROM_MIN_DB:g} dB){hint}")
         return out
     out["ok"] = True
     out["hz"] = f_pk
@@ -1278,6 +1302,8 @@ def main(argv: list[str] | None = None) -> int:
         description="EngineSimin parametrit Suckboxxin raakanauhoituksesta (/api/sim-lomake)")
     ap.add_argument("csv", help="/api/raw.csv tai tools/serial_record.py:n tallenne")
     ap.add_argument("--json", action="store_true", help="koko tulos JSON:na stdoutiin")
+    ap.add_argument("--form", action="store_true",
+                    help="vain /api/sim-lomake (esim. replay --sim $(... --form | tr '&' ' '))")
     ap.add_argument("--start", type=float, metavar="S", help="analyysi-ikkunan alku sekunteina")
     ap.add_argument("--end", type=float, metavar="S", help="analyysi-ikkunan loppu sekunteina")
     ap.add_argument("--cal", choices=["header", "nominal"], default="header",
@@ -1301,6 +1327,8 @@ def main(argv: list[str] | None = None) -> int:
                         args.rest, (lo, hi), args.master - 1)
     if args.json:
         print(json.dumps(to_json(out), ensure_ascii=False, indent=1))
+    elif args.form:
+        print(out["form"])
     else:
         print(text_report(out))
     return 0

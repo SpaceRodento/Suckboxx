@@ -263,9 +263,21 @@ class SimFitTest(unittest.TestCase):
         o = self.run_fit("nores", mv)
         self.assertNotIn("res=", o["form"])
         self.assertIn("res", o["omitted"])
-        self.assertTrue(o["omitted"]["res"].startswith("SYL 1: "), o["omitted"]["res"])
+        self.assertTrue(o["omitted"]["res"].startswith("SYL 1: ei resonanssipiikkiä"),
+                        o["omitted"]["res"])
         self.assertTrue(all(v is None for v in o["extra"]["res_hz"]))
         self.near(o["params"]["depth"], 20, 1.0, "depth")
+
+    def test_short_hose_resonance_above_band(self):
+        """Lyhyt letku soi yli 300 Hz:n (rauta.md §4.1): oletuskaista neuvoo
+        laajentamaan, --res-band 50 490 löytää piikin."""
+        mv = simulate(20, res_hz=(380.0, 380.0, 380.0), seed=73)
+        o = self.run_fit("lyhyt", mv)
+        self.assertIn("--res-band", o["omitted"]["res"])
+        o = sim_fit.fit_recording(self.dir / "lyhyt.csv", band=(50.0, 490.0))
+        for c in range(3):
+            self.near(o["extra"]["res_hz"][c], 380, 380 * 0.03, f"res_hz {c}")
+        self.near(o["params"]["noise"], 2.0, 0.3, "noise")
 
     def test_clipping_h1(self):
         """Paluuaalto ylittää ilmanpaineen: GN-anturi leikkaa 2700 mV:iin (H1)."""
@@ -463,6 +475,10 @@ class SimFitTest(unittest.TestCase):
                            capture_output=True, text=True, encoding="utf-8", timeout=300)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("POST /api/sim:", r.stdout)
+        r = subprocess.run([sys.executable, str(HERE / "sim_fit.py"), str(p), "--form"],
+                           capture_output=True, text=True, encoding="utf-8", timeout=300)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), o["form"])
 
 
 if __name__ == "__main__":
