@@ -30,10 +30,10 @@ tänne. Malli on Zignalmeisterin ja PlantMeisterin `docs/yoajo/`:sta (31.10.2026
 
 | # | Tunnus | Paketti | Laji | Laitekoodi | Riippuvuus |
 |---|---|---|---|---|---|
-| 1 | S2 | [DSP: voimakas positiivinen paluuaalto sotkee syklintunnistuksen](paketit/S2-dsp-paluuaalto.md) | rakennus | kyllä | WP-8 |
-| 2 | S3 | [Golden-nauhoitukset käytösmatriisin riveille](paketit/S3-golden-matriisirivit.md) | rakennus | ei | WP-8, WP-9 |
-| 3 | S4 | [Mockin ja laitteen aikajanapariteetti automaattiseksi](paketit/S4-mock-aikajanapariteetti.md) | rakennus | ei | WP-8, WP-10 |
-| 4 | S11 | [Testien päättäjät näkyviin ja cond/tila-invariantti](paketit/S11-testien-paattajat.md) | rakennus | ei | S1 |
+| 1 | S3 | [Golden-nauhoitukset käytösmatriisin riveille](paketit/S3-golden-matriisirivit.md) | rakennus | ei | WP-8, WP-9 |
+| 2 | S4 | [Mockin ja laitteen aikajanapariteetti automaattiseksi](paketit/S4-mock-aikajanapariteetti.md) | rakennus | ei | WP-8, WP-10 |
+| 3 | S11 | [Testien päättäjät näkyviin ja cond/tila-invariantti](paketit/S11-testien-paattajat.md) | rakennus | ei | S1 |
+| 4 | S16 | [DSP: ristivuoto ja paluuaalto yhdessä monistavat rpm:n](paketit/S16-dsp-ristivuoto-paluuaalto.md) | rakennus | kyllä | S2 |
 | 5 | S10 | [Mockin lomakejäsennys laitteen kaltaiseksi](paketit/S10-mock-lomakkeet.md) | rakennus | ei | S8 |
 | 6 | S12 | [Letkuvian hystereesimuisti säilyy asetusmuutoksen yli](paketit/S12-hystereesimuisti.md) | rakennus | kyllä | WP-9, S1 |
 | 7 | S5 | [EngineSim: mitatut ADC-piikit simulaattoriin](paketit/S5-sim-adc-piikit.md) | rakennus | kyllä | WP-9 |
@@ -42,11 +42,11 @@ tänne. Malli on Zignalmeisterin ja PlantMeisterin `docs/yoajo/`:sta (31.10.2026
 | 10 | S15 | [Korjausehdotuksen luonnos ESPAsyncWebServerille (ei lähetetä)](paketit/S15-upstream-luonnos.md) | dokumentaatio | ei | R13 |
 | 11 | S14 | [Käynnistyksen häiriöt erilleen aukko-, ohitus- ja pudotuslaskureista](paketit/S14-kaynnistyksen-laskurit.md) | rakennus | kyllä | WP-13, R13 |
 
-S2 ja S5 koskevat molemmat simulaattorin ja DSP:n käytöstä: jos molemmat ovat samana yönä
-avoimina, jälkimmäinen tarkistaa törmäyksen diffistä. S4 kirjaa S2:n tunnetun eron odotetuksi.
+S16 ja S5 koskevat molemmat simulaattorin ja DSP:n käytöstä: jos molemmat ovat samana yönä
+avoimina, jälkimmäinen tarkistaa törmäyksen diffistä. S4 kirjaa S16:n tunnetun eron odotetuksi.
 
-Tehty päiväistunnossa 31.10.2026 (tiedostot [paketit/tehdyt/](paketit/tehdyt)): S1, S6, S8,
-S9. Samana päivänä tehtiin päiväistunnon omat katselmukset ja paketit R13, WP-15 ja WP-16
+Tehty päiväistunnossa 31.10.2026 (tiedostot [paketit/tehdyt/](paketit/tehdyt)): S1, S2, S6,
+S8, S9. Samana päivänä tehtiin päiväistunnon omat katselmukset ja paketit R13, WP-15 ja WP-16
 ([docs/paketit.md](../paketit.md)).
 
 ## Ehdotukset

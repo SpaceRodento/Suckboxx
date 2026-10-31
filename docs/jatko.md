@@ -8,8 +8,8 @@ kaasunmuutokset) ovat masterissa.
 ([paketit.md](paketit.md)). Kaikki on yhdistetty masteriin. **Laitekoodia ei ole vielä ajettu
 laitteella:** omistaja päätti 31.10.2026 yhdistää ennen laitetestiä, koska laitetta ei saatu
 heti (ks. Avoimet 1). Sen tilalla ovat riippumattomat katselmukset (S1, R13) ja WSL:n
-ASan/UBSan-portti jokaisen yhdistämisen jälkeen. Native 14 kokonaisuutta / 328 testiä, GCC 8.4
-OK, `esp32dev_adc` kääntyy (RAM 36,5 %, flash 70,0 %).
+ASan/UBSan-portti jokaisen yhdistämisen jälkeen. Native 14 kokonaisuutta / 329 testiä, GCC 8.4
+OK, `esp32dev_adc` kääntyy (RAM 36,5 %, flash 70,1 %), golden-toistot 4/4.
 
 Käyttäjälle: [kayttoohje.md](kayttoohje.md) (mekaanikon ohje, S6). Moottorin tiedot lähteineen:
 [bf50a-huoltotiedot.md](bf50a-huoltotiedot.md) (D16).
@@ -17,7 +17,7 @@ Käyttäjälle: [kayttoohje.md](kayttoohje.md) (mekaanikon ohje, S6). Moottorin 
 ## Oraakkelit
 
 ```sh
-cd firmware && pio test -e native                         # 14 kokonaisuutta, 328 testiä
+cd firmware && pio test -e native                         # 14 kokonaisuutta, 329 testiä
 bash tools/check_core_gcc84.sh                            # core-headerit xtensa GCC 8.4:llä
 cd firmware && pio run -e esp32dev_adc -t upload          # protolevy, oikeat anturit
 python tools/embed_web.py --check                         # web/index.html == src/web/web_page.h
@@ -88,7 +88,7 @@ kiskomonitoria (GPIO39) ja pinnien 100 nF:n kondensaattoreita ei ole.
 | WP-16 BF50A (D16) | [bf50a-huoltotiedot.md](bf50a-huoltotiedot.md) lähteineen; **master-oletus SYL 3** (Hondan perus = alin kaasutin); tulpat 5×10 mm (M5), tyhjäkäynti 950 ± 50 rpm, SE-letkut kiinni, korotetut kierrokset vain testisäiliössä tai vesillä; neuvo "irrota letkut" → "sammuta moottori ja paina Nollaa"; "Napauta kahdesti" |
 | S1 katselmus | WP-9/WP-10: ei korkeita löydöksiä ([katselmukset/2026-10-31-status-wp9-wp10.md](katselmukset/2026-10-31-status-wp9-wp10.md)); jatkot yöjonossa S11, S12 |
 | R13 katselmus | WP-13: 28 kirjastoväitettä tarkistettu 3.12.1/3.5.0-lähteestä, ei korkeita löydöksiä; laitetestin tarkistuslista ([katselmukset/2026-10-31-wp13-hal-kirjastot.md](katselmukset/2026-10-31-wp13-hal-kirjastot.md)); jatkot S14, S15 |
-| S2 DSP | S2_TULOS |
+| S2 DSP | voimakas paluuaalto: tasanne osui Schmittin laukaisutasolle, ja syklin raja hyppi; tasanne tunnistetaan viipymisestä ja laukaisu siirretään. base −30 / peak 40 / 900 rpm: lukitus 0/8 → 8/8, rpm-hajonta 18–23 % → 0,9 %; joutokäynti 600–1200 rpm × peak 0–60 kaikki 16/16 siementä. Aiemmat 115 mittausriviä ja WP-2c-penkki identtiset; RAM +64 t, flash +544 t. Uusi golden `sim_return_wave_h1`. Viisi `kPlateau*`-vakiota tarkistetaan moottorinauhoituksesta |
 | S6 käyttöohje | [kayttoohje.md](kayttoohje.md): turvallisuus, pikaohje, tilat täsmälleen laitteen teksteinä, vianetsintä; 5 kuvaa |
 | S8 fuzz | `test_fuzz`: 44 000 determinististä tapausta lomakkeille ja nauhoitus-CSV:lle (ASan), ei löydöksiä |
 | S9 config-JSON | `kConfigJsonSize` johdetaan kenttälistasta käännösaikana (5913 t, pahin 5476 t), katto 8192 (`static_assert`) |
@@ -137,7 +137,12 @@ DSP EngineSim-penkissä (16 siementä, ennen → nyt): rpm-pudotus 3000 → 850 
 5. **Omistajan päätettävät:** 31.10.2026 avoimet päätettiin (D15, D16; omistaja delegoi).
    Uusia avoimia: §8:n "mitä UI näyttää" -sarakkeen erot koodiin ja rivin 11 "anturi
    vaihdettu", jota koodi ei tunnista (yöpaketti S13 tuottaa vaihtoehdot).
-6. **DSP ja voimakas paluuaalto:** S2_AVOIN
+6. **DSP, ristivuoto ja paluuaalto yhdessä (S2:n havainto):** `xtalk` 0,3 ja `peak` ≥ 20
+   1500 rpm:ssä antaa rpm:n 2,5–2,8-kertaisena (cv-ehto silti läpi), ja base −30 + xtalk 0,3
+   + peak 60 600–900 rpm:ssä ei anna rpm:ää lainkaan. Vika on vanha (S2 ei muuta sitä).
+   Tasauskanavista ei ole tietoa (D6, SE-letkut puristetaan kiinni, D16), joten ensimmäinen
+   moottorinauhoitus ratkaisee, onko tämä todellinen. Yöpaketti S16. S2 korjasi pelkän
+   paluuaallon (Valmiit-taulukko).
 7. **ESPAsyncWebServer:** `_onDisconnect`in kilpatilanne on auki myös kirjaston mainissa
    (26.10.2026). Aiempi kahden rivin ehdotus (`_lockmq` `_onDisconnect`issa) on R13:n mukaan
    vajaa: lukko on vapautettava ennen `_handleDisconnect`ia, ja `connected()` lukee `_client`in

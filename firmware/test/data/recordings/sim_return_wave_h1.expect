@@ -6,6 +6,9 @@
 #     --seconds 6 --seed 1 --out firmware/test/data/recordings/sim_return_wave_h1.csv
 # Ennen S2:ta (dsp.h, e15646b) syklin raja hyppi imupulssin ja paluuaallon laskun
 # välillä: koko nauhoitus "unstable" (rivi 2), rpm 831 ± 32, ei tuomiota.
+# Odotukset (d) on kirjoitettu SYL 1 -masterille, kuten muissa goldeneissa; D16
+# (31.10.2026) vaihtoi oletuksen SYL 3:een, joten master kiinnitetään.
+set.master=0
 
 lock_min_s=3.0            # D12 / rivi 3: vakaa käynti >= stable_hold_s (3 s) ennen tuomiota
 lock_max_s=5.0            # mitattu 4,32 s, sama kuin sim_idle_synced (paluuaalto ei hidasta); ehdotus: vara 0,7 s (6 s:n nauhoitus)

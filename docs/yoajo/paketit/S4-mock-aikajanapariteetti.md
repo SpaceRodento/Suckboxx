@@ -15,7 +15,10 @@ eroja on löydetty käsin: WP-10 vertasi neljä tilannetta taulukkona, ja ero `b
 ja (b) mockin simulaatiolla ilman HTTP-palvelinta (tuo mockin luokat). Vertaa tilojen
 aikajanat: kussakin skenaariossa tilasarja ja siirtymähetket toleranssilla (esim. ±0,25 s).
 Aloita WP-10:n taulukon neljästä tilanteesta ja lisää rivit 1, 6, 7, 9, 12. Ero raportoidaan
-taulukkona; tunnettu ero (S2) merkitään odotetuksi eroksi viitteineen, ei piiloteta.
+taulukkona; tunnettu ero merkitään odotetuksi eroksi viitteineen, ei piiloteta. S2
+(31.10.2026) korjasi paluuaallon DSP:ssä, joten `base=-30 peak=40` pitäisi nyt täsmätä. Mock
+käyttää simulaattorin valmiita syklirajoja eikä voi toistaa DSP:n syklintunnistuksen vikoja
+(S2:n havainto); esim. `xtalk` + paluuaalto (S16) on siksi odotettu ero.
 Lisää CI:n web-jobiin askel, joka kääntää replayn ja ajaa tarkistuksen.
 
 ## Pysyttävä totena
