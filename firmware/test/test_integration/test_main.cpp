@@ -140,12 +140,23 @@ struct Watch {
   int bars_while_unstable = 0; // rivi 2: palkit piilossa
 };
 
+// Odotukset (rivi 12 kanavalla 0, neuvotekstien "kuin SYL 1") on kirjoitettu
+// SYL 1 -masterille, joka oli D7:n oletus. D16 (31.10.2026) vaihtoi oletuksen
+// SYL 3:een, joten SYL 1 kiinnitetään eksplisiittisesti: testit testaavat samaa
+// kuin ennen. Oletusta itseään testaa test_processor (test_default_master_is_syl3_D16).
+Config baseConfig() {
+  Config c;
+  c.status.master = 0;
+  return c;
+}
+
 struct Bench {
   Processor p;
   EngineSim sim;
   uint32_t n = 0;
 
   explicit Bench(RawSample* mem = g_mem) : p(mem, kRingCap) {
+    TEST_ASSERT_TRUE(p.configure(baseConfig()));
     sim.configure(SimParams(), p.config().sensor);
   }
 
@@ -835,7 +846,7 @@ void test_row12_master_fault_then_switch_master() {
   Bench b;
   settleSynced(b, withErr(0.0f, 0.0f, 0.0f));
   SimParams s = b.params();
-  s.fault[0] = SimFault::HoseOff;  // master = SYL 1 (D7 oletus)
+  s.fault[0] = SimFault::HoseOff;  // master = SYL 1 (baseConfig)
   b.set(s);
   const Watch w = b.watch(5.0f, SyncState::FaultMaster);
   report("rivi 12: masterin letku irti -> VIKA", w.settle);
@@ -936,7 +947,7 @@ void test_D11_never_synced_without_zero() {
   // (b) Automaattinen nollaus pois (S5a): sammutuskaan ei nollaa.
   {
     Bench b;
-    Config c;
+    Config c = baseConfig();
     c.status.auto_zero = false;
     TEST_ASSERT_TRUE(b.p.configure(c));
     SimParams s = withErr(0.0f, 0.2f, -0.2f);
@@ -948,7 +959,7 @@ void test_D11_never_synced_without_zero() {
     b.set(s);
     const Watch w = b.watch(10.0f, SyncState::Near);
     TEST_ASSERT_EQUAL_INT(0, static_cast<int>(w.seen & bit(SyncState::Synced)));
-    TEST_ASSERT_EQUAL_STRING("Nollaus puuttuu – irrota letkut ja tee nollaus", b.st().advice);
+    TEST_ASSERT_EQUAL_STRING("Nollaus puuttuu – sammuta moottori ja paina Nollaa", b.st().advice);
     // Käsin tehty nollaus ilmanpaineessa avaa vihreän. Odotetaan taso-EMA:n
     // asettuminen: WP-9:n vakausportti (1 s:n vaihteluväli < 0,1 kPa) täyttyy
     // -55 kPa:sta ~4,1 s sammutuksen jälkeen (test_wp9_manual_zero_*), joten
@@ -1044,7 +1055,7 @@ void test_R4_calibration_removes_sensor_errors() {
   float uncal_err = 0.0f;
   {
     Bench u;
-    Config c;
+    Config c = baseConfig();
     c.status.auto_zero = false;
     TEST_ASSERT_TRUE(u.p.configure(c));
     u.set(engine);
@@ -1345,7 +1356,7 @@ void test_wp9_auto_zero_after_shutdown_timeline() {
 // 2,0 s -> 1,01; purkautuva alipaine -10 kPa (tau 2 s, ei pulsseja) 2,5 s ->
 // 4,1 kPa. D2:n vihreä raja on 1,5 kPa.
 void test_wp9_manual_zero_waits_for_settled_level() {
-  Config c;
+  Config c = baseConfig();
   c.status.auto_zero = false;   // vain käsin
   {
     Bench b;
@@ -1477,7 +1488,7 @@ void test_wp9_drift_ignores_rpm_noise() {
     int flagged = 0;
     for (uint32_t seed = 1; seed <= 4; ++seed) {
       Bench b;
-      Config c;
+      Config c = baseConfig();
       if (filt == 0) c.status.drift_tau_s = 0.0f;
       TEST_ASSERT_TRUE(b.p.configure(c));
       SimParams s;
@@ -1540,7 +1551,7 @@ void test_wp9_drift_ignores_rpm_noise() {
 void test_wp9_hose_fault_stable_at_threshold() {
   for (int hyst = 0; hyst < 2; ++hyst) {
     Bench b;
-    Config c;
+    Config c = baseConfig();
     if (hyst == 0) c.status.hose_hyst_kpa = 0.0f;
     TEST_ASSERT_TRUE(b.p.configure(c));
     SimParams s = withErr(0.0f, 0.0f, 0.0f);

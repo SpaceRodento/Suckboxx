@@ -4,8 +4,11 @@
 #   tools/replay/build/replay --sim rpm=900 err2=2 noise=4 --seconds 8 \
 #     --seed 2 --out firmware/test/data/recordings/sim_near_syl2.csv
 # noise=4 mV kuten sim_idle_synced (jatko.md, 31.10.2026). zero_valid=1, gain_valid=0.
+# Odotukset (d, worst_ch) on kirjoitettu SYL 1 -masterille, joka oli D7:n oletus.
+# D16 (31.10.2026) vaihtoi oletuksen SYL 3:een, joten master kiinnitetään.
+set.master=0
 
-lock_min_s=3.0            # D12 / rivi 4a: vakaa >= stable_hold_s ennen tuomiota
+lock_min_s=3.0           # D12 / rivi 4a: vakaa >= stable_hold_s ennen tuomiota
 lock_max_s=6.0            # kuten sim_idle_synced (test_integration test_row2)
 never_states=synced,fault_sensor,fault_hose,fault_master   # D2: 2 kPa ei ole koskaan vihreä; §8: ehjät kanavat
 

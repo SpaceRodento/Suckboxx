@@ -76,6 +76,17 @@ struct Feed {
 int S(SyncState s) { return static_cast<int>(s); }
 int R(CalResult r) { return static_cast<int>(r); }
 
+// Masteria koskevat odotukset on kirjoitettu SYL 1 -masterille, joka oli D7:n
+// oletus. D16 (31.10.2026) vaihtoi oletuksen SYL 3:een, joten SYL 1 kiinnitetään
+// eksplisiittisesti: testit testaavat samaa kuin ennen. configure on lataus eikä
+// käyttäjän muutos, joten takeConfigDirty ei nouse.
+void pinSyl1Master(Processor& p) {
+  Config c = p.config();
+  c.status.master = 0;
+  TEST_ASSERT_TRUE(p.configure(c));
+  TEST_ASSERT_EQUAL_INT(0, p.master());
+}
+
 bool utf8Valid(const char* s) {
   const unsigned char* q = reinterpret_cast<const unsigned char*>(s);
   while (*q) {
@@ -508,8 +519,45 @@ void test_reset_gain_keeps_zero_point() {
 // Master (D7) ja sen lomake
 // ---------------------------------------------------------------------------
 
+// D7/D16 (31.10.2026): oletusmaster on SYL 3 = BF50A:n alin kaasutin, joka on
+// Hondan synkronoinnin perus (docs/bf50a-huoltotiedot.md: Carburetion Manual
+// s. 7-13, luokka A). Processor ei kutsu configurea luodessaan, joten ketju
+// types.h -> StatusMachinen konstruktori -> neuvoteksti lukitaan päästä päähän.
+// Lopuksi Palauta oletukset (POST /api/config/reset) vie SYL 1:stä SYL 3:een:
+// sama tilanne kuin laitteella, jonka NVS:ssä on vanha SYL 1.
+void test_default_master_is_syl3_D16() {
+  Processor p(g_mem, kRingCap);
+  TEST_ASSERT_EQUAL_INT(2, p.config().status.master);
+  TEST_ASSERT_EQUAL_INT(2, p.master());
+  // SYL 1 imee 4 kPa syvemmin kuin muut: d = mean_SYL3 - mean_SYL1 = +4 -> avaa (D3).
+  EngineSim sim;
+  SimParams sp;
+  sp.sync_err_kpa[0] = -4.0f;
+  sim.configure(sp, sbx::SensorParams());
+  for (uint32_t n = 1; n <= 6000u; ++n) {
+    p.push(sim.next());
+    if (n % 50 == 0) p.tick(static_cast<float>(n) / 1000.0f);
+  }
+  const sbx::StatusResult& r = p.status();
+  TEST_ASSERT_TRUE_MESSAGE(r.show_verdict, r.advice);
+  TEST_ASSERT_EQUAL_INT(0, r.worst_ch);
+  TEST_ASSERT_EQUAL_FLOAT(0.0f, r.vac_delta_kpa[2]);   // master = nollataso
+  TEST_ASSERT_GREATER_THAN_FLOAT(3.5f, r.vac_delta_kpa[0]);
+  const char* head = "SYL 1: avaa läppää – imee ";
+  const char* tail = " kPa enemmän kuin SYL 3";
+  const size_t al = std::strlen(r.advice);
+  const size_t tl = std::strlen(tail);
+  TEST_ASSERT_TRUE_MESSAGE(std::strncmp(r.advice, head, std::strlen(head)) == 0, r.advice);
+  TEST_ASSERT_TRUE_MESSAGE(al > tl && std::strcmp(r.advice + al - tl, tail) == 0, r.advice);
+  // Palauta oletukset: tallennettu SYL 1 -> SYL 3.
+  TEST_ASSERT_TRUE(p.setMaster(0));
+  p.resetConfig();
+  TEST_ASSERT_EQUAL_INT(2, p.master());
+}
+
 void test_set_master_keeps_dsp_and_restarts_stability_D7() {
   Processor p(g_mem, kRingCap);
+  pinSyl1Master(p);
   EngineSim sim;
   sim.configure(SimParams(), sbx::SensorParams());
   uint32_t n = 0;
@@ -550,6 +598,7 @@ void test_set_master_keeps_dsp_and_restarts_stability_D7() {
 
 void test_master_form_strict_channel() {
   Processor p(g_mem, kRingCap);
+  pinSyl1Master(p);
   char err[sbx::kFormErrLen];
   const FormPair ok2[] = {{"ch", "2"}};
   TEST_ASSERT_TRUE(p.applyMasterForm(ok2, 1, err, sizeof(err)));
@@ -678,6 +727,7 @@ void test_config_form_error_texts_fit_and_stay_utf8() {
 
 void test_configure_rejects_invalid_config() {
   Processor p(g_mem, kRingCap);
+  pinSyl1Master(p);
   Config c;
   c.status.tol_green_kpa = 4.0f;  // > tol_yellow_kpa 3 (D2)
   TEST_ASSERT_FALSE(p.configure(c));
@@ -717,9 +767,10 @@ void test_conversion_change_invalidates_zero_D11() {
 void test_reset_config_and_config_json() {
   Processor p(g_mem, kRingCap);
   char err[sbx::kFormErrLen];
-  const FormPair form[] = {{"tol_green_kpa", "1.1"}, {"master", "2"}, {"push_rate_hz", "10"}};
+  // master "0": eri kuin oletus SYL 3 (D16), jotta palautus näkyy alla.
+  const FormPair form[] = {{"tol_green_kpa", "1.1"}, {"master", "0"}, {"push_rate_hz", "10"}};
   TEST_ASSERT_TRUE(p.applyConfigForm(form, 3, err, sizeof(err)));
-  TEST_ASSERT_EQUAL_INT(2, p.master());
+  TEST_ASSERT_EQUAL_INT(0, p.master());
   TEST_ASSERT_TRUE(p.takeConfigDirty());
   // GET /api/config = configToJson(config()) (§4.4).
   static char a[sbx::kConfigJsonSize];
@@ -731,10 +782,10 @@ void test_reset_config_and_config_json() {
   TEST_ASSERT_TRUE(std::strcmp(a, b) == 0);
   TEST_ASSERT_NOT_NULL(std::strstr(a, "\"key\":\"tol_green_kpa\""));
   TEST_ASSERT_NOT_NULL(std::strstr(a, "\"value\":1.1}"));
-  // POST /api/config/reset: oletukset, master SYL 1 (D7), pysyvä muutos.
+  // POST /api/config/reset: oletukset, master SYL 3 (D7/D16), pysyvä muutos.
   p.resetConfig();
   TEST_ASSERT_FLOAT_WITHIN(1e-6f, 1.5f, p.config().status.tol_green_kpa);
-  TEST_ASSERT_EQUAL_INT(0, p.master());
+  TEST_ASSERT_EQUAL_INT(2, p.master());
   TEST_ASSERT_EQUAL_INT(15, p.config().push_rate_hz);
   TEST_ASSERT_TRUE(p.takeConfigDirty());
 }
@@ -848,6 +899,7 @@ int main() {
   RUN_TEST(test_gain_second_start_refused);
   RUN_TEST(test_gain_capture_aborted_by_configure);
   RUN_TEST(test_reset_gain_keeps_zero_point);
+  RUN_TEST(test_default_master_is_syl3_D16);
   RUN_TEST(test_set_master_keeps_dsp_and_restarts_stability_D7);
   RUN_TEST(test_master_form_strict_channel);
   RUN_TEST(test_config_form_applies_all_pairs);

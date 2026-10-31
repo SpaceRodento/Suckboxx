@@ -6,6 +6,9 @@
 # noise=4 mV: penkkitestin kohina puhelin yhdistettynä 3,8–4,1 mV RMS (jatko.md, 31.10.2026).
 # Otsakkeessa zero_valid=1 ja gain_valid=0 (replay --sim -oletus, docs/firmware.md §6.1).
 # Toisto alkaa kylmästä Processorista käyvän moottorin keskeltä.
+# Odotukset (d) on kirjoitettu SYL 1 -masterille, joka oli D7:n oletus. D16
+# (31.10.2026) vaihtoi oletuksen SYL 3:een, joten master kiinnitetään.
+set.master=0
 
 lock_min_s=3.0            # D12 / rivi 3: vakaa käynti >= stable_hold_s (3 s) ennen tuomiota
 lock_max_s=6.0            # rivi 2 -> 3: lukitus + rpm-historia + 3 s + vara (test_integration test_row2)

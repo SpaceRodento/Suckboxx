@@ -9,7 +9,7 @@ void test_defaults_match_design_doc() {
   sbx::StatusParams sp;
   TEST_ASSERT_FLOAT_WITHIN(1e-6f, 1.5f, sp.tol_green_kpa);   // D2
   TEST_ASSERT_FLOAT_WITHIN(1e-6f, 3.0f, sp.tol_yellow_kpa);  // D2
-  TEST_ASSERT_EQUAL_UINT8(0, sp.master);                     // D7
+  TEST_ASSERT_EQUAL_UINT8(2, sp.master);                     // D7/D16: SYL 3
   sbx::SensorParams sens;
   TEST_ASSERT_FLOAT_WITHIN(1e-6f, 2700.0f, sens.v_zero_mv);
   TEST_ASSERT_GREATER_THAN(sens.fault_lo_mv, sens.fault_hi_mv);

@@ -70,7 +70,7 @@ REBOOT_S = 1.5          # lähteen vaihdon "uudelleenkäynnistys"
 # ---------------------------------------------------------------------------
 G_SYNC, G_SIG, G_SENS, G_SYS = "Synkronointi", "Signaali", "Anturi", "Järjestelmä"
 CONFIG_FIELDS = [
-    ("master", "u8", 0, 2, 0, G_SYNC, "", "Master-sylinteri (0 = SYL 1, 1 = SYL 2, 2 = SYL 3)"),
+    ("master", "u8", 0, 2, 2, G_SYNC, "", "Master-sylinteri (0 = SYL 1, 1 = SYL 2, 2 = SYL 3)"),
     ("tol_green_kpa", "float", 0.1, 10.0, 1.5, G_SYNC, "kPa", "Synkronoitu, kun ero enintään"),
     ("tol_yellow_kpa", "float", 0.2, 20.0, 3.0, G_SYNC, "kPa", "Lähellä, kun ero enintään"),
     ("off_kpa", "float", 0.5, 20.0, 5.0, G_SYNC, "kPa", "Ei signaalia: kaikki kanavat alle"),
@@ -895,7 +895,7 @@ class StatusMachine:
                 r["head"] = "Lähellä – kalibroimaton"
                 r["advice"] = ("Nollaus puuttuu – sammuta moottori hetkeksi, laite nollaa itse"
                                if p["auto_zero"] else
-                               "Nollaus puuttuu – irrota letkut ja tee nollaus")
+                               "Nollaus puuttuu – sammuta moottori ja paina Nollaa")
             return
         r["state"] = "near" if s <= p["tol_yellow_kpa"] else "out_of_sync"
         head = "Lähellä" if r["state"] == "near" else "Ei synkronissa"
@@ -1523,6 +1523,11 @@ def switch_keys(src, func):
 def headless_snapshot(sim_pairs, seconds, seed=1):
     """Mock ilman säikeitä ja seinäkelloa: näytteet ajetaan suoraan (deterministinen)."""
     dev = Device(seed, False, False)
+    # Kuten test_snapshot:n Rig: master kiinnitetty SYL 1:een (D7:n vanha oletus), koska
+    # kShapeAdvicen act-odotus on kirjoitettu sille. Oletus on SYL 3 (D16).
+    res = dev.api_master([("ch", "0")])
+    if not res["ok"]:
+        raise ValueError(res["err"])
     if sim_pairs:
         res = dev.api_sim_set(sim_pairs)
         if not res["ok"]:

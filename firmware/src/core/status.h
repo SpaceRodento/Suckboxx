@@ -573,7 +573,8 @@ class StatusMachine {
   // otsikon vaihtoa / 8 x 60 s (~1,5 Hz). Taso-EMA:n vaihteluväli 55 s:n aikana
   // 0,024 kPa (2 mV RMS) / 0,047 kPa (4 mV RMS, mitattu laitteella puhelin
   // yhdistettynä); oletus 0,2 kPa on > 4 x tämä ja kattaa ADC:n yksittäiset
-  // ±90 mV:n piikit (EMA:ssa ~0,007 kPa / piikki). EHDOTUS, ei päätöslokissa.
+  // ±90 mV:n piikit (EMA:ssa ~0,007 kPa / piikki). Hyväksytty alustavasti
+  // 31.10.2026 (D15).
   float hoseLimit(int i) const {
     return p_.hose_off_kpa + (hose_latched_[i] ? p_.hose_hyst_kpa : 0.0f);
   }
@@ -642,7 +643,11 @@ class StatusMachine {
           writeText(r.advice, sizeof(r.advice),
                     "Nollaus puuttuu – sammuta moottori hetkeksi, laite nollaa itse");
         } else {
-          writeText(r.advice, sizeof(r.advice), "Nollaus puuttuu – irrota letkut ja tee nollaus");
+          // Ei "irrota letkut": tuomio näkyy vain moottorin käydessä, ja käyvästä
+          // moottorista irrotettu letku päästää imusarjaan vuotoilmaa. Sammuneen
+          // moottorin imusarja on ilmanpaineessa, joten nollaus onnistuu letkut kiinni.
+          writeText(r.advice, sizeof(r.advice),
+                    "Nollaus puuttuu – sammuta moottori ja paina Nollaa");
         }
       }
       return;
@@ -689,7 +694,7 @@ class StatusMachine {
   // 1,7 %, 20 rpm / 2 s ei kertaakaan; 850 rpm:llä 0 % kuten ennenkin (5 %:n
   // jitterillä 1,8 % -> 0,2 %). Hinta: 60 rpm / 2 s tunnistuu 850 rpm:llä
   // keskimäärin 3,07 s:ssa (ennen 2,49 s), 3000 rpm:llä 2,38 s (1,71 s, mutta
-  // liputettuna vain 75 % ajasta, nyt 94 %). EHDOTUS.
+  // liputettuna vain 75 % ajasta, nyt 94 %). Hyväksytty alustavasti 31.10.2026 (D15).
   // Diskretointi olettaa rpm:n lineaariseksi päivitysten välillä (first-order
   // hold), jolloin ramppi suodattuu tarkasti myös epätasaisella dt:llä.
   bool updateDrift(const RpmEstimate& e, float now) {

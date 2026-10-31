@@ -77,8 +77,9 @@ FORM_ORDER = [("engine_on", 0), ("rpm", 0), ("jitter", 4), ("base", 2), ("err1",
 
 # firmware/src/core/types.h (SensorParams, StatusParams), engine_sim.h
 SAT_MV = 2680          # rivi 10
-FAULT_LO_MV = 100      # rivi 7
-FAULT_HI_MV = 3150
+FAULT_LO_MV = 150      # rivi 7 (D15)
+FAULT_HI_MV = 2950
+MASTER = 2             # D7/D16: oletus SYL 3 (0-pohjainen kuten types.h)
 OFF_KPA = 5.0          # D10: lepotilan tunnistus ennen nollausta
 SENSOR_ACC_KPA = 2.0   # R4: anturin oma tarkkuus ±2 kPa
 HOSE_OFF_KPA = 2.0     # rivi 6
@@ -1073,7 +1074,7 @@ def form_string(params: dict) -> tuple[str, list[str]]:
 def fit_recording(path: str | Path, start: float | None = None, end: float | None = None,
                   cal_mode: str = "header", zero_from: str | Path | None = None,
                   sat_mv: float = SAT_MV, force_rest: bool = False,
-                  band: tuple[float, float] = RES_BAND, master: int = 0) -> dict:
+                  band: tuple[float, float] = RES_BAND, master: int = MASTER) -> dict:
     rec = load_recording(path, start, end)
     zrec = load_recording(zero_from) if zero_from else None
     cal = calibration(rec, cal_mode, zrec)
@@ -1322,8 +1323,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="analysoi lepotilana, vaikka pulssia näyttäisi olevan")
     ap.add_argument("--res-band", type=float, nargs=2, metavar=("LO", "HI"),
                     default=list(RES_BAND), help="resonanssin hakukaista Hz (oletus 50 300)")
-    ap.add_argument("--master", type=int, choices=[1, 2, 3], default=1,
-                    help="kanavaerojen viite (D7, oletus SYL 1)")
+    ap.add_argument("--master", type=int, choices=[1, 2, 3], default=MASTER + 1,
+                    help=f"kanavaerojen viite (D7/D16, oletus SYL {MASTER + 1} kuten laite)")
     args = ap.parse_args(argv)
     lo, hi = args.res_band
     if not 0 < lo < hi < 0.5 * 1000:

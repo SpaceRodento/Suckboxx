@@ -188,6 +188,14 @@ struct Rig {
   EngineSim sim;
   uint32_t n = 0;
 
+  // Odotukset ("master":0, neuvojen kanavat) on kirjoitettu SYL 1 -masterille,
+  // joka oli D7:n oletus. D16 (31.10.2026) vaihtoi oletuksen SYL 3:een, joten
+  // SYL 1 kiinnitetään eksplisiittisesti: testit testaavat samaa kuin ennen.
+  Rig() {
+    Config c;
+    c.status.master = 0;
+    TEST_ASSERT_TRUE(p.configure(c));
+  }
   void begin(const SimParams& sp) { sim.configure(sp, p.config().sensor); }
   void run(float seconds) {
     const int k = static_cast<int>(seconds * 1000.0f + 0.5f);
