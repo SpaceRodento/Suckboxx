@@ -1500,6 +1500,33 @@ void test_rpm_drop_every_channel_recovers() {
   }
 }
 
+void test_rpm_step_up_keeps_lock() {
+  // Kaasu auki hetkessä 850 -> 6000 rpm (alipaine -55 -> -15 kPa, syvyys 20 ->
+  // 8 kPa). Suodatettu pulssi kutistuu kerralla (6000 rpm:llä 40 Hz:n suodin
+  // vaimentaa sen ~0,4-kertaiseksi), joten uuden käynnin ensimmäiset omat
+  // pulssit ovat alle 0,1 x edellinen oma syvyys. kOwnFloor koskee vain vian
+  // jälkeen asettuneen kanavan ensimmäistä omaa pulssia: jos se koskisi jokaista,
+  // has_pulse putoaisi (kierroksen 6 tarkistaja: kaikki ajot, väli 1060 ms).
+  SimRun worst;
+  for (int xi = 0; xi < 3; ++xi) {
+    for (int ph = 0; ph < 3; ++ph) {
+      sbx::SimParams p;
+      p.rpm = 850.0f;
+      p.base_kpa = -55.0f;
+      p.depth_kpa = 20.0f;
+      p.xtalk = 0.25f * static_cast<float>(xi);
+      p.seed = static_cast<uint32_t>(1 + ph);
+      SimOpts o = phased(850.0f, ph, 3, 0, 3000);
+      worstOf(worst, runSim(p, o, Ramp{850.0f, 6000.0f, -55.0f, -15.0f, 20.0f, 8.0f, o.t0, 0}));
+    }
+  }
+  msg("850 -> 6000 rpm hetkessä (syvyys 20 -> 8 kPa): väärät %.0f, väli %.0f ms", static_cast<double>(worst.wrong),
+      static_cast<double>(worst.max_gap));
+  TEST_ASSERT_FALSE_MESSAGE(worst.dropped, "has_pulse putosi");
+  TEST_ASSERT_EQUAL_INT(0, worst.wrong);
+  TEST_ASSERT_TRUE(worst.finite);
+}
+
 void test_throttle_blip_engine_sim() {
   // Kaasunlisäys tyhjäkäynniltä ja paluu (synkronoinnissa käyttäjä blippaa ja
   // odottaa tyhjäkäyntiä): 850 -> 1500...3000 rpm, nousu 150/300/600 ms.
@@ -2035,6 +2062,8 @@ void test_reconnected_hose_is_not_a_witness() {
       {950.0f, 2500.0f, 2, 150, 0.3f, 3, 2531, -60, 50, 0},   {950.0f, 2500.0f, 2, 150, 0.5f, 4, 2562, -60, 50, 1},
       {850.0f, 3000.0f, 1, 150, 0.3f, 5, 2539, 0, 400, 1},    {950.0f, 3000.0f, 0, 150, 0.3f, 6, 2519, -60, 50, 2},
       {850.0f, 1500.0f, 0, 300, 0.0f, 8, 2583, -60, 150, 0},  {850.0f, 1500.0f, 0, 300, 0.3f, 3, 2630, -60, 150, 2},
+      // Pudotusikkuna keskikohdan yli (kierroksen 6 tarkistajan toisto): 615 ms.
+      {850.0f, 3000.0f, 0, 150, 0.0f, 2, 2518, -250, 250, 2},
   };
   SimRun worst, worst5;
   for (const Case& k : cases) {
@@ -2107,6 +2136,13 @@ void test_single_witness_needs_rhythm() {
       // vaiennut heikko kanava -> kaikki elävät todistajat (ilman tauko-ehtoa 2T).
       {3000.0f, 0.3f, 0.01f, 20.0f, 7, 2575, 2, -1, 0, 850.0f, 0, 0},
       {3000.0f, 0.3f, 0.01f, 12.0f, 8, 2524, 2, -1, 2, 850.0f, 0, 0},
+      // Tauon jälkeinen sykli rytmissä (kierroksen 6 tarkistajan toisto):
+      // letku 3 irti, pikablippi 850 -> 2000, xtalk 0 ja 0,15 - kanava 1
+      // kirjasi 2T:n. Edellinen oma väli oli yksi jakso, todistajan vastapaikka
+      // osui 0,05:een, mutta paikka 1/3 oli 0,099 sivussa (kiihdytys siirsi
+      // säilyneen merkin 1/6:sta).
+      {2000.0f, 0.0f, 0.01f, 12.0f, 1, 2537, 1, 2, -1, 850.0f, 0, 0},
+      {2000.0f, 0.15f, 0.01f, 12.0f, 1, 2537, 1, 2, -1, 850.0f, 0, 0},
   };
   SimRun worst;
   for (const Case& k : cases) {
@@ -2308,6 +2344,7 @@ void test_short_fault_keeps_healthy_channels() {
     int ch;        // vikaantuva kanava
     int fault;     // 0 = anturi alas, 1 = anturi ylös, 2 = letku irti
     long off, dur;  // vika [t0 + off, t0 + off + dur)
+    float idle = 850.0f;  // tuplablipin joutokäynti
   };
   const Case cases[] = {
       {0, 600.0f, 0.0f, 4, 2576, 0, 0, 0, 300, 150},   // 1404 ms (7 jaksoa)
@@ -2320,6 +2357,22 @@ void test_short_fault_keeps_healthy_channels() {
       {1, 3000.0f, 0.5f, 3, 2572, 100, 0, 2, 300, 80},  // 1394 ms
       {1, 3000.0f, 0.5f, 3, 2572, 100, 0, 0, 300, 100},
       {1, 3000.0f, 0.5f, 1, 2622, 100, 0, 0, 450, 20},  // 1400 ms
+      // Kierroksen 6 tarkistajan toistot: vika kaasunlisäyksen lopussa jättää
+      // terveen kanavan yhden todistajan varaan juuri, kun pulssit kasvavat
+      // takaisin (12,96 -> 20,38 kPa); rajapulssien samankokoisuus hylkäsi
+      // oikean syklin, ja seuraavat olivat 2T:itä (1404 ms, has_pulse putosi).
+      {1, 3000.0f, 0.5f, 5, 2523, 0, 1, 2, 300, 20},
+      {1, 3000.0f, 0.5f, 5, 2523, 0, 1, 1, 300, 50},
+      {1, 3000.0f, 0.5f, 1, 2622, 0, 0, 0, 300, 100},  // 985 ms
+      // Mutaatiotestit (kierroksen 6 tarkistajan toistot):
+      //  - 8 näytteen asettuminen anturivian jälkeen: väärä sykli terveellä kanavalla;
+      {1, 2500.0f, 0.0f, 2, 2518, 0, 2, 0, 450, 80},
+      //  - letku irti 400 ms, pudotusikkuna keskikohdan yli: 798 ms;
+      {1, 1500.0f, 0.0f, 1, 2509, 0, 1, 2, 300, 400},
+      //  - asettuvan kanavan ennen vikaa mitattu pulssi ei äänestä: 1299 ms ja
+      //    has_pulse putosi; kOwnFloor 0,3: sama (anturi ylös 250 ms).
+      {1, 3000.0f, 0.5f, 2, 2516, 100, 2, 0, 450, 250, 950.0f},
+      {1, 3000.0f, 0.5f, 2, 2516, 100, 2, 1, 300, 250, 950.0f},
   };
   SimRun worst;
   for (const Case& k : cases) {
@@ -2351,7 +2404,8 @@ void test_short_fault_keeps_healthy_channels() {
     } else {
       o.t_end = o.t0 + 2 * (450 + k.gap) - k.gap;
       o.total = o.t_end + 2000;
-      r = runSim(p, o, Blips{k.rpm, o.t0, 150, 0, 300, 2, 850.0f, 12.0f, k.gap});
+      p.rpm = k.idle;
+      r = runSim(p, o, Blips{k.rpm, o.t0, 150, 0, 300, 2, k.idle, 12.0f, k.gap});
       lim = (k.xt > 0.4f ? 750 : 450) + 150;
     }
     worstOf(worst, r);
@@ -3099,6 +3153,7 @@ int main() {
   RUN_TEST(test_rpm_step_down_keeps_lock);
   RUN_TEST(test_rpm_ramp_and_throttle_chop);
   RUN_TEST(test_rpm_drop_every_channel_recovers);
+  RUN_TEST(test_rpm_step_up_keeps_lock);
   RUN_TEST(test_throttle_blip_engine_sim);
   RUN_TEST(test_throttle_blip_tracks_rpm_and_vacuum);
   RUN_TEST(test_vacuum_steps_with_crosstalk_engine_sim);
