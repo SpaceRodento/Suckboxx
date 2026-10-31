@@ -43,6 +43,9 @@
 //    (väli ~3 jaksoa); has_pulse ei putoa, eikä väärää jaksoa hyväksytä.
 //  - Kohinasuoja: hyst_min_kpa 0,3 kestää ~0,4 kPa RMS raakakohinan ilman
 //    yhtään väärää sykliä; 0,6-0,8 kPa:n kohina vaatii ~0,5 (S5a).
+//  - Positiivinen paluuaalto (EngineSim peak 0-60 kPa, depth 20, base -55 ja
+//    -30 eli myös leikkautuvana, 600-3000 rpm): rpm-hajonta ~1-2 % (jitter 1
+//    %) kaikilla 16 siemenellä joutokäyntialueella; ks. kPlateauBand (S2).
 
 #include <cmath>
 #include <cstdint>
@@ -210,6 +213,33 @@ class Dsp {
   // soiminen kestää pidempään kuin prime():n jättämä (alitus + paluu ~50 ms
   // @ 40 Hz).
   static constexpr uint32_t kStepSettleFactor = 2;
+  // Paluuaallon tasanne (S2, H1). Positiivinen paluuaalto heti imupulssin
+  // jälkeen tekee syklistä kaksiportaisen: huippu -> lasku tasanteelle ->
+  // pitkä tasanne -> imupulssi pohjaan. Laukaisutaso D = (A + h) / 2 (0,65 x
+  // A) on kiinteä osuus huipusta, joten paluuaallon ja pulssin suhteella
+  // ~1,5-2,2 tasanne osuu juuri laukaisutasolle. Silloin paluuaallon laskun
+  // alitus (suotimen ~10 %:n ylitys tasanteen alle) laukaisi rajan vain
+  // osassa sykleistä, ja raja hyppi imupulssin ja paluuaallon laskun välillä
+  // (~0,4 T): rpm-hajonta 15-44 %, "Käynti epätasainen" (rivi 2), ei tuomiota.
+  // Tasanne tunnistetaan viipymisestä: jos edellisellä raja-raja-välillä
+  // signaali oli vähintään kPlateauDwell välistä normaalin laukaisutason
+  // +-kPlateauBand x A -kaistalla, laukaisu siirretään tasanteen ja pohjan
+  // puoliväliin (imupulssin keskelle), jolloin tasanne on reilusti sen
+  // yläpuolella. Tasaisen pulssin reuna ylittää kaistan alle 0,02 jaksossa
+  // ja sinimäinen (suodatettu, suuret kierrokset) ~0,16:ssa, tasanne ~0,6:ssa.
+  // Kun tasanne on syvemmällä kuin kPlateauMaxRel, imupulssi on liian matala
+  // keskikohdan laukaisulle, ja normaali taso laukeaa paluuaallon laskussa
+  // vähintään ~0,1 x A tasanteen yläpuolella. Pysymiseen kaista ja raja ovat
+  // väljemmät (hystereesi), ettei tila vaihtele: vaihto siirtää rajaa
+  // imupulssin ja paluuaallon välillä. Viipyminen lasketaan pushChannelissa
+  // (virityksen mukaan), arvio ja tilan vaihto onBoundaryssa. Kaikki viisi
+  // ovat S2:n omia ehdotuksia EngineSim-kartoituksesta (peak 0-60, depth
+  // 10-30, xtalk 0-0,3, 600-3000 rpm, 8-16 siementä).
+  static constexpr float kPlateauBand = 0.12f;
+  static constexpr float kPlateauKeepBand = 0.18f;
+  static constexpr float kPlateauDwell = 0.3f;
+  static constexpr float kPlateauMaxRel = 0.74f;
+  static constexpr float kPlateauKeepMaxRel = 0.80f;
   // Rivi 10: saturaatio näkyy 1 s viimeisestä havainnosta.
   static constexpr uint32_t kSatWindowSamples = kSampleRateHz;
 
@@ -382,6 +412,18 @@ class Dsp {
     bool tent = false;
     float tent_int = 0.0f, tent_per = 0.0f, tent_min = 0.0f, tent_amp = 0.0f, tent_dip = 0.0f;
 
+    // Paluuaallon tasanne (ks. kPlateauBand): kuluvan raja-raja-välin näytteet
+    // normaalin laukaisutason kaistalla ja niiden suhteellisten syvyyksien
+    // (run_hi - y) / A summa. plat_r = tasanteen suhteellinen syvyys
+    // huipusta, 0 = ei tasannetta (normaali laukaisutaso). dwell_dis = niistä
+    // virityksen ulkopuolella (tasanne paluuaallon rajan jälkeen). plat_jump =
+    // kuluva väli alkoi paluuaallon rajalta, jolta tila otettiin käyttöön.
+    uint32_t dwell_n = 0;
+    uint32_t dwell_dis = 0;
+    float dwell_r = 0.0f;
+    float plat_r = 0.0f;
+    bool plat_jump = false;
+
     // Syklihistoria. integral/period erikseen, jotta keskiarvo on aikapainotettu
     // eli täsmälleen avg_cycles kokonaisen syklin yli (D1). Laskurit rajaavat
     // käytön, joten reset() ei nollaa taulukoita.
@@ -474,6 +516,9 @@ class Dsp {
     c.since_cycle = 0;
     c.tent = false;
     c.tent_int = c.tent_per = c.tent_min = c.tent_amp = c.tent_dip = 0.0f;
+    c.dwell_n = c.dwell_dis = 0;
+    c.dwell_r = c.plat_r = 0.0f;
+    c.plat_jump = false;
     c.cyc_head = c.cyc_count = 0;
     c.per_head = c.per_count = 0;
     c.sd_rpm = 0.0f;
@@ -529,10 +574,18 @@ class Dsp {
   //    silloin (kaasu), ja pelkkä nousu sisältäisi tason nousun koko
   //    hakuikkunan (pisin jakso, ~0,44 s) ajan. Kylmäkäynnistyksessä haku
   //    käyttää pelkkää nousua (ks. amplitude()).
+  // Tasannetilaan siirtymisen välillä (plat_jump, ~1,7 T, ks. onBoundary)
+  // ensimmäistä tarkennusta ei käytetä: kuluvan segmentin lasku on silloin
+  // paluuaallon huipusta tasanteelle, ja sillä laskettu taso osui
+  // tasanteelle 1,2 T:ssä (mitattu 1500 rpm, base -30, peak 45). Ilman
+  // siirtymävälin käsittelyä test_return_wave_plateau_keeps_lock kaatuu (D3-ero
+  // 0,20 kPa @ 1050 rpm). Muuten myöhästynyt raja purkaa tasannetilan ennen
+  // tätä (pushChannel), ja tarkennus toimii kuten ilman paluuaaltoa.
   float schmittAmplitude(const Chan& c) const {
     const bool lock = locked(c);
     const float amp = amplitude(c, lock || c.pub.has_pulse);
-    if (!lock || static_cast<float>(c.since_boundary) <= (1.0f + kSplitSuspect) * c.ref_period) {
+    if (!lock || c.plat_jump ||
+        static_cast<float>(c.since_boundary) <= (1.0f + kSplitSuspect) * c.ref_period) {
       return amp;
     }
     float recent = c.cur.dd < amp ? c.cur.dd : amp;
@@ -650,6 +703,9 @@ class Dsp {
         c.chain = false;
         c.pending = false;
         c.acc = 0.0f;
+        c.dwell_n = c.dwell_dis = 0;
+        c.dwell_r = c.plat_r = 0.0f;
+        c.plat_jump = false;
         c.x_prev = x;
         c.y_prev = y;
         return;
@@ -679,10 +735,49 @@ class Dsp {
     // Viritys h:lla eikä D:llä, koska alipaineen kasvu kesken pulssin
     // lyhentää seuraavaa nousua askeleen verran - D:n vaatimus ohitti silloin
     // koko seuraavan pulssin.
+    // Tasannetilassa myöhästynyt raja (yli (1 + kSplitSuspect) x jakso,
+    // siirtymisväliä lukuun ottamatta) purkaa tilan: kaasun liikkeessä pulssi
+    // kutistuu tai jakso muuttuu, ja silloin normaali taso ja kutistuvan
+    // pulssin amplitudi (schmittAmplitude) seuraavat paremmin. Mitattu
+    // blippauksessa 850 -> 2500 (16 siementä): pisin sykliväli peak 40:llä
+    // 0,5 -> 0,4 s ja peak 30:llä 0,7 -> 0,65 s tämän ansiosta.
+    if (c.plat_r > 0.0f && !c.plat_jump && locked(c) &&
+        static_cast<float>(c.since_boundary) > (1.0f + kSplitSuspect) * c.ref_period) {
+      c.plat_r = 0.0f;
+    }
     const float amp = schmittAmplitude(c);
     float h = dp_.hyst_frac * amp;
     if (h < dp_.hyst_min_kpa) h = dp_.hyst_min_kpa;
-    const float d = 0.5f * (amp + h);
+    const float d_norm = 0.5f * (amp + h);
+    float d = d_norm;
+    if (c.plat_r > 0.0f) {
+      const float dp = 0.5f * (1.0f + c.plat_r) * amp;  // tasanteen ja pohjan puoliväli
+      if (dp > d) d = dp;
+    }
+
+    // Paluuaallon tasanne (kPlateauBand): viipyminen normaalin laukaisutason
+    // kaistalla, aina normaalia tasoa vasten. Viritettynä tasanne on ennen
+    // imupulssin rajaa: kaista on symmetrinen. Virityksen ulkopuolella
+    // tasanne seuraa paluuaallon laskun rajaa, ja se lasketaan vain
+    // laukaisutason yläpuolelta: silloin raja laukesi pelkästä suotimen
+    // alituksesta ja on epävarma. Tason alla oleva tasanne laukaisee
+    // paluuaallon rajan varmasti, eikä tilaa vaihdeta (vaihto siirtäisi rajaa
+    // ~0,6 T; mitattu 600 rpm, peak 50: laukaisu tasanteella).
+    if (amp > 0.0f) {
+      const float below = c.run_hi - y;
+      bool in_band;
+      if (c.armed) {
+        const float band = (c.plat_r > 0.0f ? kPlateauKeepBand : kPlateauBand) * amp;
+        in_band = below > d_norm - band && below < d_norm + band;
+      } else {
+        in_band = !(c.plat_r > 0.0f) && below > d_norm - kPlateauBand * amp && below < d_norm;
+        if (in_band) ++c.dwell_dis;
+      }
+      if (in_band) {
+        ++c.dwell_n;
+        c.dwell_r += below / amp;
+      }
+    }
 
     if (!c.armed) {
       if (y < c.run_lo) c.run_lo = y;
@@ -741,6 +836,8 @@ class Dsp {
       c.env_from_cycle = false;
       c.pending = false;
       c.tent = false;
+      c.plat_r = 0.0f;  // siirretty taso ei laukea: takaisin normaaliin (kPlateauBand)
+      c.plat_jump = false;
       if (c.since_boundary >= window_n_) {
         c.chain = false;  // näin pitkä väli ei ole kelvollinen jakso
         c.acc = 0.0f;
@@ -772,6 +869,24 @@ class Dsp {
     // jälkeen) plus murto-osien erotus - float-aikaleima menettäisi
     // tarkkuutensa jo tunneissa.
     const uint32_t b_int = n_ - 1u;
+    // Paluuaallon tasanne juuri päättyneeltä väliltä (kPlateauBand). Ketjun
+    // ensimmäinen väli alkaa mielivaltaisesta kohdasta, joten sitä ei arvioida.
+    // Jos tila otetaan käyttöön paluuaallon rajalta (tasanne enimmäkseen
+    // virityksen ulkopuolella), seuraava raja on imupulssissa vasta ~1,7 T:n
+    // päästä: sitä väliä ei arvioida (vrt. next_trusted alla).
+    const bool keep = c.plat_r > 0.0f;
+    c.plat_r = 0.0f;
+    c.plat_jump = false;
+    if (c.chain && c.dwell_n > 0 &&
+        static_cast<float>(c.dwell_n) >= kPlateauDwell * static_cast<float>(c.since_boundary)) {
+      const float r = c.dwell_r / static_cast<float>(c.dwell_n);
+      if (r <= (keep ? kPlateauKeepMaxRel : kPlateauMaxRel)) {
+        c.plat_r = r;
+        c.plat_jump = !keep && 2u * c.dwell_dis > c.dwell_n;
+      }
+    }
+    c.dwell_n = c.dwell_dis = 0;
+    c.dwell_r = 0.0f;
     // Juuri päättyneen syklin amplitudi: nousu syklin pohjasta huippuun, ja
     // lukittuna pienempi siitä ja laskusta edellisen syklin huipusta tämän
     // pohjaan, koska tason askel kasvattaa vain toista (vrt. amplitude()).
@@ -858,7 +973,7 @@ class Dsp {
     c.last_amp = amp;
     c.last_period = period;
     c.fire_top = c.run_hi;  // huippu ennen tätä rajaa
-    c.env_from_cycle = next_trusted;
+    c.env_from_cycle = next_trusted && !c.plat_jump;
     roll(c, y, true);
     c.since_boundary = 0;
     c.b_int = b_int;

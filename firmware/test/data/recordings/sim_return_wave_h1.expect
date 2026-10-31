@@ -1,0 +1,25 @@
+# Synteettinen (EngineSim, ei oikeaa dataa): joutokäynti 900 rpm kevyellä alipaineella
+# (base -30 kPa) ja voimakkaalla positiivisella paluuaallolla (peak 40 kPa, 2 x imupulssi):
+# huippu +10 kPa leikkautuu 2700 mV:iin (H1, rivi 10). Synkronissa kuten sim_idle_synced:
+# d = 0 / -0,3 / +0,4 kPa, spread 0,7 kPa. Luotu 31.10.2026 (S2):
+#   tools/replay/build/replay --sim rpm=900 base=-30 peak=40 err2=0.3 err3=-0.4 noise=4 \
+#     --seconds 6 --seed 1 --out firmware/test/data/recordings/sim_return_wave_h1.csv
+# Ennen S2:ta (dsp.h, e15646b) syklin raja hyppi imupulssin ja paluuaallon laskun
+# välillä: koko nauhoitus "unstable" (rivi 2), rpm 831 ± 32, ei tuomiota.
+
+lock_min_s=3.0            # D12 / rivi 3: vakaa käynti >= stable_hold_s (3 s) ennen tuomiota
+lock_max_s=5.0            # mitattu 4,32 s, sama kuin sim_idle_synced (paluuaalto ei hidasta); ehdotus: vara 0,7 s (6 s:n nauhoitus)
+never_states=fault_sensor,fault_hose,fault_master   # §8: ehjät kanavat; leikkautuminen ei ole anturivika (rivi 7)
+
+from_s=lock
+allowed_states=synced     # rivi 3, D2: spread 0,7 <= 1,5 kPa; ei palaa "unstable"iin (rivi 2, S2)
+final_state=synced
+headline=Synkronoitu      # rivi 3 (status.h, test_row3)
+advice_prefix=Valmis: ero # rivi 3 (test_row3)
+rpm=900                   # rivi 3: tarkkuus 1 % (test_row3_idle_synced)
+rpm_tol=9
+spread_median_min=0.55    # D1/D2: totuus 0,7 kPa ± 0,15 (assertVerdict); leikkautuminen on sama kaikissa kanavissa (rauta.md §1.3)
+spread_median_max=0.85
+spread_p95_max=1.5        # D2: vihreän raja
+flags_never=uncal_zero    # D11: nollaus voimassa
+flags_always=sat,uncal_gain   # rivi 10: huippu 2700 mV >= sat_mv 2680; rivi 11 / D11: vahvistus puuttuu

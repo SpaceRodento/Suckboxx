@@ -171,6 +171,14 @@ class Dsp {
   trendiä. Hiljaisuudesta herääminen (käynnistys) aloittaa suotimen asettumisen alusta.
   Mitattu EngineSimillä: rpm-pudotus ja kaasun katkaisu ≤ 0,55 s ilman syklejä, blippaus
   850 → 3000 rpm ≤ 0,65 s, käynnistys 6000 rpm:iin 147 ms (`test_integration`: `test_wp2c_*`).
+- Paluuaallon tasanne (S2, 31.10.2026): positiivinen paluuaalto (H1) heti imupulssin jälkeen
+  jättää syklin keskelle tasanteen. Kun paluuaalto on ~1,5–2,2 × pulssi, tasanne osuu
+  laukaisutasolle (0,65 × A huipusta), ja raja hyppi imupulssin ja paluuaallon laskun
+  välillä (rpm-hajonta 15–44 %, rivi 2). Jos edellisellä välillä signaali viipyi ≥ 30 %
+  välistä laukaisutason ±0,12 × A -kaistalla, laukaisu siirretään tasanteen ja pohjan
+  puoliväliin (`kPlateau*`, omat ehdotukset). Ilman paluuaaltoa toiminta ei muutu.
+  Golden: `sim_return_wave_h1` (900 rpm, base −30, peak 40, leikkautuu); `test_dsp`:
+  `test_return_wave_plateau_keeps_lock`.
 - `sensor_fault`: mV ulkona `[fault_lo_mv, fault_hi_mv]` yhtäjaksoisesti `fault_hold_s`.
   `saturated`: `mv ≥ sat_mv` havaittu viimeisen 1 s aikana.
 - `RpmEstimate`: kanavien rpm:ien mediaani; `sd_rpm`/`cv` viimeisten `rpm_hist` jakson yli.
