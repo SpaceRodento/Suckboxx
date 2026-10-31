@@ -1,0 +1,124 @@
+# CI (WP-11): samat oraakkelit kuin kehittäjän koneella (docs/firmware.md §6).
+# Portti myös yöajoille, jotka eivät voi ajaa PlatformIOta: ESP32-käännös ja
+# GCC 8.4 -tarkistus tehdään täällä.
+#
+# Ei kovakoodattuja listoja testeistä eikä työkaluista: uusi firmware/test/test_*/
+# ja uusi tools/**/*.py tulevat mukaan ilman muutoksia tähän tiedostoon. ESP32-
+# ympäristöt ovat matriisissa nimeltä, joten uusi [env:...] lisätään myös tänne.
+name: CI
+
+on:
+  push:
+    branches: [master, "dev/**", "wp/**", "yo/**"]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+# Uusi push samaan haaraan peruu edellisen ajon: portti katsoo haaran kärkeä.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# `shell: bash` = bash -eo pipefail, joten `pio run | tee` kaatuu pio:n virheeseen.
+defaults:
+  run:
+    shell: bash
+
+# Runner lukittu: ubuntu-26.04:ssä on sama g++ 15.2 ja Python 3.14 kuin kehittäjän
+# WSL:ssä. -Werror reagoi kääntäjäversioon, eikä ubuntu-latest saa vaihtua alta.
+jobs:
+  native:
+    name: native (g++, ASan/UBSan, -Werror)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: g++ ja sanitaattorit
+        run: |
+          g++ --version | head -n 1
+          echo 'int main() { return 0; }' \
+            | g++ -x c++ -std=gnu++17 -fsanitize=address,undefined - -o "$RUNNER_TEMP/san"
+          "$RUNNER_TEMP/san"
+      - name: tools/run_native_tests.sh
+        run: bash tools/run_native_tests.sh
+
+  pio-native:
+    name: pio test -e native
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: PlatformIO
+        run: pip install platformio==6.1.19
+      - name: pio test -e native
+        run: pio test -d firmware -e native
+
+  esp32:
+    name: esp32 (${{ matrix.env }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [esp32dev, esp32dev_adc, esp32dev_hx]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      # Alusta, työkaluketju ja Arduino-ydin (~1,2 Gt purettuna). Kirjastot (lib_deps)
+      # menevät firmware/.pio/:hon ja ladataan joka ajolla.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.platformio
+          key: platformio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+      - name: PlatformIO
+        run: pip install platformio==6.1.19
+      - name: pio run -e ${{ matrix.env }}
+        env:
+          PIO_ENV: ${{ matrix.env }}
+        run: |
+          pio run -d firmware -e "$PIO_ENV" | tee "$RUNNER_TEMP/build.log"
+          {
+            echo "### $PIO_ENV"
+            echo '```'
+            grep -E '^(RAM|Flash):' "$RUNNER_TEMP/build.log" || echo "(RAM/Flash-riviä ei löytynyt)"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      # Kerran riittää: tarkistus ei riipu ympäristöstä, vain kääntäjästä.
+      - name: tools/check_core_gcc84.sh
+        if: matrix.env == 'esp32dev'
+        run: bash tools/check_core_gcc84.sh
+
+  web:
+    name: web ja Python ${{ matrix.python }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 = kehittäjän Windows-Python, jolla oraakkelit ajetaan; 3.14 = WSL.
+        python: ["3.10", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: embed_web.py --check
+        run: python3 tools/embed_web.py --check
+      - name: mock_server.py --check-config
+        run: python3 tools/mock_server.py --check-config
+      - name: mock_server.py --check-snapshot
+        run: python3 tools/mock_server.py --check-snapshot
+      - name: py_compile tools/**/*.py
+        run: find tools -name '*.py' -print0 | xargs -0 python3 -m py_compile
+      # tools/test_*.py (esim. sim_fit, WP-12) tarvitsee numpyn ja scipyn.
+      - name: numpy ja scipy
+        run: pip install numpy scipy
+      - name: unittest tools/test_*.py
+        run: python3 -m unittest discover -s tools -p 'test_*.py'

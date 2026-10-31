@@ -82,7 +82,7 @@ static const Expect kExpect[] = {
     {"rpm_max", 7000.0f, [](const Config& c) { return c.dsp.rpm_max; }},
     {"pulse_timeout_s", 1.25f, [](const Config& c) { return c.dsp.pulse_timeout_s; }},
     {"rpm_hist", 24.0f, [](const Config& c) { return static_cast<float>(c.dsp.rpm_hist); }},
-    {"master", 2.0f, [](const Config& c) { return static_cast<float>(c.status.master); }},
+    {"master", 1.0f, [](const Config& c) { return static_cast<float>(c.status.master); }},
     {"tol_green_kpa", 1.25f, [](const Config& c) { return c.status.tol_green_kpa; }},
     {"tol_yellow_kpa", 2.5f, [](const Config& c) { return c.status.tol_yellow_kpa; }},
     {"off_kpa", 6.0f, [](const Config& c) { return c.status.off_kpa; }},
@@ -95,6 +95,9 @@ static const Expect kExpect[] = {
     {"drift_rpm", 40.0f, [](const Config& c) { return c.status.drift_rpm; }},
     {"drift_window_s", 3.0f, [](const Config& c) { return c.status.drift_window_s; }},
     {"auto_zero", 0.0f, [](const Config& c) { return c.status.auto_zero ? 1.0f : 0.0f; }},
+    {"hose_hyst_kpa", 0.5f, [](const Config& c) { return c.status.hose_hyst_kpa; }},
+    {"drift_tau_s", 1.0f, [](const Config& c) { return c.status.drift_tau_s; }},
+    {"zero_settle_kpa", 0.2f, [](const Config& c) { return c.status.zero_settle_kpa; }},
     {"source", 1.0f, [](const Config& c) { return static_cast<float>(static_cast<uint8_t>(c.source)); }},
     {"push_rate_hz", 10.0f, [](const Config& c) { return static_cast<float>(c.push_rate_hz); }},
 };
@@ -107,7 +110,7 @@ void test_registry_covers_every_struct_member() {
   constexpr size_t n_sensor = aggregateFields<sbx::SensorParams>();
   constexpr size_t n_dsp = aggregateFields<sbx::DspParams>();
   constexpr size_t n_status = aggregateFields<sbx::StatusParams>();
-  static_assert(n_sensor == 8 && n_dsp == 9 && n_status == 13,
+  static_assert(n_sensor == 8 && n_dsp == 9 && n_status == 16,
                 "types.h muuttui: lisää uusi kenttä SBX_CONFIG_FIELDS-listaan ja tähän testiin");
   TEST_ASSERT_EQUAL_INT(static_cast<int>(n_sensor), fieldsInGroup(sbx::kGroupSensor));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(n_dsp), fieldsInGroup(sbx::kGroupSignal));
@@ -216,6 +219,36 @@ void test_ranges_match_physics_and_dsp_capacity() {
   TEST_ASSERT_GREATER_THAN_FLOAT(2700.0f - 200.0f - 0.5f, hi.min);
 }
 
+void test_wp9_proposed_fields_registered() {
+  // WP-9 (31.10.2026): kolme uutta kynnystä ovat S5a:n mukaan huoltosivulla
+  // säädettäviä. Oletukset on hyväksytty alustavasti 31.10.2026 (D15) ja
+  // tarkistetaan ensimmäisestä moottorinauhoituksesta; mittausperusteet
+  // status.h:ssa ja calibration.h:ssa. Testi lukitsee ne, jotta muutos on tietoinen.
+  auto range = [](const char* key, float lo, float hi) {
+    const int i = sbx::configFindField(key);
+    TEST_ASSERT_TRUE_MESSAGE(i >= 0, key);
+    const FieldInfo& f = sbx::configField(i);
+    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(lo, f.min, key);
+    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(hi, f.max, key);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(sbx::kGroupSync, f.group, key);
+  };
+  // 0 = ominaisuus pois eli WP-4:n käytös (valittavissa, jos nauhoitus kumoaa arvon).
+  range("hose_hyst_kpa", 0.0f, 5.0f);
+  range("drift_tau_s", 0.0f, 5.0f);
+  // Alaraja ADC-kohinan yläpuolella: 0 tekisi nollauksesta mahdottoman.
+  range("zero_settle_kpa", 0.05f, 2.0f);
+  const Config c;
+  TEST_ASSERT_EQUAL_FLOAT(0.2f, c.status.hose_hyst_kpa);
+  TEST_ASSERT_EQUAL_FLOAT(0.5f, c.status.drift_tau_s);
+  TEST_ASSERT_EQUAL_FLOAT(0.1f, c.status.zero_settle_kpa);
+  Config off;
+  TEST_ASSERT_EQUAL_INT(R(SetResult::Ok), R(sbx::configSetText(off, "hose_hyst_kpa", "0")));
+  TEST_ASSERT_EQUAL_INT(R(SetResult::Ok), R(sbx::configSetText(off, "drift_tau_s", "0")));
+  TEST_ASSERT_EQUAL_INT(R(SetResult::OutOfRange), R(sbx::configSetText(off, "zero_settle_kpa", "0")));
+  char err[160];
+  TEST_ASSERT_TRUE_MESSAGE(sbx::configValidate(off, err, sizeof(err)), err);
+}
+
 // --- oletukset ja get/set ----------------------------------------------------
 
 void test_defaults_in_range_and_valid() {
@@ -228,10 +261,10 @@ void test_defaults_in_range_and_valid() {
   char err[160] = "x";
   TEST_ASSERT_TRUE_MESSAGE(sbx::configValidate(c, err, sizeof(err)), err);
   TEST_ASSERT_EQUAL_STRING("", err);
-  // Päätösloki: D2, D7, D9, D10, D12, D14.
+  // Päätösloki: D2, D7/D16, D9, D10, D12, D14.
   TEST_ASSERT_EQUAL_FLOAT(1.5f, sbx::configGet(c, sbx::configFindField("tol_green_kpa")));
   TEST_ASSERT_EQUAL_FLOAT(3.0f, sbx::configGet(c, sbx::configFindField("tol_yellow_kpa")));
-  TEST_ASSERT_EQUAL_FLOAT(0.0f, sbx::configGet(c, sbx::configFindField("master")));
+  TEST_ASSERT_EQUAL_FLOAT(2.0f, sbx::configGet(c, sbx::configFindField("master")));  // D7/D16: SYL 3
   TEST_ASSERT_EQUAL_FLOAT(15.0f, sbx::configGet(c, sbx::configFindField("push_rate_hz")));
   TEST_ASSERT_EQUAL_FLOAT(5.0f, sbx::configGet(c, sbx::configFindField("off_kpa")));
   TEST_ASSERT_EQUAL_FLOAT(500.0f, sbx::configGet(c, sbx::configFindField("sync_rpm_min")));
@@ -413,6 +446,7 @@ void test_set_text_integer_and_enum_fields() {
   TEST_ASSERT_TRUE(c.source == sbx::SourceKind::Adc);
   TEST_ASSERT_EQUAL_INT(R(SetResult::OutOfRange), R(setText(c, "source", "3")));
   TEST_ASSERT_TRUE(c.source == sbx::SourceKind::Adc);
+  c.status.master = 0;   // oletus on 2 (D16): lähtö eri kuin asetettava arvo
   TEST_ASSERT_EQUAL_INT(R(SetResult::Ok), R(setText(c, "master", "2")));
   TEST_ASSERT_EQUAL_UINT8(2, c.status.master);
   TEST_ASSERT_EQUAL_INT(R(SetResult::OutOfRange), R(setText(c, "master", "3")));
@@ -484,10 +518,10 @@ void test_validate_cross_checks() {
   }
   {  // rivi 7 / 10: fault_lo < sat < fault_hi
     Config c;
-    c.sensor.sat_mv = 3200;  // > fault_hi 3150
+    c.sensor.sat_mv = 3200;  // > fault_hi 2950 (D15)
     expectInvalid(c, "sat_mv");
-    c.sensor.sat_mv = 3150;  // = fault_hi
-    expectInvalid(c, "3150");
+    c.sensor.sat_mv = 2950;  // = fault_hi
+    expectInvalid(c, "2950 / 2950");
     c.sensor.sat_mv = 2680;
     expectValid(c);
     // Suora kirjoitus ohi configSetin (vanha NVS-arvo): 0 / 3300 mV kytkisi
@@ -503,8 +537,8 @@ void test_validate_cross_checks() {
   }
   {  // ilmanpaine ei saa olla anturivika (rivi 1 vs. rivi 7)
     Config c;
-    c.sensor.v_zero_mv = 3200.0f;
-    c.sensor.sat_mv = 3100;
+    c.sensor.v_zero_mv = 3000.0f;  // > fault_hi 2950 (D15)
+    c.sensor.sat_mv = 2900;        // < fault_hi: järjestystarkistus ei ehdi ensin
     expectInvalid(c, "v_zero_mv");
   }
   {  // D10: hose_off ≤ off
@@ -631,30 +665,159 @@ void test_json_shape() {
   TEST_ASSERT_NOT_NULL(std::strstr(g_json, "\"type\":\"u16\""));
 }
 
-// Pahin tapaus: jokainen liukuluku 6 merkitsevällä numerolla, kokonaisluvut
-// maksimissaan. kConfigJsonSize:n on mahdutettava tämä reilulla varalla.
+// Kenttäobjektien alut ja pituudet "fields"-taulukosta järjestyksessä, ilman
+// erottavia pilkkuja. Palauttaa objektien määrän, -1 = rakenne ei ole odotettu.
+static int fieldObjects(const char* json, const char** starts, size_t* lens, int max) {
+  const char* p = std::strstr(json, "\"fields\":[");
+  if (p == nullptr) return -1;
+  int count = 0, depth = 0;
+  bool in_str = false;
+  const char* start = nullptr;
+  for (p += 10; *p != '\0'; ++p) {
+    if (in_str) {
+      if (*p == '\\' && p[1] != '\0') ++p;
+      else if (*p == '"') in_str = false;
+    } else if (*p == '"') {
+      in_str = true;
+    } else if (*p == '{') {
+      if (depth++ == 0) start = p;
+    } else if (*p == '}') {
+      if (--depth == 0 && count < max) {
+        starts[count] = start;
+        lens[count++] = static_cast<size_t>(p - start) + 1;
+      }
+    } else if (*p == ']' && depth == 0) {
+      return count;
+    }
+  }
+  return -1;
+}
+
+// Lakaisun j:s arvo alueelta [mn, mx]: päätepisteet ja niiden välissä kultaisen
+// leikkauksen askel, jolloin liukuluvuilla on 6 merkitsevää numeroa joka
+// suuruusluokassa. Kokonaisluku- ja bool-tyypeille pyöristetty.
+static float sweepValue(FieldType t, float mn, float mx, int j, int steps) {
+  if (j <= 0) return mn;
+  if (j >= steps) return mx;
+  float v = mn + (mx - mn) * std::fmod(static_cast<float>(j) * 0.6180340f, 1.0f);
+  if (t != FieldType::Float) v = std::round(v);
+  return v < mn ? mn : (v > mx ? mx : v);
+}
+
+// Pahin tapaus kentittäin. Kenttäobjektin pituus riippuu vain kentän omasta
+// arvosta (configToJson: def on vakio, value = configGet(c, i)), joten
+// kenttäkohtaisten maksimien yhdistelmä on koko JSONin maksimi. Jokaista
+// kenttää lakaistaan yhtä aikaa koko alueeltaan, myös päätepisteet.
+//
+// Päättäjä: docs/firmware.md §4.4 (GET /api/config palauttaa koko rekisterin;
+// configToJson 0 = ei mahtunut -> 500) ja config.h:n kConfigJsonSize-sopimus
+// (S9): raja on jokaisen kentän todistettu yläraja, ei käsin valittu vara.
+// Uusi kenttä tulee tähän mukaan ilman testimuutosta.
 void test_json_worst_case_fits_buffer_constant() {
+  const int n = sbx::configFieldCount();
+  static const char* starts[sbx::kConfigFieldCount];
+  static size_t lens[sbx::kConfigFieldCount];
+  static size_t worst[sbx::kConfigFieldCount];
+  static float worst_v[sbx::kConfigFieldCount];
+  constexpr int kSteps = 1000;
+  for (int j = 0; j <= kSteps; ++j) {
+    Config c;
+    for (int i = 0; i < n; ++i) {
+      const FieldInfo& f = sbx::configField(i);
+      TEST_ASSERT_EQUAL_INT_MESSAGE(R(SetResult::Ok),
+                                    R(sbx::configSet(c, i, sweepValue(f.type, f.min, f.max, j, kSteps))),
+                                    f.key);
+    }
+    TEST_ASSERT_GREATER_THAN(0, sbx::configToJson(c, g_json, sizeof(g_json)));
+    TEST_ASSERT_EQUAL_INT(n, fieldObjects(g_json, starts, lens, n));
+    for (int i = 0; i < n; ++i) {
+      if (lens[i] > worst[i]) {
+        worst[i] = lens[i];
+        worst_v[i] = sbx::configGet(c, i);
+      }
+    }
+  }
+
+  // Kaikki kentät pahimpaan arvoonsa: suurin mahdollinen JSON.
   Config c;
-  for (int i = 0; i < sbx::configFieldCount(); ++i) {
-    const FieldInfo& f = sbx::configField(i);
-    float v = f.max;
-    if (f.type == FieldType::Float) v = f.min + (f.max - f.min) * 0.987654f;
-    TEST_ASSERT_EQUAL_INT_MESSAGE(R(SetResult::Ok), R(sbx::configSet(c, i, v)), f.key);
+  for (int i = 0; i < n; ++i) {
+    TEST_ASSERT_EQUAL_INT(R(SetResult::Ok), R(sbx::configSet(c, i, worst_v[i])));
   }
   const size_t len = sbx::configToJson(c, g_json, sizeof(g_json));
-  char msg[64];
-  std::snprintf(msg, sizeof(msg), "pahin JSON %zu / %zu tavua", len, sbx::kConfigJsonSize);
-  TEST_MESSAGE(msg);
   TEST_ASSERT_GREATER_THAN(0, len);
   TEST_ASSERT_TRUE(jsoncheck::valid(g_json));
-  // Vähintään 512 tavua varaa uusille kentille (~150 tavua/kenttä).
-  TEST_ASSERT_LESS_OR_EQUAL(sbx::kConfigJsonSize - 512, len);
+  TEST_ASSERT_EQUAL_INT(n, fieldObjects(g_json, starts, lens, n));
+  size_t slack = 0, widest = 0;
+  for (int i = 0; i < n; ++i) {
+    const char* key = sbx::configField(i).key;
+    const size_t bound = sbx::detail::kConfigFieldJsonBound[i];
+    // Objekti i on rekisterin kenttä i, ja pituudet yhdistyvät (riippumattomuus).
+    char pat[48];
+    const int pn = std::snprintf(pat, sizeof(pat), "{\"key\":\"%s\",", key);
+    TEST_ASSERT_TRUE_MESSAGE(std::strncmp(starts[i], pat, static_cast<size_t>(pn)) == 0, key);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(worst[i], lens[i], key);
+    // Kentän raja pitää: mikään alueen arvo ei tuota pidempää objektia.
+    TEST_ASSERT_LESS_OR_EQUAL_MESSAGE(bound, worst[i], key);
+    slack += bound - worst[i];
+    if (worst[i] > widest) widest = worst[i];
+  }
+  char msg[128];
+  std::snprintf(msg, sizeof(msg), "pahin JSON %zu / %zu tavua, N=%d, pisin %zu t, raja %zu t yli",
+                len, sbx::kConfigJsonSize, n, widest, slack);
+  TEST_MESSAGE(msg);
+  // Kääre, pilkut ja NUL lasketaan rajassa täsmälleen: koko vara tulee kenttien
+  // lukujen ylärajoista (min, max ja def arvioidaan alueen leveimmän luvun mukaan).
+  TEST_ASSERT_EQUAL_size_t(slack, sbx::kConfigJsonSize - 1 - len);
   TEST_ASSERT_EQUAL_size_t(len, sbx::configToJson(c, g_json, sbx::kConfigJsonSize));
   // Ei mahdu (NUL tarvitsee tavun) -> 0; täsmälleen mahtuu -> pituus.
   TEST_ASSERT_EQUAL_size_t(0, sbx::configToJson(c, g_json, len));
   TEST_ASSERT_EQUAL_size_t(len, sbx::configToJson(c, g_json, len + 1));
   TEST_ASSERT_EQUAL_size_t(0, sbx::configToJson(c, g_json, 10));
   TEST_ASSERT_EQUAL_size_t(0, sbx::configToJson(c, nullptr, 0));
+}
+
+// Rajan rakennuspalikat vastaavat JsonWriteria myös syötteillä, joita
+// rekisterissä ei nyt ole (escapattavat merkit, negatiiviset ja suuret alueet);
+// uusi kenttä voi tuoda ne. Päättäjä: json_writer.h:n writeString (RFC 8259
+// -escapaus) ja config.h:n jsonNumber/jsonDecimals. Tiukkuus (luku enintään
+// 1 merkin yläkanttiin) on S9:n oma ehdotus: raja ei saa löystyä huomaamatta.
+void test_json_bound_parts_match_writer() {
+  char out[96];
+  const char* strs[] = {"", "kPa", "Järjestelmä – ö", "a\"b\\c", "\x01\x1f\t", "}{][,:"};
+  for (const char* s : strs) {
+    sbx::JsonWriter w(out, sizeof(out));
+    w.value(s);
+    TEST_ASSERT_TRUE(w.ok());
+    TEST_ASSERT_EQUAL_INT_MESSAGE(sbx::detail::jsonStringLength(s), w.length(), s);
+  }
+  struct Range {
+    FieldType t;
+    float mn, mx;
+  };
+  const Range ranges[] = {
+      {FieldType::Float, 0.0f, 5.0f},        {FieldType::Float, 0.01f, 1.0f},
+      {FieldType::Float, 100.0f, 12000.0f},  {FieldType::Float, -0.5f, 0.9f},
+      {FieldType::Float, -12000.0f, 3.0f},   {FieldType::Float, 0.0f, 999999.0f},
+      {FieldType::Float, -3.0e7f, 2.0e7f},   {FieldType::U8, 0.0f, 255.0f},
+      {FieldType::U16, 50.0f, 65535.0f},     {FieldType::U16, -300.0f, 20.0f},
+      {FieldType::Bool, 0.0f, 1.0f},
+  };
+  constexpr int kSteps = 5000;
+  for (const Range& r : ranges) {
+    const size_t bound = sbx::detail::jsonNumberWidth(r.t, r.mn, r.mx);
+    size_t widest = 0;
+    for (int j = 0; j <= kSteps; ++j) {
+      sbx::JsonWriter w(out, sizeof(out));
+      sbx::detail::jsonNumber(w, r.t, sweepValue(r.t, r.mn, r.mx, j, kSteps));
+      TEST_ASSERT_TRUE(w.ok());
+      if (w.length() > widest) widest = w.length();
+    }
+    char msg[64];
+    std::snprintf(msg, sizeof(msg), "tyyppi %d, %g..%g", static_cast<int>(r.t),
+                  static_cast<double>(r.mn), static_cast<double>(r.mx));
+    TEST_ASSERT_LESS_OR_EQUAL_MESSAGE(bound, widest, msg);
+    TEST_ASSERT_GREATER_OR_EQUAL_MESSAGE(bound - 1, widest, msg);
+  }
 }
 
 // UI näyttää JSONin arvon ja lähettää sen muuttamattomana takaisin: arvo ei
@@ -690,6 +853,7 @@ int main() {
   RUN_TEST(test_every_key_maps_to_its_own_member);
   RUN_TEST(test_keys_labels_groups_ranges_wellformed);
   RUN_TEST(test_ranges_match_physics_and_dsp_capacity);
+  RUN_TEST(test_wp9_proposed_fields_registered);
   RUN_TEST(test_defaults_in_range_and_valid);
   RUN_TEST(test_get_set_round_trip_every_field);
   RUN_TEST(test_set_rejects_and_leaves_value_untouched);
@@ -703,6 +867,7 @@ int main() {
   RUN_TEST(test_validate_error_buffer_edges);
   RUN_TEST(test_json_shape);
   RUN_TEST(test_json_worst_case_fits_buffer_constant);
+  RUN_TEST(test_json_bound_parts_match_writer);
   RUN_TEST(test_json_value_round_trips_through_set_text);
   return UNITY_END();
 }

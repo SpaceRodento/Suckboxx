@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 data/raw/
 *.bin
+# tools/replay/build.sh (WP-8)
+tools/replay/build/

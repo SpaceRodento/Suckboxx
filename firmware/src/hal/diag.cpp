@@ -102,7 +102,7 @@ size_t diagJson(char* buf, size_t n) {
       buf, n,
       "{\"v\":1,\"t\":%lu,\"up\":%lu,\"src\":\"%s\","
       "\"win\":%lu,\"n\":%u,\"seq\":%lu,\"fs\":%.2f,\"dev_us\":%u,\"lag_us\":%u,"
-      "\"late\":%lu,\"gaps\":%lu,\"q_drop\":%lu,\"skipped\":%lu,\"hx_bad\":%lu,"
+      "\"late\":%lu,\"late_boot\":%lu,\"gaps\":%lu,\"q_drop\":%lu,\"skipped\":%lu,\"hx_bad\":%lu,"
       "\"q_peak\":%u,\"q_len\":%lu,\"read_us\":[%u,%u],"
       "\"heap\":[%lu,%lu,%lu],\"sta\":%lu,\"sse\":%lu,\"sse_tx\":[%lu,%lu,%lu],"
       "\"push_us\":%lu,"
@@ -110,7 +110,7 @@ size_t diagJson(char* buf, size_t n) {
       ul(now_ms), ul(now_ms / 1000), sourceName(samplerSource()),
       ul(w.index), static_cast<unsigned>(w.n), ul(w.seq), static_cast<double>(w.fs_hz),
       static_cast<unsigned>(w.dev_max_us), static_cast<unsigned>(w.lag_max_us),
-      ul(w.late), ul(w.gaps), ul(sc.queue_drops), ul(sc.skipped), ul(sc.hx_bad),
+      ul(w.late), ul(w.late_boot), ul(w.gaps), ul(sc.queue_drops), ul(sc.skipped), ul(sc.hx_bad),
       static_cast<unsigned>(w.q_peak), ul(kQueueLen), static_cast<unsigned>(w.read_mean_us),
       static_cast<unsigned>(w.read_max_us),
       ul(heap_free), ul(heap_min), ul(g_heap_block.load(std::memory_order_relaxed)),
@@ -168,11 +168,11 @@ void diagLogPeriodic() {
   const uint32_t up_s = static_cast<uint32_t>(esp_timer_get_time() / 1000000);
 
   Serial.printf(
-      "[DIAG] up=%lu s %s fs=%.2f Hz poikk=%u us lag=%u us myoh=%lu(+%lu) aukot=%lu(+%lu)"
+      "[DIAG] up=%lu s %s fs=%.2f Hz poikk=%u us lag=%u us myoh=%lu(+%lu) kaynn=%lu aukot=%lu(+%lu)"
       " pudot=%lu(+%lu) ohit=%lu(+%lu) jono=%u/%lu luku=%u/%u us hx_bad=%lu\n",
       ul(up_s), sourceName(samplerSource()), static_cast<double>(p.fs_hz),
       static_cast<unsigned>(p.dev_max_us), static_cast<unsigned>(p.lag_max_us), ul(w.late),
-      ul(w.late - g_prev_late), ul(w.gaps), ul(w.gaps - g_prev_gaps), ul(sc.queue_drops),
+      ul(w.late - g_prev_late), ul(w.late_boot), ul(w.gaps), ul(w.gaps - g_prev_gaps), ul(sc.queue_drops),
       ul(sc.queue_drops - g_prev_drops), ul(sc.skipped), ul(sc.skipped - g_prev_skipped),
       static_cast<unsigned>(p.q_peak), ul(kQueueLen), static_cast<unsigned>(p.read_mean_us),
       static_cast<unsigned>(p.read_max_us), ul(sc.hx_bad));

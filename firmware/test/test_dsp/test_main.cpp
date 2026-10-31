@@ -16,6 +16,7 @@
 #include <cstdio>
 
 #include "core/dsp.h"
+#include "core/engine_sim.h"
 #include "synth_signal.h"
 
 using sbx::ChannelState;
@@ -968,7 +969,7 @@ void test_level_ema_tracks_step_with_tau() {
 
 void test_sensor_fault_after_hold_and_clears() {
   Dsp dsp;
-  SensorParams sp;  // 100...3150 mV, 1,0 s
+  SensorParams sp;  // 150...2950 mV (D15), 1,0 s
   dsp.configure(DspParams(), sp);
   float kpa[kChannels] = {-55.0f, -55.0f, -55.0f};
   RawFrame raw;
@@ -986,7 +987,7 @@ void test_sensor_fault_after_hold_and_clears() {
   TEST_ASSERT_TRUE(dsp.channel(2).sensor_fault);
   TEST_ASSERT_EQUAL_UINT16(50, dsp.channel(1).last_mv);
 
-  raw.mv[1] = 100;  // rajalla = alueella
+  raw.mv[1] = 150;  // rajalla = alueella
   dsp.push(kpa, raw);
   TEST_ASSERT_FALSE(dsp.channel(1).sensor_fault);
   TEST_ASSERT_TRUE(dsp.channel(2).sensor_fault);
@@ -1009,6 +1010,31 @@ void test_sensor_fault_after_hold_and_clears() {
   TEST_ASSERT_FALSE(dsp.channel(1).sensor_fault);
   dsp.push(kpa, raw);
   TEST_ASSERT_TRUE(dsp.channel(1).sensor_fault);
+}
+
+// Rivin 7 oletusrajat 150 / 2950 mV (D15, 31.10.2026). Päättäjät:
+//  - laillinen lukema ei ole vika: anturin alue −100…0 kPa = 200…2700 mV ja
+//    tarkkuus ±2 %FSS = ±50 mV (docs/rauta.md §1.2, §1.4), eli 150 ja 2750 mV;
+//    mitattu ylipaine +1,2 kPa = 2726 mV (docs/jatko.md, penkkitesti 31.10.2026).
+//  - ADC:n ääripään tuntumassa oleva lukema on vika, vaikka liima ei koodaisi
+//    sitä 0 / 3300 mV:ksi: mitattu eFuse-ikkuna 142…3150 mV (docs/jatko.md).
+//    D15:tä edeltäneillä rajoilla 100 / 3150 mV yksikään alla ei laukaissut.
+void test_sensor_fault_default_limits_d15() {
+  Dsp dsp;
+  dsp.configure(DspParams(), SensorParams());
+  float kpa[kChannels] = {-55.0f, -55.0f, -55.0f};
+  RawFrame raw;
+  raw.mv[0] = 150;   // −100 kPa − 2 %FSS, rajalla = alueella
+  raw.mv[1] = 2750;  // 0 kPa + 2 %FSS
+  raw.mv[2] = 2950;  // rajalla = alueella
+  for (int i = 0; i < 2000; ++i) dsp.push(kpa, raw);
+  for (int c = 0; c < kChannels; ++c) TEST_ASSERT_FALSE(dsp.channel(c).sensor_fault);
+
+  raw.mv[0] = 145;   // ADC:n alimman koodin (142 mV) yläpuolella, raw > 0
+  raw.mv[1] = 3100;  // ylimmän koodin (3150 mV) alapuolella, raw < 4095
+  raw.mv[2] = 2951;
+  for (int i = 0; i < 1000; ++i) dsp.push(kpa, raw);
+  for (int c = 0; c < kChannels; ++c) TEST_ASSERT_TRUE(dsp.channel(c).sensor_fault);
 }
 
 void test_saturation_flag_lasts_one_second() {
@@ -1356,6 +1382,101 @@ void test_missed_pulse_does_not_halve_rpm() {
   TEST_ASSERT_LESS_THAN_FLOAT(0.01f, worst);
 }
 
+// --- paluuaalto (S2, H1) -----------------------------------------------------------
+
+void test_return_wave_plateau_keeps_lock() {
+  // Positiivinen paluuaalto heti imupulssin jälkeen (EngineSim peak_kpa, ainoa
+  // malli, jossa se on): jos paluuaallon ja pulssin suhde on ~1,5-2,2,
+  // paluuaallon jälkeinen tasanne osuu Schmittin laukaisutasolle (0,65 x A
+  // huipusta), ja ennen S2:ta raja hyppi imupulssin ja paluuaallon laskun
+  // välillä: rpm-hajonta 15-44 %, tila "Käynti epätasainen" (rivi 2), 0/16
+  // siementä lukittui (1500 rpm: 0/8; tools/replay-kartoitus 31.10.2026). Tapaukset ovat
+  // kartoituksen pahimmat joutokäyntialueelta (D6: 850-950 rpm, rivi 3:
+  // 600-1200) ja D12:n ikkunasta (500-3000). base -55 ei leikkaudu (huippu
+  // -20 kPa), base -30 leikkautuu 2700 mV:iin (rivi 10). 1500 ja 2200 rpm
+  // kattavat tasannetilan siirtymän paluuaallon rajalta (dwell_dis,
+  // plat_jump): ilman niitä siemenet 2 (1500) ja 3, 7, 8 (2200) ylittivät
+  // unstable_cv:n.
+  struct Case {
+    float base, peak, rpm;
+  };
+  const Case cases[] = {{-55.0f, 35.0f, 900.0f},
+                        {-30.0f, 40.0f, 900.0f},
+                        {-30.0f, 40.0f, 1050.0f},
+                        {-30.0f, 45.0f, 1500.0f},
+                        {-55.0f, 45.0f, 2200.0f}};
+  const float unstable_cv = sbx::StatusParams().unstable_cv;  // rivi 2: 15 %
+  for (const Case& k : cases) {
+    float worst_cv = 0.0f, worst_rpm = 0.0f, worst_mean = 0.0f, worst_diff = 0.0f;
+    bool always_valid = true;
+    for (uint32_t seed = 1; seed <= 8; ++seed) {  // S2:n valmis-ehto: 8/8 siementä
+      sbx::SimParams sp;
+      sp.rpm = k.rpm;
+      sp.base_kpa = k.base;
+      sp.peak_kpa = k.peak;
+      sp.sync_err_kpa[1] = 0.3f;
+      sp.sync_err_kpa[2] = -0.4f;
+      sp.seed = seed;
+      sbx::EngineSim sim;
+      sim.configure(sp, g_rig.sp);
+      g_rig.dsp.configure(DspParams(), g_rig.sp);
+      float kpa[kChannels];
+      float rpm_sum = 0.0f;
+      int rpm_n = 0;
+      for (int i = 0; i < 8000; ++i) {
+        const RawFrame f = sim.next();
+        for (int c = 0; c < kChannels; ++c) {
+          kpa[c] = (static_cast<float>(f.mv[c]) - g_rig.sp.v_zero_mv) / g_rig.sp.mv_per_kpa;
+        }
+        g_rig.dsp.push(kpa, f);
+        if (i < 3000 || i % 20 != 0) continue;  // 3 s: lukitus + rpm_hist (16 jaksoa)
+        const RpmEstimate e = g_rig.dsp.rpm();
+        if (!e.valid) {
+          always_valid = false;
+          continue;
+        }
+        if (e.cv > worst_cv) worst_cv = e.cv;
+        rpm_sum += e.rpm;
+        ++rpm_n;
+        for (int c = 0; c < kChannels; ++c) {
+          const float me = std::fabs(g_rig.dsp.channel(c).mean_kpa - sim.trueMeanKpa(c));
+          if (me > worst_mean) worst_mean = me;
+        }
+        for (int c = 1; c < kChannels; ++c) {
+          const float shown = g_rig.dsp.channel(0).mean_kpa - g_rig.dsp.channel(c).mean_kpa;
+          const float de = std::fabs(shown - (sim.trueMeanKpa(0) - sim.trueMeanKpa(c)));
+          if (de > worst_diff) worst_diff = de;
+        }
+      }
+      if (rpm_n > 0) {
+        const float re = std::fabs(rpm_sum / static_cast<float>(rpm_n) - k.rpm) / k.rpm;
+        if (re > worst_rpm) worst_rpm = re;
+      }
+    }
+    msg("paluuaalto base %.0f peak %.0f rpm %.0f: rpm-cv max %.2f %%, rpm-virhe %.2f %%, "
+        "keskiarvo %.3f kPa, D3-ero %.3f kPa",
+        static_cast<double>(k.base), static_cast<double>(k.peak), static_cast<double>(k.rpm),
+        static_cast<double>(worst_cv * 100.0f), static_cast<double>(worst_rpm * 100.0f),
+        static_cast<double>(worst_mean), static_cast<double>(worst_diff));
+    TEST_ASSERT_TRUE_MESSAGE(always_valid, "rpm ei voimassa");
+    // Rivi 2 / S2:n valmis-ehto: hajonta alle unstable_cv:n joka tarkistuksessa.
+    // EngineSimin jitter on 1 %, joten mitattu ~1,1 % on tasaista käyntiä.
+    TEST_ASSERT_LESS_THAN_FLOAT(unstable_cv, worst_cv);
+    // Rivi 3: rpm-tarkkuus 1 % (test_row3_idle_synced, .expect rpm_tol) arvioiden
+    // keskiarvona 5 s:n ikkunassa. Nimellisarvoa vasten, koska EngineSimin
+    // toteutuneita jaksoja ei tallenneta; yksittäinen 8 syklin keskiarvo
+    // heiluu 1 %:n jitterillä ~0,35 % (sd), ikkunan keskiarvo ei.
+    TEST_ASSERT_LESS_THAN_FLOAT(0.01f, worst_rpm);
+    // D2/D3: näytetty kanavaero (master - kanava) totuudesta enintään 0,15
+    // kPa (test_integration assertVerdict). Leikkautuminen on sama kaikissa
+    // kanavissa (rauta.md §1.3), joten ero pätee myös base -30:llä.
+    TEST_ASSERT_LESS_THAN_FLOAT(0.15f, worst_diff);
+    // D1: keskiarvo totuudesta 0,1 kPa (test_accuracy_idle_to_3000_rpm) vain
+    // ilman leikkautumista: leikattu paluuaalto puuttuu anturilta (H1).
+    if (k.base + k.peak < 0.0f) TEST_ASSERT_LESS_THAN_FLOAT(0.1f, worst_mean);
+  }
+}
+
 // --- kohinalattia ------------------------------------------------------------------
 
 void test_displayed_mean_noise_floor_at_idle() {
@@ -1443,6 +1564,7 @@ int main() {
   RUN_TEST(test_noise_and_resonance_alone_never_pulse);
   RUN_TEST(test_level_ema_tracks_step_with_tau);
   RUN_TEST(test_sensor_fault_after_hold_and_clears);
+  RUN_TEST(test_sensor_fault_default_limits_d15);
   RUN_TEST(test_saturation_flag_lasts_one_second);
   RUN_TEST(test_configure_resets_state);
   RUN_TEST(test_avg_cycles_sets_response_and_noise);
@@ -1453,6 +1575,7 @@ int main() {
   RUN_TEST(test_rpm_limits_reject_out_of_range_periods);
   RUN_TEST(test_rpm_median_with_hose_off_and_validity);
   RUN_TEST(test_missed_pulse_does_not_halve_rpm);
+  RUN_TEST(test_return_wave_plateau_keeps_lock);
   RUN_TEST(test_displayed_mean_noise_floor_at_idle);
   RUN_TEST(test_nan_sample_does_not_poison_state);
   return UNITY_END();

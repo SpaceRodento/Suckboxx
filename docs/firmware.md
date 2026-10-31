@@ -171,7 +171,17 @@ class Dsp {
   trendiä. Hiljaisuudesta herääminen (käynnistys) aloittaa suotimen asettumisen alusta.
   Mitattu EngineSimillä: rpm-pudotus ja kaasun katkaisu ≤ 0,55 s ilman syklejä, blippaus
   850 → 3000 rpm ≤ 0,65 s, käynnistys 6000 rpm:iin 147 ms (`test_integration`: `test_wp2c_*`).
+- Paluuaallon tasanne (S2, 31.10.2026): positiivinen paluuaalto (H1) heti imupulssin jälkeen
+  jättää syklin keskelle tasanteen. Kun paluuaalto on ~1,5–2,2 × pulssi, tasanne osuu
+  laukaisutasolle (0,65 × A huipusta), ja raja hyppi imupulssin ja paluuaallon laskun
+  välillä (rpm-hajonta 15–44 %, rivi 2). Jos edellisellä välillä signaali viipyi ≥ 30 %
+  välistä laukaisutason ±0,12 × A -kaistalla, laukaisu siirretään tasanteen ja pohjan
+  puoliväliin (`kPlateau*`, omat ehdotukset). Ilman paluuaaltoa toiminta ei muutu.
+  Golden: `sim_return_wave_h1` (900 rpm, base −30, peak 40, leikkautuu); `test_dsp`:
+  `test_return_wave_plateau_keeps_lock`.
 - `sensor_fault`: mV ulkona `[fault_lo_mv, fault_hi_mv]` yhtäjaksoisesti `fault_hold_s`.
+  Oletukset 150 / 2950 mV (D15, 31.10.2026): mitatun ADC-ikkunan (eFuse 142–3150 mV) sisällä
+  ja anturin laillisen alueen (200–2700 mV ±50 mV, rauta.md §1.2, §1.4) ulkopuolella.
   `saturated`: `mv ≥ sat_mv` havaittu viimeisen 1 s aikana.
 - `RpmEstimate`: kanavien rpm:ien mediaani; `sd_rpm`/`cv` viimeisten `rpm_hist` jakson yli.
 - Laskentabudjetti: `push()` O(1) per näyte (sykliraja saa olla O(avg_cycles)).
@@ -186,10 +196,17 @@ float nominalKpa(uint16_t mv, uint16_t rail_mv, const SensorParams& sp);
 float applyCal(float nominal_kpa, int ch, const Calibration& cal);
 
 enum class CalResult : uint8_t { Ok, NotAtmosphere, NotStable, TooSmall, Mismatch, GainOutOfRange,
-                                 NoZero };
+                                 NoZero, NotSettled };
 
 // Nollapiste: kanavat ilmanpaineessa -> offset niin että kalibroitu = 0. Säilyttää gainin.
 CalResult computeZero(const float (&nominal_level)[kChannels], float max_abs_kpa, Calibration& cal);
+// Sama + vakausportti (WP-9): level_range = tason vaihteluväli viimeisen
+// kZeroSettleWindowS (1 s) aikana; NotSettled, jos jokin >= max_range_kpa (myös NaN/ääretön).
+CalResult computeZero(const float (&nominal_level)[kChannels], const float (&level_range)[kChannels],
+                      float max_abs_kpa, float max_range_kpa, Calibration& cal);
+// Liukuva 1 s:n min/max-ikkuna kanavien tasoista (StatusMachine päivittää, ~20 Hz).
+class LevelSettle { public: void reset(); void add(const float (&level)[kChannels], float now);
+  bool full() const; float range(int ch) const; };   // range = ääretön, jos historiaa < 1 s
 // Vahvistus: kaikki kanavat samassa alipaineessa (T-haara) -> gain niin että kanavat täsmäävät
 // toisiinsa (referenssi = kanavien keskiarvo). Säilyttää nollapisteen. Vaatii voimassa olevan
 // nollauksen (muuten NoZero), koska anturien omat offsetit menisivät muuten gainiin.
@@ -207,6 +224,16 @@ Hyväksymisrajat (vakioina, perustelut kommentteihin): vahvistus vaatii |referen
 jokaisen kanavan sd < 0,5 kPa, kanavat 15 %:n sisällä toisistaan (pareittain:
 max − min ≤ 0,15 · min |c|) ja tuloksena gain 0,85…1,15. Tarkistusjärjestys: NoZero, TooSmall,
 NotStable, Mismatch, GainOutOfRange.
+
+Nollauksen vakausportti (WP-9, 31.10.2026): ilmanpaine-ehdon (|taso| ≤ `off_kpa`) lisäksi
+jokaisen kanavan tason vaihteluväli viimeisen 1 s:n aikana < `zero_settle_kpa` (oletus 0,1 kPa,
+hyväksytty alustavasti D15:ssä; tarkistetaan ensimmäisestä moottorinauhoituksesta).
+Tarkistusjärjestys NotAtmosphere, NotSettled. Sama portti automaattiselle (rivi 1) ja käsin
+tehdylle nollaukselle. Ilman porttia juuri sammutetun moottorin
+vielä laskeva taso kirjautui offsetiksi (EngineSim: 1,5 s sammutuksesta 2,75 kPa, purkautuva
+alipaine −10 kPa / tau 2 s 2,5 s:n kohdalla 4,1 kPa). Portin kanssa jäännös on enintään
+`zero_settle_kpa` / (e^(1 s / tau) − 1) eksponentiaalisella purkautumisella (tau 2 s: 0,15 kPa).
+ADC-kohina ei laukaise sitä: taso-EMA:n 1 s:n vaihteluväli 0,04 kPa 4 mV RMS:llä, 0,08 kPa 8 mV:lla.
 
 ### 4.4 `config.h` (WP-3)
 
@@ -258,7 +285,10 @@ Muoto (WP-3:n toteutus, kirjattu 30.10.2026):
 
 - `v` = `kConfigSchemaVersion`. `type` ∈ `float`, `u8`, `u16`, `bool`; bool-kentän `def` ja
   `value` ovat `true`/`false`, `min`/`max` silloin 0/1. Kentät rekisterin järjestyksessä, ja
-  UI ryhmittelee `group`in mukaan. Puskuri: `kConfigJsonSize`.
+  UI ryhmittelee `group`in mukaan. Puskuri: `kConfigJsonSize`, joka johdetaan kenttälistasta
+  käännösaikana (S9, 31.10.2026), joten uusi kenttä ei vaadi nostoa käsin. `test_config` todistaa
+  kentittäin, ettei JSON ylitä rajaa millään alueen arvolla. Keon katto `kConfigJsonMaxSize`
+  (8192) on `static_assert`.
 - UI tuntee nimeltä vain kaksi valintakenttää, `source` ja `master`, joiden vaihtoehtojen
   nimet ovat UI:ssa.
 - `POST /api/config` on atominen: kaikki kentät sovelletaan Configin kopioon, sitten
@@ -341,7 +371,8 @@ Prioriteetti (korkein ensin) — §8:n suunnittelusääntö: *vikatilat voittava
 Liput ovat tilasta riippumattomia: `flag_saturation` (rivi 10), `flag_uncal_zero` (D11: ilman
 nollausta **ei koskaan Synced** — näytetään enintään `Near`), `flag_uncal_gain` (rivi 11),
 `flag_drift` (rivi 5: Δ-luvut pysyvät näkyvissä). `request_auto_zero` nousee kun `NoSignal`
-on kestänyt `off_hold_s` ja `auto_zero` on päällä.
+on kestänyt `off_hold_s`, `auto_zero` on päällä ja sillä hetkellä kaikki |taso| < `off_kpa` ja
+tasot ovat paikallaan (vakausportti `zero_settle_kpa`, §4.3; kerran per NoSignal-jakso).
 
 Tekstit UTF-8-suomeksi, desimaalipilkku, esim. headline `"Synkronoitu"` ja advice
 `"SYL 3: avaa läppää – imee 2,1 kPa enemmän kuin SYL 1"`. Säätösuunta:
@@ -363,6 +394,25 @@ Pitoajat ja yhteismuotoinen muutos (WP-2c, 30.10.2026):
   ("Alipaine muuttuu kaikissa sylintereissä"). Kanavien liukuvat keskiarvot päivittyvät eri
   hetkinä, joten yhteismuotoinen muutos näkyisi muuten hetkellisenä spreadinä (20 kPa →
   1,7–2,5 kPa). Vakausajastin ei nollaudu. Yhden ruuvin säätö ei laukaise tätä.
+
+Käytösmatriisin ja kalibroinnin jälkityöt (WP-9, 31.10.2026). Uudet kynnykset ovat S5a:n
+mukaan säädettäviä (`StatusParams`, rekisteri §4.4), ja ne on **hyväksytty alustavasti
+31.10.2026 (D15)**. Ne tarkistetaan ensimmäisestä moottorinauhoituksesta. Arvo 0 palauttaa
+WP-4:n käytöksen hystereesille ja suodatukselle.
+- Rivi 6, `hose_hyst_kpa` = 0,2 kPa: sisääntulo ennallaan (|taso| < `hose_off_kpa`
+  yhtäjaksoisesti `kHoseHoldS`), poistuminen vasta kun |taso| ≥ `hose_off_kpa` + `hose_hyst_kpa`
+  tai pulssi palaa. Ennen rajalla oleva taso vaihtoi otsikkoa "ei alipainetta" ↔ "ei pulssia"
+  ~1,5 Hz (EngineSim 701 / 8 × 60 s) ja `off_hold_s`:n sisällä VIKA ↔ "Odota". Taso-EMA:n
+  vaihteluväli 0,024 / 0,047 kPa (2 / 4 mV RMS). Anturivian aika ei ole pulssittomuutta: pito-
+  ajat alkavat alusta, kun anturi toipuu.
+- Rivi 5, `drift_tau_s` = 0,5 s: rpm suodatetaan (EMA, first-order hold) ennen ikkunan
+  vertailua. Tasaisella rampilla erotus on sama kuin ilman suodatusta, joten raja 50 rpm / 2 s
+  ei siirry. Väärät liput (8 siementä × 60 s): 1500 rpm / 3 % jitter 2,4 % → 0,12 %, 3000 rpm /
+  2 % 8,9 % → 0,07 %; 20 rpm / 2 s 3000 rpm:llä liputti 8/8 → 0/8. 60 rpm / 2 s tunnistuu
+  850 rpm:llä 3,07 s:ssa (ennen 2,49 s).
+- Rivi 1, `zero_settle_kpa` = 0,1 kPa / 1 s: vakausehto kulkee `off_hold_s`:n rinnalla eikä
+  sen perässä. Automaattinen nollaus −55 kPa:n joutokäynnin sammutuksesta 6,35–8,5 s → 4,10–4,15 s
+  (= `pulse_timeout_s` 1 s + `off_hold_s` 3 s + taso-EMA:n häntä ≤ 0,15 s).
 
 ### 4.8 `processor.h`, `snapshot.h`, `sim_api.h` (WP-6)
 
@@ -433,7 +483,8 @@ size_t snapshotJson(Processor& p, const SnapshotMeta& m, char* buf, size_t n);
 
 ### 4.9 ESP32-liima (WP-7)
 
-Tiedostot `src/main.cpp` ja `src/hal/*` (Arduino-ESP32 2.0.17, ESPAsyncWebServer 3.6.0).
+Tiedostot `src/main.cpp` ja `src/hal/*` (Arduino-ESP32 2.0.17, ESPAsyncWebServer 3.12.1,
+AsyncTCP 3.5.0; versiot lukittu `platformio.ini`:ssä ja `static_assert`illa `hal/web.cpp`:ssä).
 
 - **Näytteenotto:** oma FreeRTOS-taski ytimellä 1, `vTaskDelayUntil` 1 ms:n välein
   (`CONFIG_FREERTOS_HZ` = 1000). Lähde `Config::source`n mukaan: `EngineSim::next()`, ADC1
@@ -447,7 +498,10 @@ Tiedostot `src/main.cpp` ja `src/hal/*` (Arduino-ESP32 2.0.17, ESPAsyncWebServer
 - **Tahdistus (WP-7a):** `seq` laskee 1 ms:n jaksoja. Alle 3 ms:n myöhästyminen otetaan
   kiinni. Pidempi pysähdys (esim. flash-kirjoitus) ohitetaan, ja seq hyppää yli, jolloin
   pudotus näkyy aukkona eikä näytteitä väärennetä. Jonon alkio on `RawFrame` sekä aikaleima,
-  myöhästyminen ja lähteen lukuaika (diagnostiikka).
+  myöhästyminen ja lähteen lukuaika (diagnostiikka). Yli 250 µs myöhässä otetut näytteet
+  lasketaan kahteen laskuriin näytteen aikaleiman mukaan: setupin aikana `late_boot`
+  (sampler käy jo, kun käsittelytaski, Wi-Fi ja web alustetaan; ensimmäinen ADC-luku on
+  hidas) ja setupin jälkeen (`procBootDone`) `late` (sarjalokissa `kaynn` ja `myoh`).
 - **Käsittely:** `tick` 20 Hz, snapshot `push_rate_hz`:llä SSE-tapahtumana `snap`. Processor
   mutexin takana. Web-käsittelijät ajetaan AsyncTCP-taskissa ytimellä 0.
 
@@ -455,7 +509,7 @@ Tiedostot `src/main.cpp` ja `src/hal/*` (Arduino-ESP32 2.0.17, ESPAsyncWebServer
   |---|---|---|---|
   | `sbx_sample` | 1 | 20 | näytteenotto, `vTaskDelayUntil` 1 ms |
   | `sbx_proc` | 1 | 5 | jonon tyhjennys 4 ms:n välein → `Processor::push`, `tick` 20 Hz |
-  | `sbx_push` | 0 | 11 | SSE-lähetys; `async_tcp` + 1, koska ESPAsyncWebServer 3.6.0:n `AsyncEventSource` lukee asiakkaan TCP-osoittimen ilman lukkoa, joten `send()` ja `count()` kutsutaan vain täältä |
+  | `sbx_push` | 0 | 11 | SSE-lähetys; `async_tcp` + 1, koska `AsyncEventSource` (myös 3.12.1) nollaa asiakkaan TCP-osoittimen katkeamisessa ilman lukkoa, joten `send()` ja `count()` kutsutaan vain täältä (`hal/web.cpp`) |
   | `async_tcp` | 0 | 10 | web-käsittelijät (task watchdog 5 s) |
 
 - **Wi-Fi AP:** SSID `Suckboxx`, salasana `alipaine123`, kanava 1, enintään 4 asiakasta
@@ -471,12 +525,24 @@ Tiedostot `src/main.cpp` ja `src/hal/*` (Arduino-ESP32 2.0.17, ESPAsyncWebServer
   10 s välein, jotta flash ei kulu (kirjoitus näkyy samplerin aukkoina). Lähteen vaihto
   tallentuu ja käynnistää laitteen uudelleen. Ilman tallennettua konfiguraatiota lähde on
   käännöksen `SBX_SAMPLE_SOURCE`, ja asetusten nollaus (`/api/config/reset`) säilyttää sen.
+  Tallennus kirjoittaa jokaisen kentän, ja lataus ohittaa vain puuttuvat avaimet, joten
+  muuttunut oletus (esim. rivin 7 rajat, D15) ei korvaa jo tallennettua arvoa. Uusi oletus
+  tulee voimaan vasta asetusten nollauksella tai käsin.
 - **Web (WP-7b, 30.10.2026):** §5:n reitit, sivu `src/web/web_page.h`:n `WEB_PAGE_HTML`ista
   raakana (ei gzip:iä, `inline constexpr`, yksi kopio flashissa). WP-7a:n diagnostiikkasivu
   on `/diag`:ssa (`/api/diag`, SSE-tapahtuma `diag` 5 Hz). `/api/raw.csv` jäädyttää renkaan
   ja striimaa `CsvWriter`illa chunked-vastauksena; rengas vapautetaan latauksen lopussa tai
   `onDisconnect`issa, kumpi tahansa ensin. Snapshot rakennetaan `sbx_push`issa Processorin
   mutexin alla juuri ennen lähetystä.
+- **Web-kirjasto (WP-13, 31.10.2026):** 3.6.0 → 3.12.1 ja AsyncTCP 3.3.2 → 3.5.0. Korjattu
+  kirjastossa: `_handleDisconnect`in iteraattori (3.7.0), `close()`n itselukitus (3.7.7,
+  rekursiivinen mutex) ja `avgPacketsWaiting`in jako nollalla (3.9.5); AsyncTCP 3.5.0:n
+  rajaton tapahtumajono poistaa 3.3.2:n ainoan tunnetun aukon `sbx_push`in suojassa. Auki:
+  `_onDisconnect` nollaa `_client`in yhä ilman lukkoa, ja `events.close()` mitätöi oman
+  iteraattorinsa, joten `sbx_push`-järjestely ja `close()`-kielto jäävät. Analyysi rivi
+  riviltä `hal/web.cpp`:n alussa. Yhdistetty masteriin ennen laitetestiä (omistajan päätös
+  31.10.2026); riippumaton katselmus ja laitetestin tarkistuslista:
+  [katselmukset/2026-10-31-wp13-hal-kirjastot.md](katselmukset/2026-10-31-wp13-hal-kirjastot.md).
 
 ---
 
@@ -512,13 +578,14 @@ Sim-avaimet: `engine_on` (0/1), `rpm`, `jitter`, `drift`, `base`, `err1`, `err2`
   "v": 1, "t": 123456, "src": "sim",
   "state": "near", "fault_ch": -1, "bars": true, "verdict": true,
   "head": "Lähellä", "advice": "SYL 3: avaa läppää – imee 2,1 kPa enemmän kuin SYL 1",
+  "act": {"ch": 2, "open": true},
   "flags": {"sat": false, "uncal_zero": false, "uncal_gain": true, "drift": false},
   "master": 0, "tol": [1.5, 3.0],
   "rpm": 851.2, "rpm_sd": 9.1, "rpm_cv": 0.011,
   "spread": 2.1, "worst": 2,
   "ch": [
     {"d": 0.0, "mean": -55.1, "level": -55.0, "min": -72.3, "p2p": 25.0, "rpm": 851.0,
-     "mv": 1323, "pulse": true, "fault": false, "sat": false}
+     "mv": 1323, "pulse": true, "fault": false, "sat": false, "cond": "ok"}
   ],
   "wave": {"fs": 62.5, "s": [[-55.1, -54.0, -56.2]]},
   "cal": {"busy": false, "zero": true, "gain": false, "msg": ""},
@@ -530,8 +597,37 @@ Sim-avaimet: `engine_on` (0/1), `rpm`, `jitter`, `drift`, `base`, `err1`, `err2`
   fault_hose, fault_master`.
 - `ch[i].d` = `vac_delta_kpa` (positiivinen = imee enemmän kuin master). `rpm` on `null`
   kun ei voimassa.
+- `act` (WP-10, 31.10.2026) = ruuvineuvo rakenteisena: `{"ch": n, "open": b}` täsmälleen
+  silloin, kun `advice` on muotoa "SYL n+1: avaa|sulje läppää – …" (rivit 4a/4b, ero yli
+  `tol_green_kpa`), muuten `null`. `open` = `vac_delta_kpa > 0` (imee enemmän kuin master →
+  avaa, §4.7). Status asettaa sen samassa kohdassa kuin tekstin (`StatusResult::act_ch`,
+  `act_open`). UI merkitsee kortin (worst-kehys, AVAA/SULJE) tästä eikä jäsennä tekstiä.
+- `ch[i].cond` (WP-10) = kanavan luokitus käytösmatriisissa (`StatusResult::ch_cond`), samoilla
+  pitoajoilla ja kynnyksillä kuin `state`. UI näyttää kanavan tilan tästä eikä päättele sitä
+  pulssista, tasosta tai `hose_off_kpa`:sta. Arvonimet on hyväksytty sellaisinaan (D15,
+  31.10.2026), ja muita arvoja ei ole:
+
+  | `cond` | merkitys | §8 |
+  |---|---|---|
+  | `ok` | pulssi ja kelvollinen keskiarvo, mukana erotuksessa | 2–5, 9 |
+  | `sat` | kuten `ok`, mutta pulssin huippu leikkautuu: `flags.sat` päällä ja kanavan oma `sat` | 10 |
+  | `idle` | ei pulssia missään kanavassa | 1, 8 (D10) |
+  | `no_pulse` | ei pulssia muiden pulssiessa, ohimenevä: pitoaika (`kHoseHoldS` tai `off_hold_s`) kesken | 2 |
+  | `hose` | ei pulssia, \|taso\| < `hose_off_kpa`, kestänyt `kHoseHoldS` | 6 |
+  | `blocked` | ei pulssia, taso ei nollassa, kestänyt `off_hold_s` (tukos, taittuma) | 6 (laajennus) |
+  | `sensor` | anturivika | 7 |
+
+  Masterin vika (rivi 12) näkyy masterin omana `sensor`-, `hose`- tai `blocked`-arvona ja
+  tilana `fault_master`; erillistä arvoa ei tarvita. `ch[i].sat` ja `ch[i].pulse` ovat DSP:n
+  raakalippuja (`sat` on tosi myös ilmanpaineessa, GN-anturi), diagnostiikkaa varten.
+  `cond` = `sat` ei peitä sylinterikorttia (D15): kortti näyttää lukeman kuten `ok`-arvolla, ja
+  leikkautuminen näkyy `flags.sat`-lippuna (SATUROITUU) ja huoltosivun taulukossa.
 - `wave.s` = edellisen viestin jälkeen kertyneet desimoidut näytteet (16 näytteen
   lohkokeskiarvo → 62,5 Hz), kalibroitua kPa:ta, enintään 16 riviä.
+- Pariteetti: `test_snapshot` vertaa laitteen viestiä muotomerkkijonoihin (avaimet järjestyksessä,
+  tyypit), ja `python tools/mock_server.py --check-snapshot` ajaa mockin samoissa tilanteissa ja
+  vertaa sen viestiä samoihin merkkijonoihin sekä `state`- ja `cond`-arvojoukkoja
+  `status.h`:hon ja `snapshot.h`:hon.
 
 ---
 
@@ -542,10 +638,102 @@ Sim-avaimet: `engine_on` (0/1), `rpm`, `jitter`, `drift`, `base`, `err1`, `err2`
   [tools/native_test/unity.h](../tools/native_test/unity.h) — käytä vain niitä.
   Windowsilla molemmat ajetaan WSL:ssä (MinGW-g++:sta puuttuu ASan), Git Bashista
   `wsl --cd "$(pwd -W)" -- bash tools/run_native_tests.sh`.
+- **Fuzz (S8):** `test_fuzz` syöttää lomakkeiden jäsentimille (`applyConfigForm`,
+  `applyMasterForm`, `simApplyForm`) ja nauhoituslukijalle (`recording.h`) deterministisiä
+  pseudosatunnaisia syötteitä (kiinteät siemenet, vähintään 10 000 tapausta jäsennintä kohden)
+  tarkan kokoisissa keko-puskureissa, joten ASan huomaa yhdenkin tavun ylityksen. Pidempi
+  tutkiva ajo: `SBX_FUZZ_SCALE=20` (tapausmäärän kerroin) ja `SBX_FUZZ_SEED=0x…` (XOR
+  siemeniin). Epäonnistunut tapaus tulostaa syötteensä.
 - **GCC 8.4:** `tools/check_core_gcc84.sh [x.h …]` kääntää jokaisen core-headerin yksinään
   ESP32:n omalla kääntäjällä samoilla varoituksilla. Native-g++ on uudempi eikä huomaa
   §1:n kohdan 6 rajoituksia (esim. liukulukujen `std::to_chars`). Vaatii PlatformIOn
-  ESP32-työkaluketjun, eli toimii kehittäjän koneella.
+  ESP32-työkaluketjun, eli toimii kehittäjän koneella (Git Bash tai WSL) ja CI:ssä.
 - **UI:** `python3 tools/mock_server.py` → selain `http://localhost:8000`.
-- **ESP32-käännös** tehdään kehittäjän koneella (`pio run`). Pilviympäristössä
-  PlatformIO-rekisteri ei ole saatavilla.
+- **ESP32-käännös** tehdään kehittäjän koneella (`pio run`) ja CI:ssä. Pilviympäristössä
+  PlatformIO-rekisteri ei ole saatavilla, joten pilvityön ESP32-käännös ja GCC 8.4
+  -tarkistus todennetaan CI:stä.
+- **CI** ([.github/workflows/ci.yml](../.github/workflows/ci.yml), GitHub Actions) ajaa
+  edellä olevat jokaisesta pushista haaroihin `master`, `dev/**` ja `wp/**` sekä
+  masteriin tehdyistä PR:istä:
+
+  | job | ajaa |
+  |---|---|
+  | `native` | `tools/run_native_tests.sh` |
+  | `pio-native` | `pio test -d firmware -e native` (PlatformIO 6.1.19) |
+  | `esp32` (matriisi) | `pio run -d firmware -e <env>` jokaiselle ESP32-ympäristölle, RAM ja flash ajon yhteenvetoon; `check_core_gcc84.sh` kerran |
+  | `web` (Python 3.10 ja 3.14) | `embed_web.py --check`, `mock_server.py --check-config` ja `--check-snapshot`, `py_compile` kaikille `tools/**/*.py` |
+
+  Uudet `firmware/test/test_*/`-kansiot ja Python-työkalut tulevat mukaan ilman
+  muutoksia; uusi ESP32-`[env:...]` lisätään `esp32`-jobin matriisiin. Runner on
+  `ubuntu-26.04`, jossa on sama g++ 15.2 ja Python 3.14 kuin WSL:ssä, joten jokaisen
+  run-askeleen voi toistaa sellaisenaan WSL:ssä. Python 3.10 vastaa Windowsin Pythonia,
+  jolla oraakkelit ajetaan.
+
+### 6.1 Nauhoitusten toisto (WP-8)
+
+Raakanauhoitus (laitteen `GET /api/raw.csv` tai `tools/serial_record.py`) ajetaan PC:llä
+saman `Processor`-koodin läpi kuin laitteella, ja nauhoitus odotuksineen on
+regressiotesti (SUUNNITTELU.md §7 vaihe 4). Lukija, toisto, yhteenveto ja odotukset ovat
+`test/support/recording.h`:ssa, jota käyttävät sekä `test_replay` että `tools/replay`.
+
+```sh
+bash tools/replay/build.sh            # -> tools/replay/build/replay (WSL; MinGW-g++: SAN=0)
+R=tools/replay/build/replay
+$R ajo.csv                                       # yhteenveto
+$R ajo.csv --jsonl ajo.jsonl                     # tikkikohtainen aikasarja
+$R ajo.csv --set hyst_min_kpa=0.5 --set avg_cycles=16   # viritys (S5a, config.h:n avaimet)
+$R ajo.csv --no-cal                              # kalibroimattomana (D11: ei vihreää)
+$R ajo.csv --from lock                           # tilastot ensimmäisestä tuomiosta alkaen
+$R ajo.csv --expect ajo.expect                   # odotukset ilman testiajoa (koodi 1 = rikottu)
+$R --sim rpm=900 err2=2 noise=4 --seconds 8 --seed 2 --out x.csv   # EngineSimin nauhoitus
+```
+
+- **Muodot.** Sarakkeet tunnistetaan nimestä (`seq`, `ch1_mv`, `ch2_mv`, `ch3_mv`
+  pakollisia), joten `/api/raw.csv`, `serial_record.py`:n tiedosto (`%g`-luvut, CRLF) ja
+  laitteen raaka sarjavirta kelpaavat. Toisto käyttää vain mV:tä; kPa-sarakkeet ovat
+  laitteen laskemia. `# aborted=` lopettaa luvun (ehjä alkuosa toistetaan), ja viimeinen rivi
+  ilman rivinvaihtoa ohitetaan varoituksella. Rikkinäinen rivi, kasvamaton seq, yli 65535:n
+  seq-hyppy, `fs_hz` ≠ 1000 tai `format` ≠ 1 hylkää tiedoston.
+- **Konfiguraatio ja kalibrointi otsakkeesta.** `v_zero_mv`, `mv_per_kpa`, `rail_comp`,
+  `rail_nominal_mv` ja `source` → `Config` (`configSetText`); `offset_kpa`, `gain`,
+  `zero_valid` ja `gain_valid` → `Processor::restoreCalibration`. Se on vain
+  native-käännöksessä (`SUCKBOXX_NATIVE_TEST`), koska laitteen `setCalibration` mitätöi
+  nollauksen aina (D11). `--set` sovelletaan sen jälkeen `configure`lla, joten anturin
+  siirtofunktion tai lähteen muutos mitätöi nollauksen kuten laitteella. Otsake on
+  lataushetken tila: jos nollaus tehtiin kesken nauhoitetun ikkunan, alkuosa toistuu uudella
+  offsetilla. Kiskojännitettä ei tallenneta (`rail_mv` = 0, kuten protolevyllä).
+- **Ajoitus kuten `proc_task.cpp`.** Herätys 4 ms:n välein (`kProcPollMs`) vie kehykset,
+  joiden `seq - seq0` < T, ja tick kutsutaan, kun edellisestä on ≥ 50 ms (`last_tick = now`,
+  joten tikit tulevat 52 ms:n välein). Puuttuvaa seq:iä ei syötetä (DSP laskee aikaa
+  näytteinä), mutta kello etenee aukon yli. `now_s` on aika nauhoituksen alusta, ja toisto
+  alkaa kylmästä Processorista. `--poll-ms 1 --tick-ms 50` on `test_integration`in
+  Bench-ajoitus.
+- **JSONL** (`--jsonl`), rivi per tick: `t`, `state`, `rpm`, `rpm_cv` (null, kun arvio ei
+  ole voimassa), `spread`, `d` [3], `worst`, `flags` {`sat`, `uncal_zero`, `uncal_gain`,
+  `drift`}, `fault_ch`, `headline`, `advice`. Nimet ja kanavanumerot kuten snapshotissa (§5).
+- **Yhteenveto** (stdout): aika tiloittain, ensimmäinen lukitus (synced/near/out_of_sync),
+  rpm ka ± hajonta tikeistä, joilla arvio on voimassa, spreadin mediaani ja p95
+  tuomiotikeistä (`show_verdict`) sekä vikatilat kanavineen.
+- **`--sim`** (myös WP-12:n `tools/sim_fit.py`:n rajapinta): `/api/sim`-avaimet
+  (`sim_api.h`, §5) `key=value`-pareina `--sim`in jälkeen, `--seconds` (≤ 65,536 s,
+  16-bittinen seq-ikkuna), `--seed` (oletus 1), `--set` anturiparametreille. Tiedosto
+  kirjoitetaan `CsvWriter`illa tuoreesta EngineSimistä (seq alkaa nollasta), ja otsakkeen
+  loppuun lisätään `generator=`, `sim_seed=` ja `sim=` (GET `/api/sim` -JSON), jotta totuus
+  kulkee tiedostossa. Otsakkeen kalibrointi on offset 0 ja gain 1, `zero_valid=1`
+  (`--zero-valid 0`: kuin laite ilman nollausta) ja `gain_valid=0` (`--gain-valid 1`).
+  EngineSimissä ei ole anturivirheitä `/api/sim`-avaimilla, joten nollaus antaisi offsetin 0.
+  Sama komento ja kääntäjä tuottavat tavulleen saman tiedoston.
+- **Golden-vektorit:** `firmware/test/data/recordings/<nimi>.csv` + `<nimi>.expect`.
+  `test_replay` ajaa jokaisen parin, ja pari ilman toista kaataa testin. Uusi nauhoitus:
+  kopioi CSV (lyhyt pätkä riittää, aloita otsakkeesta), kirjoita `.expect` väitteineen ja
+  niiden päättäjineen, tarkista `replay x.csv --expect x.expect`. Koodia ei muuteta.
+  Muoto on `test/test_replay/test_main.cpp`:n otsakkeessa: `from_s` (s tai `lock`),
+  `final_state`, `allowed_states`, `never_states`, `lock_min_s`, `lock_max_s`, `rpm` +
+  `rpm_tol`, `spread_median_min`/`_max`, `spread_p95_max`, `worst_ch`, `fault_ch`,
+  `headline`, `advice_prefix`, `flags_never`, `flags_always`, `no_cal`, `set.<avain>`.
+  Tuntematon avain on virhe. Testi löytää kansion `__FILE__`:n tai työhakemiston kautta
+  (`run_native_tests.sh` ja `pio test -e native`); `SBX_RECORDINGS_DIR` ohittaa haun.
+- **Ero laitteeseen:** ESP32:n float-laskenta ja kirjastot (esim. `tanf`) voivat erota
+  PC:stä viimeisissä biteissä, joten odotukset ovat toleransseja eivätkä bittivertailuja.
+  Pitkän pysähdyksen (flash) aikana laitteen käsittelytaski seisoo myös ja tikkaa kerran
+  perään, toisto 52 ms:n välein. Offset tallentuu 4 ja gain 6 desimaalilla (< 1e-4 kPa).

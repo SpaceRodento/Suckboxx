@@ -12,11 +12,13 @@
 //   - vihreää ei näy missään muualla kuin tilassa synced (D11, §8: väärä vihreä on pahempi
 //     kuin ei tulosta): ei bannerissa, palkeissa, mittarin kaistassa eikä merkeissä
 //   - AVAA/SULJE ja worst-kehys näkyvät vain, kun laitteen advice-teksti antaa ruuvineuvon
-//     ("SYL n: avaa/sulje läppää"), ja silloin täsmälleen sille kanavalle ja suunnalle
+//     ("SYL n: avaa/sulje läppää"), ja silloin täsmälleen sille kanavalle ja suunnalle. UI lukee
+//     neuvon snapshotin act-kentästä (WP-10), joten tämä tarkistaa samalla, että laite/mock
+//     pitää act-kentän ja tekstin yhtäpitävinä.
 // Lisäksi: kalibroimaton laite (tuore mock) ei näytä vihreää eikä AVAA/SULJE-tekstiä,
-// kosketusalueet >= 44 px, asteikon tekstit eivät pyöristy, vikapeite lukee hose_off_kpa:n
-// laitteelta, "Palauta oletukset" varoittaa uudelleenkäynnistyksestä ja mockin drift-pysäytys
-// ei hyppää takaisin vanhaan rpm:ään.
+// kosketusalueet >= 44 px, asteikon tekstit eivät pyöristy, vikapeite tulee laitteen
+// kanavaluokituksesta (ch[i].cond) eikä luvuista, "Palauta oletukset" varoittaa
+// uudelleenkäynnistyksestä ja mockin drift-pysäytys ei hyppää takaisin vanhaan rpm:ään.
 //
 // Testi alkaa kalibroimattomasta tilasta. Jos laite on jo nollattu (testi ajettu uudelleen
 // samaa mockia vasten), se unohdetaan lähteen vaihdolla (uudelleenkäynnistys, D11).
@@ -217,9 +219,9 @@ const SIM_DEFAULTS = 'engine_on=1&rpm=850&jitter=0.01&drift=0&base=-55&err1=0&er
 
   // ---- synteettiset snapshotit (deterministiset; SSE korvataan kiinteällä vastauksella) ----
   const chan = (d, o) => Object.assign({ d, mean: -55 - d, level: -55, min: -72, p2p: 25, rpm: 851, mv: 1323,
-    pulse: true, fault: false, sat: false }, o || {});
+    pulse: true, fault: false, sat: false, cond: 'ok' }, o || {});
   const snap = (o) => Object.assign({ v: 1, t: 123456, src: 'sim', state: 'synced', fault_ch: -1, bars: true,
-    verdict: true, head: 'Synkronoitu', advice: 'Valmis: ero 0,4 kPa (raja 1,5 kPa)',
+    verdict: true, head: 'Synkronoitu', advice: 'Valmis: ero 0,4 kPa (raja 1,5 kPa)', act: null,
     flags: { sat: false, uncal_zero: false, uncal_gain: false, drift: false }, master: 0, tol: [1.5, 3],
     rpm: 851.2, rpm_sd: 9.1, rpm_cv: 0.011, spread: 0.4, worst: 1, ch: [chan(0), chan(0.3), chan(-0.1)],
     wave: { fs: 62.5, s: waveRows() }, cal: { busy: false, zero: true, gain: false, msg: '' },
@@ -238,13 +240,11 @@ const SIM_DEFAULTS = 'engine_on=1&rpm=850&jitter=0.01&drift=0&base=-55&err1=0&er
     const body = 'retry: 60000\n\n' + snaps.map((s) => 'event: snap\ndata: ' + JSON.stringify(s) + '\n\n').join('');
     await page.route('**/events', (r) => r.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream' }, body }));
     try {
-      const cfgResp = page.waitForResponse((r) => r.url().endsWith('/api/config'), { timeout: 5000 }).catch(() => null);
       await page.goto(URL);
       const last = snaps[snaps.length - 1];
       await page.waitForFunction((st) => document.getElementById('banner').getAttribute('data-state') === st,
         String(last.state), { timeout: 5000 });
-      await cfgResp;
-      await page.waitForTimeout(250);   // vastaus ehtii vaikuttaa piirtoon
+      await page.waitForTimeout(250);   // piirto ehtii valmiiksi
       return await fn();
     } finally {
       await page.unroute('**/events');
@@ -267,6 +267,11 @@ const SIM_DEFAULTS = 'engine_on=1&rpm=850&jitter=0.01&drift=0&base=-55&err1=0&er
   await page.waitForFunction(() => document.getElementById('banner').getAttribute('data-state'), null, { timeout: 10000 });
   check(await page.isVisible('#simbar'), 'SIMULAATTORI-palkki näkyy kun src=sim');
   await post('/api/config/reset', '');
+  // D7/D16: oletusmaster on SYL 3 (BF50A:n alin kaasutin). Alla olevat skenaariot (rivi 12
+  // SYL 1:n letkulla, masterin vaihto) on kirjoitettu SYL 1 -masterille, joten se kiinnitetään.
+  const cfg0 = await getJson('/api/config');
+  check(cfg0.fields.find((f) => f.key === 'master').value === 2, 'oletusmaster on SYL 3 (D16)');
+  await post('/api/master', 'ch=0');
   await post('/api/sim', SIM_DEFAULTS);
 
   // Tuore laite on kalibroimaton. Jos KALIBROIMATON-merkki puuttuu, laite on jo nollattu
@@ -368,7 +373,11 @@ const SIM_DEFAULTS = 'engine_on=1&rpm=850&jitter=0.01&drift=0&base=-55&err1=0&er
   await shot('main_fault_master.png');
 
   // Rivi 6: muu kuin master -> letkuvika.
-  await expectState('SYL 3 letku irti', 'fault1=0&fault3=1', 'fault_hose', 'fault', 10000);
+  await expectState('SYL 3 letku irti', 'fault1=0&fault3=1', 'fault_hose', 'fault', 10000, async () => {
+    const fov = await page.evaluate(() => Array.from(document.querySelectorAll('.cyl .fov'))
+      .map((f) => (f.classList.contains('on') ? f.textContent : '')));
+    check(fov[2] === 'LETKU IRTI?' && !fov[0] && !fov[1], `vikapeite vain SYL 3:lla (${JSON.stringify(fov)})`);
+  });
   await shot('main_fault_hose.png');
   await post('/api/sim', 'fault3=0');
 
@@ -564,6 +573,7 @@ const SIM_DEFAULTS = 'engine_on=1&rpm=850&jitter=0.01&drift=0&base=-55&err1=0&er
     }, 'synth_uncal_near.png');
   await synthView('near + kalibroimaton + neuvo (ero > tol_green): neuvo näkyy, ei vihreää',
     snap({ state: 'near', head: 'Lähellä – kalibroimaton', advice: 'SYL 3: sulje läppää – imee 2,1 kPa vähemmän kuin SYL 1',
+      act: { ch: 2, open: false },
       spread: 2.1, worst: 2, flags: { sat: false, uncal_zero: true, uncal_gain: false, drift: false },
       ch: [chan(0), chan(0.4), chan(-2.1)] }), (v) => {
       const p = invariantProblems(v);
@@ -573,7 +583,7 @@ const SIM_DEFAULTS = 'engine_on=1&rpm=850&jitter=0.01&drift=0&base=-55&err1=0&er
     }, 'synth_uncal_near_advice.png');
   await synthView('out_of_sync + neuvo: AVAA, punainen palkki, tolerassa oleva neutraali',
     snap({ state: 'out_of_sync', head: 'Ei synkronissa', advice: 'SYL 2: avaa läppää – imee 4,2 kPa enemmän kuin SYL 1',
-      spread: 4.2, worst: 1, ch: [chan(0), chan(4.2), chan(1.0)] }), (v) => {
+      act: { ch: 1, open: true }, spread: 4.2, worst: 1, ch: [chan(0), chan(4.2), chan(1.0)] }), (v) => {
       const p = invariantProblems(v);
       if (!(v.acts.length === 1 && v.acts[0].text === 'AVAA' && v.acts[0].i === 1)) p.push('AVAA puuttuu');
       if (v.bars[1].cls !== 'bar bad' || v.bars[2].cls !== 'bar neu') p.push('palkit: ' + A(v.bars));
@@ -581,24 +591,41 @@ const SIM_DEFAULTS = 'engine_on=1&rpm=850&jitter=0.01&drift=0&base=-55&err1=0&er
     }, 'synth_out_of_sync.png');
   await synthView('near ilman tuomiota (verdict=false): neutraali, ei neuvoa',
     snap({ state: 'near', verdict: false, head: 'Lähellä', advice: 'SYL 2: avaa läppää – imee 2,1 kPa enemmän kuin SYL 1',
-      spread: 2.1, worst: 1, ch: [chan(0), chan(2.1), chan(0)] }), (v) => {
+      act: { ch: 1, open: true }, spread: 2.1, worst: 1, ch: [chan(0), chan(2.1), chan(0)] }), (v) => {
       const p = [];
       if (v.bars.some((x) => x.shown && x.cls !== 'bar neu')) p.push('palkki ei neutraali: ' + A(v.bars));
       if (v.acts.length || v.worst.length) p.push('AVAA/SULJE tai worst-kehys ilman tuomiota');
       if (v.cls.includes('st-near') || v.cls.includes('st-bad') || v.cls.includes('st-ok')) p.push('banneri tuomiovärillä: ' + v.cls);
       return p;
     });
-  // UI toistaa laitteen neuvon (advice-teksti), ei johda sitä luvuista: kehys ja AVAA/SULJE seuraavat tekstiä.
+  // UI toistaa laitteen neuvon (act-kenttä, WP-10), ei johda sitä luvuista eikä jäsennä tekstiä:
+  // kehys ja AVAA/SULJE seuraavat act-kenttää.
   await synthView('luvut vihjaavat säätöön (ero 2,4 > raja) mutta laite ei neuvo -> ei kehystä eikä AVAA/SULJE',
-    snap({ state: 'near', head: 'Lähellä – kalibroimaton', advice: 'Nollaus puuttuu – irrota letkut ja tee nollaus',
+    snap({ state: 'near', head: 'Lähellä – kalibroimaton', advice: 'Nollaus puuttuu – sammuta moottori ja paina Nollaa',
       spread: 2.4, worst: 1, flags: { sat: false, uncal_zero: true, uncal_gain: false, drift: false },
       ch: [chan(0), chan(2.4), chan(0)] }), (v) =>
       v.acts.length || v.worst.length ? ['AVAA/SULJE tai kehys vaikka laite ei neuvo: ' + JSON.stringify(v.acts)] : []);
-  await synthView('suunta tulee laitteen tekstistä, ei d:n etumerkistä (teksti: sulje, d > 0)',
+  await synthView('suunta tulee act-kentästä, ei d:n etumerkistä (act: sulje, d > 0)',
     snap({ state: 'near', head: 'Lähellä', advice: 'SYL 2: sulje läppää – imee 2,4 kPa vähemmän kuin SYL 1',
-      spread: 2.4, worst: 1, ch: [chan(0), chan(2.4), chan(0)] }), (v) =>
+      act: { ch: 1, open: false }, spread: 2.4, worst: 1, ch: [chan(0), chan(2.4), chan(0)] }), (v) =>
       v.acts.length === 1 && v.acts[0].i === 1 && v.acts[0].text === 'SULJE' && v.worst[0] === 1 ? [] :
-        ['kortin merkintä ei seuraa tekstiä: ' + JSON.stringify(v.acts)]);
+        ['kortin merkintä ei seuraa act-kenttää: ' + JSON.stringify(v.acts)]);
+  await synthView('UI ei jäsennä tekstiä: ruuvineuvo tekstissä mutta act null -> ei merkintää',
+    snap({ state: 'near', head: 'Lähellä', advice: 'SYL 2: avaa läppää – imee 2,1 kPa enemmän kuin SYL 1',
+      spread: 2.1, worst: 1, ch: [chan(0), chan(2.1), chan(0)] }), (v) =>
+      v.acts.length || v.worst.length ? ['merkintä tekstistä ilman act-kenttää: ' + JSON.stringify(v.acts)] : []);
+  await synthView('act ilman ruuvitekstiä: merkintä seuraa act-kenttää (AVAA SYL 3:lle)',
+    snap({ state: 'out_of_sync', head: 'Ei synkronissa', advice: 'Ero 4,0 kPa', act: { ch: 2, open: true },
+      spread: 4, worst: 2, ch: [chan(0), chan(0), chan(4)] }), (v) =>
+      v.acts.length === 1 && v.acts[0].i === 2 && v.acts[0].text === 'AVAA' && v.worst[0] === 2 ? [] :
+        ['kortin merkintä ei seuraa act-kenttää: ' + JSON.stringify(v.acts)]);
+  for (const bad of [{ ch: 3, open: true }, { ch: -1, open: true }, { ch: 1.5, open: true }, { ch: '1', open: true },
+    { ch: 1, open: 'true' }, { ch: 1 }, 5, 'SYL 2']) {
+    await synthView('epäkelpo act ' + JSON.stringify(bad) + ' -> ei merkintää',
+      snap({ state: 'near', head: 'Lähellä', advice: 'Ero 2,1 kPa', act: bad, spread: 2.1, worst: 1,
+        ch: [chan(0), chan(2.1), chan(0)] }), (v) =>
+        v.acts.length || v.worst.length ? ['merkintä epäkelvosta act-kentästä: ' + JSON.stringify(v.acts)] : []);
+  }
   await synthView('epävakaa (bars=false): ei palkkeja, kaistoja eikä neuvoa',
     snap({ state: 'unstable', bars: false, verdict: false, head: 'Odota, käynti tasaantuu', advice: 'Vakautta odotetaan: 1,2 / 3,0 s',
       spread: 0, worst: -1, ch: [chan(0), chan(0), chan(0)] }), (v) => {
@@ -615,44 +642,72 @@ const SIM_DEFAULTS = 'engine_on=1&rpm=850&jitter=0.01&drift=0&base=-55&err1=0&er
   await synthView('asteikko, tol_yellow 3,3 -> ±6,6 (ei ±7)', snap({ tol: [1.5, 3.3] }), (v) =>
     v.scale.every((s) => s[0] === '+6,6' && s[1] === '−6,6') ? [] : ['asteikko ' + JSON.stringify(v.scale)]);
 
-  // (f) hose_off_kpa luetaan laitteelta: sama taso 3 kPa on "letku irti" vain, jos raja on yli 3
-  const hose = (level) => snap({ state: 'fault_hose', bars: false, verdict: false, fault_ch: 1, spread: 0, worst: -1,
-    head: 'VIKA: SYL 2 – ei alipainetta, tarkista letku', advice: 'Letku irti tai vuotaa – kytke ja tarkista liitokset',
-    ch: [chan(0), chan(0, { pulse: false, mean: null, level }), chan(0)] });
-  await synthView('hose_off_kpa 2 (oletus): taso 3 kPa -> EI PULSSIA', hose(3), (v) =>
-    v.fov[1] === 'EI PULSSIA' ? [] : ['vikapeite "' + v.fov[1] + '"']);
-  await synthView('hose_off_kpa 2 (oletus): taso 1,5 kPa -> LETKU IRTI?', hose(1.5), (v) =>
-    v.fov[1] === 'LETKU IRTI?' ? [] : ['vikapeite "' + v.fov[1] + '"'], 'synth_fault_hose.png');
-  const hc = await post('/api/config', 'hose_off_kpa=4');
-  check(hc.ok === true, 'POST /api/config hose_off_kpa=4');
-  await synthView('hose_off_kpa 4 (laitteelta): taso 3 kPa -> LETKU IRTI? (kovakoodattu 2 antaisi EI PULSSIA)', hose(3), (v) =>
-    v.fov[1] === 'LETKU IRTI?' ? [] : ['vikapeite "' + v.fov[1] + '"']);
-  await post('/api/config/reset', '');
+  // (f) Vikapeite tulee laitteen kanavaluokituksesta (ch[i].cond, WP-10), ei tasosta eikä
+  // hose_off_kpa:sta: sama taso antaa eri peitteen eri luokituksella, ja luokitus ilman
+  // vikaa ei peitä mittaria, vaikka luvut näyttäisivät irronneelta letkulta.
+  const off = (cond, level) => chan(0, { pulse: false, mean: null, min: null, p2p: null, rpm: null, level, cond });
+  const fault = (st, ch, o) => snap(Object.assign({ state: st, bars: false, verdict: false, fault_ch: 1, spread: 0,
+    worst: -1, head: 'VIKA: SYL 2 – ei alipainetta, tarkista letku',
+    advice: 'Letku irti tai vuotaa – kytke ja tarkista liitokset', ch }, o || {}));
+  const fovRed = () => page.evaluate(() => Array.from(document.querySelectorAll('.cyl .fov'))
+    .map((f) => (f.classList.contains('on') ? (f.classList.contains('grey') ? 'harmaa' : 'punainen') : '')));
+  await synth([fault('fault_hose', [chan(0), off('hose', 1.5), chan(0)])], async () => {
+    const v = await view();
+    const col = await fovRed();
+    check(v.fov[1] === 'LETKU IRTI?' && col[1] === 'punainen' && !v.fov[0] && !v.fov[2],
+      `cond hose -> punainen LETKU IRTI? vain SYL 2:lla (${JSON.stringify(v.fov)} ${JSON.stringify(col)})`);
+    await shot('synth_fault_hose.png');
+  });
+  await synthView('cond blocked, taso 1,5 kPa (hose_off_kpa:n alla) -> EI PULSSIA, ei LETKU IRTI?',
+    fault('fault_hose', [chan(0), off('blocked', 1.5), chan(0)], { head: 'VIKA: SYL 2 – ei pulssia, tarkista letku' }),
+    (v) => (v.fov[1] === 'EI PULSSIA' ? [] : ['vikapeite "' + v.fov[1] + '"']));
+  await synthView('cond hose, taso 3 kPa (hose_off_kpa:n yli) -> LETKU IRTI? (laite päätti, ei UI)',
+    fault('fault_hose', [chan(0), off('hose', 3), chan(0)]),
+    (v) => (v.fov[1] === 'LETKU IRTI?' ? [] : ['vikapeite "' + v.fov[1] + '"']));
+  await synth([fault('unstable', [chan(0), off('no_pulse', -2.1), chan(0)],
+    { fault_ch: -1, head: 'Odota, käynti tasaantuu', advice: 'SYL 2: ei pulssia (taso -2,1 kPa)' })], async () => {
+    const v = await view();
+    const col = await fovRed();
+    check(v.fov[1] === 'EI PULSSIA' && col[1] === 'harmaa',
+      `cond no_pulse (pitoaika kesken) -> harmaa EI PULSSIA (${JSON.stringify(v.fov)} ${JSON.stringify(col)})`);
+  });
+  await synthView('pulssiton kanava, jonka laite luokittelee ok:ksi -> ei peitettä (UI ei päättele luvuista)',
+    fault('fault_hose', [chan(0), off('hose', 0.2), off('ok', 0.2)]),
+    (v) => (v.fov[1] === 'LETKU IRTI?' && v.fov[2] === '' ? [] : ['vikapeitteet ' + JSON.stringify(v.fov)]));
+  await synthView('master-vika: masterin oma luokitus (anturi) näkyy kortilla',
+    fault('fault_master', [off('sensor', -108), chan(0), chan(0)], { fault_ch: 0,
+      head: 'Master (SYL 1) ei kelpaa viitteeksi – valitse toinen', advice: 'SYL 1: anturivika (jännite 0 mV)' }),
+    (v) => (v.fov[0] === 'ANTURIVIKA' && !v.fov[1] && !v.fov[2] ? [] : ['vikapeitteet ' + JSON.stringify(v.fov)]));
+  await synthView('vikatila ilman luokitusta (cond puuttuu): nimetty kanava saa VIKA-peitteen',
+    fault('fault_hose', [chan(0), off(undefined, 0.2), chan(0)]),
+    (v) => (v.fov[1] === 'VIKA' && !v.fov[0] && !v.fov[2] ? [] : ['vikapeitteet ' + JSON.stringify(v.fov)]));
 
   // Päivänvalonäkymä (aurinkoteema): kuvat lähemmäs "puhelin ulkona" -tilannetta
   await page.addInitScript(() => { try { localStorage.setItem('sbx_sun', '1'); } catch (e) { /* ei tallennusta */ } });
   await synthView('päivänvalo: synced', snap({}), () => [], 'sun_synced.png');
   await synthView('päivänvalo: near + neuvo', snap({ state: 'near', head: 'Lähellä',
-    advice: 'SYL 3: sulje läppää – imee 2,1 kPa vähemmän kuin SYL 1', spread: 2.1, worst: 2,
-    ch: [chan(0), chan(0.4), chan(-2.1)] }), () => [], 'sun_near.png');
+    advice: 'SYL 3: sulje läppää – imee 2,1 kPa vähemmän kuin SYL 1', act: { ch: 2, open: false }, spread: 2.1,
+    worst: 2, ch: [chan(0), chan(0.4), chan(-2.1)] }), () => [], 'sun_near.png');
   await synthView('päivänvalo: kalibroimaton', snap({ state: 'near', head: 'Lähellä – kalibroimaton',
     advice: 'Nollaus puuttuu – sammuta moottori hetkeksi, laite nollaa itse', spread: 0.9, worst: 2,
     flags: { sat: true, uncal_zero: true, uncal_gain: true, drift: false }, ch: [chan(0), chan(0.3), chan(-0.9)] }),
   () => [], 'sun_uncal_near.png');
   await synthView('päivänvalo: ei synkronissa', snap({ state: 'out_of_sync', head: 'Ei synkronissa',
-    advice: 'SYL 2: avaa läppää – imee 4,2 kPa enemmän kuin SYL 1', spread: 4.2, worst: 1,
-    ch: [chan(0), chan(4.2), chan(1.0)] }), () => [], 'sun_out_of_sync.png');
+    advice: 'SYL 2: avaa läppää – imee 4,2 kPa enemmän kuin SYL 1', act: { ch: 1, open: true }, spread: 4.2,
+    worst: 1, ch: [chan(0), chan(4.2), chan(1.0)] }), () => [], 'sun_out_of_sync.png');
   await page.addInitScript(() => { try { localStorage.setItem('sbx_sun', '0'); } catch (e) { /* ei tallennusta */ } });
   await page.evaluate(() => { try { localStorage.setItem('sbx_sun', '0'); } catch (e) { /* ei tallennusta */ } });
 
   // 360 px: kapein puhelin, pahin tapaus (neuvo + kaikki merkit)
   await page.setViewportSize({ width: 360, height: 740 });
   await synthView('360 px: kaikki merkit + neuvo', snap({ state: 'out_of_sync', head: 'Ei synkronissa',
-    advice: 'SYL 2: avaa läppää – imee 12,2 kPa enemmän kuin SYL 1', spread: 12.2, worst: 1,
-    flags: { sat: true, uncal_zero: true, uncal_gain: true, drift: true }, ch: [chan(0), chan(12.2), chan(1.0)] }),
+    advice: 'SYL 2: avaa läppää – imee 12,2 kPa enemmän kuin SYL 1', act: { ch: 1, open: true }, spread: 12.2,
+    worst: 1, flags: { sat: true, uncal_zero: true, uncal_gain: true, drift: true },
+    ch: [chan(0), chan(12.2, { cond: 'sat' }), chan(1.0)] }),
   (v) => {
     const p = [];
     if (!v.bars[1].shown) p.push('palkki puuttuu');
+    if (!(v.acts.length === 1 && v.acts[0].i === 1 && v.acts[0].text === 'AVAA')) p.push('AVAA puuttuu');
     return p;
   }, 'main_360_worst.png');
   const sw360 = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
@@ -668,7 +723,9 @@ const SIM_DEFAULTS = 'engine_on=1&rpm=850&jitter=0.01&drift=0&base=-55&err1=0&er
       ch: [{ d: 0 }, { d: 99 }, { d: -99, fault: true }, { d: 1, pulse: false }],
       wave: { fs: 0, s: [[1], [null, 2, 3], 'x', [-200, 50, NaN]] }, cal: null, diag: 'x' },
     { state: 'near', verdict: true, bars: true, master: 0, worst: 1, spread: 9, tol: [3, 1], ch: [{ d: 0 }, { d: 5 }, { d: 1 }] },
-    { state: 'fault_hose', fault_ch: 9, head: 7, advice: null, ch: [{ pulse: false, level: 0 }], src: null }];
+    { state: 'near', verdict: true, bars: true, master: 0, worst: 1, act: { ch: '__proto__', open: 1 },
+      ch: [{ d: 0, cond: '__proto__' }, { d: 2, cond: 7 }, { d: 1, cond: 'constructor' }] },
+    { state: 'fault_hose', fault_ch: 9, head: 7, advice: null, act: 3, ch: [{ pulse: false, level: 0, cond: null }], src: null }];
   const body = 'retry: 60000\n\n' + weird.map((w) => 'event: snap\ndata: ' + JSON.stringify(w) + '\n\n').join('') +
     'event: snap\ndata: {broken json\n\n';
   const errsBefore = pageErrors.length;

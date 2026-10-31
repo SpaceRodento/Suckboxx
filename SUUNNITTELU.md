@@ -8,6 +8,7 @@
 > | dokumentti | sisältö |
 > |-----|-----|
 > | tämä | päätökset, perustelut, käytösmatriisi, vaiheistus |
+> | [docs/kayttoohje.md](docs/kayttoohje.md) | **käyttöohje mekaanikolle:** turvallisuus, kytkentä, näytön tilat, kalibrointi, huoltosivu |
 > | [docs/rauta.md](docs/rauta.md) | anturivalinta, kytkentä, mitoitus, pinnijako, PCB |
 > | [docs/hankinnat.md](docs/hankinnat.md) | osaluettelo, tilauskoodit, mitä *ei* kannata ostaa |
 > | [docs/firmware.md](docs/firmware.md) | firmware-arkkitehtuuri, moduulit, rajapinnat, web-API |
@@ -211,6 +212,11 @@ kalibroimaton laite ei voi täyttää tätä kynnystä lainkaan → R4.
 *Nämä ovat lähtöarvoja.* S5a:n mukaan molemmat kynnykset ovat ajonaikaisesti säädettäviä, ja
 lopulliset luvut asetetaan vaiheessa 4 nauhoitetun datan perusteella.
 
+*Hondan raja (D16, 31.10.2026):* BF40A/BF50A:n synkronoinnin raja on 20 mmHg ≈ 2,67 kPa (B,
+[docs/bf50a-huoltotiedot.md](docs/bf50a-huoltotiedot.md)). Se osuu keltaiselle kaistalle
+(1,5–3,0 kPa), joten D2:n rajoja ei muuteta: vihreä on tiukempi kuin Hondan vaatimus ja täyttää
+sen aina, keltainen vain, jos spread on alle 2,67 kPa.
+
 ### D3 — Näyttötapa ✅ PÄÄTETTY 9.8.2026
 
 **Poikkeama valitusta master-kanavasta.** Nolla = master. Muut kaksi kanavaa näytetään
@@ -264,40 +270,57 @@ oletukseen signaalin muodosta (§2), ei mitattuun. Se on hyvin perusteltu oletus
   koodissa. Ne *tullaan* säätämään ensimmäisen moottorikäynnin aikana, ja jokainen uudelleenkäännös
   laiturilla on kallis. Web-UI:hin huoltosivu, arvot NVS:ään.
 - **S5b — Raakadatan rengaspuskuri alusta asti** (R3). Firmware pitää muistissa viimeiset ~10 s
-  raakanäytteitä; UI:ssa on "Tallenna" → CSV. Maksaa muutaman kilotavun RAM:ia ja yhden
+  raakanäytteitä (toteutus ~8,2 s: 8192 näytettä × 8 tavua = 64 kt staattista DRAMia, johon
+  rengas on mitoitettu, [docs/firmware.md](docs/firmware.md) §4.5); UI:ssa on "Tallenna" → CSV. Maksaa muutaman kilotavun RAM:ia ja yhden
   reitin, mutta säilyttää mahdollisuuden analysoida oikeaa dataa jälkikäteen — eli sen ainoan
   hyödyn, joka erillisestä nauhoitinvaiheesta olisi saatu. **Ilman tätä ensimmäinen moottorikäynti
   ei tuota mitään pysyvää tietoa signaalista.**
 
 ### D6 — Kohdemoottori ✅ PÄÄTETTY 30.10.2026 (kierre varmistettava)
 
-**Honda BF50A, n. 2004.** Kolme erillistä kaasutinta, imusarjassa valmiit synkronointitulpat,
-kierre todennäköisesti **M6** — *varmistettava ennen adapterien tilausta* (ks. alla).
+**Honda BF50A, n. 2004.** Kolme erillistä kaasutinta, imusarjassa valmiit synkronointitulpat:
+**5 × 10 mm:n ristipääruuvi ja 5 mm:n tiiviste** (B, D16). Kierteen nousu on *varmistettava
+ennen adapterien tilausta* (oletus M5 × 0,8, ks. alla). Alkuperäinen arvio 30.10.2026 oli
+"todennäköisesti M6".
+
+Lähteet ja luotettavuusluokat (A = Honda, B = huoltolähde, C = foorumi):
+[docs/bf50a-huoltotiedot.md](docs/bf50a-huoltotiedot.md) (verkosta 31.10.2026, ei korvaa
+Hondan korjaamokäsikirjaa).
 
 *Seuraukset:*
 
-- **Tyhjäkäynti 850–950 rpm** (omistajan tieto 30.10.2026; tarkistettava huolto-ohjeesta).
-  Synkronointi tehdään tyhjäkäynnillä, joka on D12:n arvioikkunan (500–3000 rpm) sisällä.
-  Simulaattorin oletus 850 rpm on alueen alalaidassa. DSP:n testit kattavat 600–3000 rpm,
-  ja lukitus 850 rpm:llä vie noin 0,45 s.
-- **Letkuliitos:** tulppa auki → messinkinen letkunippa (kierre × ⌀3 mm letkulle) tilalle.
-  T-haaraa tai porausta ei tarvita. → [docs/hankinnat.md](docs/hankinnat.md) A5.
-- **Kierteen varmistus:** irrota yksi tulppa ja mittaa (kierretulkki tai kokeile M6×1,0-
-  ja M5×0,8-muttereita). Moottoripyörä-Hondoissa vastaavat tulpat ovat usein M5×0,8, joten
-  "M6 ehkä" kannattaa todentaa ennen kuin tilaa kolme nippaa. Tiivisteet (kuparialuslevyt)
-  samaan kokoon.
-- **Kaasuttimet, ei ITB:** yksi synkronointiruuvi per säädettävä kaasutin. Huolto-ohjeesta
-  tarkistettava, **mikä kaasutin on kiinteä perus** (= master, D7) — oletus SYL 1 säilyy,
-  kunnes se on tarkistettu. Säätöruuvin kiertosuunta tarkistetaan samalla, jolloin
-  säätöohje voi myöhemmin sanoa "myötäpäivään/vastapäivään" eikä vain "avaa/sulje".
-- **Tasauskanavat:** ei tiedossa. Simulaattorin `xtalk`-parametri kattaa molemmat
-  vaihtoehdot; ensimmäinen nauhoitus (M6) näyttää, onko vuotopulsseja.
-- **Joutokäynti:** tarkka ohjearvo huolto-ohjeesta; se osuu joka tapauksessa D12:n
-  500–3000 rpm -ikkunaan.
+- **Tyhjäkäynti 950 ± 50 rpm vapaalla** (A, Carburetion Manual s. 7-3; D16). Omistajan tieto
+  30.10.2026 oli 850–950 rpm. Synkronointi tehdään tyhjäkäynnillä, aina samoilla kierroksilla
+  (A + B), ja se on D12:n arvioikkunan (500–3000 rpm) sisällä. Simulaattorin oletus 850 rpm on
+  Hondan alueen (900–1000 rpm) alapuolella, ja se säilyy tarkoituksella alueen alapuolisena
+  testinä. DSP:n testit kattavat 600–3000 rpm, ja lukitus 850 rpm:llä vie noin 0,45 s.
+- **Letkuliitos:** tulppa auki → messinkinen letkunippa (M5 × ⌀3 mm letkulle) ja 5 mm:n
+  tiiviste tilalle. T-haaraa tai porausta ei tarvita. → [docs/hankinnat.md](docs/hankinnat.md) A5.
+- **Kierteen varmistus:** irrota yksi tulppa ja mittaa (kierretulkki tai M5 × 0,8 -mutteri).
+  Nousua ei löytynyt mistään lähteestä; M5:n ISO-karkea nousu 0,8 mm on päätelmä. Tiiviste
+  on osaluettelossa "Washer, Sealing, 5mm" (90452-323-000), materiaali ei tiedossa.
+- **Kaasuttimet, ei ITB:** yksi synkronointiruuvi per säädettävä kaasutin. **Kiinteä perus on
+  No. 3 = alin kaasutin** (A + B, D16), joten masterin oletus on SYL 3 (D7). Säädettävät ovat
+  No. 2 ja No. 1, tässä järjestyksessä, 1/8 kierrosta kerrallaan ja kaasu auki ja kiinni
+  jokaisen säädön jälkeen (A + B). Ruuvin kiertosuuntaa ei löytynyt lähteistä: se testataan
+  moottorilta 1/8 kierroksella mittarista, ja säätöohje sanoo yhä vain "avaa/sulje".
+- **Tasauskanavat:** kaasuttimien väliset **SE-letkut** (rikastimen letkut) puristetaan kiinni
+  mittauksen ajaksi (B, D16). Muista tasauskanavista ei ole tietoa. Simulaattorin
+  `xtalk`-parametri kattaa molemmat vaihtoehdot; ensimmäinen nauhoitus (M6) näyttää, onko
+  vuotopulsseja.
+- **Koekäyttö:** huuhtelukupeilla vain tyhjäkäynti (A, Honda PCI54237: "Running the engine
+  above idle speed can damage the water pump and overheat the engine."). Korotetut kierrokset
+  vain testisäiliössä tai vesillä ([docs/moottoriajo.md](docs/moottoriajo.md) §2).
 
 ### D7 — Master-kanava ✅ PÄÄTETTY 9.8.2026
 
-**Käyttäjän valittavissa UI:sta, oletus SYL 1.** Valinta säilyy NVS:ssä.
+**Käyttäjän valittavissa UI:sta, oletus SYL 3** (D16, 31.10.2026; alun perin SYL 1). Valinta
+säilyy NVS:ssä.
+
+*Oletuksen peruste (D16):* BF50A:n kiinteä perus on alin kaasutin No. 3 (A: Honda Carburetion
+Manual s. 7-13, "The bottom carburetor is the base carburetor"; B: "The No.3 carburetor is the
+synchronization base carburetor"). Oletus on tarkistettu lähteistä mutta ei vielä moottorilta
+([docs/bf50a-huoltotiedot.md](docs/bf50a-huoltotiedot.md) §3).
 
 *Perustelu:* vastaa fyysistä säätötyötä — monessa moottorissa yhtä kaasuläppää ei voi säätää, ja
 mekaanikko tietää kumpi se on. Nollataso pysyy paikallaan koko säädön ajan.
@@ -313,7 +336,7 @@ käytösmatriisin rivi 12.
 ### D9 — Web-transport ✅ PÄÄTETTY 30.10.2026
 
 **Server-Sent Events (push, 15 Hz) + REST-komennot**, kirjastona `ESPAsyncWebServer`
-(esp32async 3.6.0) + `AsyncTCP` 3.3.2.
+(esp32async 3.12.1) + `AsyncTCP` 3.5.0 (WP-13, 31.10.2026; alun perin 3.6.0 + 3.3.2).
 
 *Perustelu:* bring-up-firmwaren 2 Hz:n kysely on liian hidas säätämiseen — ruuvin kääntäjä
 tarvitsee 10–20 Hz. Data kulkee lähes pelkästään laitteelta puhelimeen, joten WebSocketin
@@ -377,6 +400,62 @@ simulaattorilähteellä, kunnes XGZP-anturit on kytketty; lähde vaihdetaan huol
 voidaan toteuttaa ja testata ilman antureita ja ilman moottoria (D6). Simulaattorin totuusarvot
 (todellinen keskiarvo, rpm) tekevät jokaisesta käytösmatriisin rivistä automaattisen testin.
 HX710B-lähde säilyy penkkitestiin, mutta se ei tuota syklejä (10 SPS, §3.1).
+
+### D15 — Avoimet kynnykset ja nimet ✅ PÄÄTETTY 31.10.2026 (kohdat 2 ja 5 alustavasti)
+
+Omistaja delegoi [docs/jatko.md](docs/jatko.md):n "Avoimet 5" -kohdan päätökset
+orkestroijalle, ja orkestroija päätti ne:
+
+1. **Rivin 7 rajat 150 / 2950 mV** (`fault_lo_mv` / `fault_hi_mv`, ennen 100 / 3150).
+   *Perustelu:* ADC lukee eFusen mukaan 142–3150 mV, joten vanhat rajat laukesivat vain liiman
+   raw 0 / 4095 → 0 / 3300 mV -koodauksella. Uudet rajat ovat ADC:n lukualueen sisällä ja anturin
+   laillisen alueen ulkopuolella: −100…0 kPa = 200…2700 mV, tarkkuus ±2 %FSS = ±50 mV
+   ([docs/rauta.md](docs/rauta.md) §1.2, §1.4). Yläraja on 200 mV (8 kPa) ilmanpaineen
+   pahimman lukeman (2750 mV) ja 224 mV mitatun ylipaineen (+1,2 kPa = 2726 mV) yläpuolella.
+   Alaraja on 50 mV nimellisen täyden alipaineen (−100 kPa = 200 mV) alapuolella; sama raja
+   osuu anturin −2 %FSS:n pahimpaan tapaukseen (150 mV, ei vielä vika). Joutokäynnin syvin
+   alipaine (−88 kPa = 500 mV, `config.h`) jää 300–350 mV:n päähän. Lisäksi lukeman on pysyttävä
+   rajan ulkopuolella yhtäjaksoisesti `fault_hold_s` (1 s).
+   *Seuraus:* laite, jonka NVS:ssä on tallennettu konfiguraatio, pitää vanhat 100 / 3150 mV,
+   kunnes asetukset palautetaan oletuksiin huoltosivulta tai rajat muutetaan käsin.
+2. **WP-9:n kynnykset:** `hose_hyst_kpa` 0,2 kPa (rivi 6), `drift_tau_s` 0,5 s (rivi 5) ja
+   `zero_settle_kpa` 0,1 kPa / 1 s (rivi 1 ja nollaus). §8:n riveille 1 ja 5 on lisätty
+   tarkenteet. Arvot tarkistetaan ensimmäisestä moottorinauhoituksesta.
+3. **Snapshotin `ch[i].cond`-nimet** hyväksytään sellaisinaan: `ok`, `sat`, `idle`,
+   `no_pulse`, `hose`, `blocked`, `sensor` ([docs/firmware.md](docs/firmware.md) §5). `sat` ei
+   peitä sylinterikorttia: kortti näyttää lukeman kuten `ok`-arvolla, ja leikkautuminen näkyy
+   SATUROITUU-lippuna ja huoltosivun taulukossa ("pulssi · leikkautuu").
+4. **HX710B-lähde säilyy penkkitestilähteenä** (D14), eikä sitä poisteta
+   ([docs/roadmap.md](docs/roadmap.md) P0).
+5. **Moottoriajon pöytäkirjan rajat** H1:lle, riville 9 ja D2:lle
+   ([docs/moottoriajo.md](docs/moottoriajo.md) §6.1, §6.3, §6.4) hyväksytään sellaisinaan.
+   Ne tarkistetaan ensimmäisestä ajosta.
+6. **Kalibroimattomana annetaan ruuvineuvo** (rivit 4a/4b, nykyinen käytös WP-4:stä lähtien).
+   D11 kieltää vain vihreän. *Perustelu:* nollaus on ajopöytäkirjassa ennen käynnistystä, ja
+   automaattinen nollaus tekee sen sammutuksen jälkeen; neuvon piilottaminen olisi uusi
+   käytös ilman laitetestiä. Riski: anturien ±2 kPa:n offsetit voivat yksinään tuottaa
+   AVAA/SULJE-neuvon, kunnes nollaus on tehty (S1-katselmus, löydös 1). Lisätty 31.10.2026
+   iltapäivällä.
+
+### D16 — BF50A:n huoltotiedot lähteistä ✅ PÄÄTETTY 31.10.2026 (tarkistettava moottorilta)
+
+Verkkotutkimus 31.10.2026 löysi BF50A:n synkronointitiedot lähteineen ja luotettavuusluokkineen
+(A = Honda, B = huoltolähde, C = foorumi): [docs/bf50a-huoltotiedot.md](docs/bf50a-huoltotiedot.md).
+Omistajan delegoinnin (D15) nojalla orkestroija päätti:
+
+1. **Masterin oletus SYL 3** (D7, ennen SYL 1). *Peruste:* alin kaasutin No. 3 on synkronoinnin
+   perus, eikä siinä ole synkronointiruuvia (A: Honda Carburetion Manual s. 7-13; B). Laitteen
+   SYL-numerot vastaavat Hondan kaasutinnumeroita, kun letkut kytketään niin (No. 1 ylin).
+   *Seuraus:* laite, jonka NVS:ssä on tallennettu konfiguraatio, pitää masterin SYL 1:ssä, kunnes
+   asetukset palautetaan oletuksiin tai master vaihdetaan. Moottoriajon ja käyttöohjeen
+   tarkistuslistoilla on siksi kohta "varmista, että master on SYL 3".
+2. **D6:n tiedot:** tulppa 5 × 10 mm ja 5 mm:n tiiviste (B), nousu varmistettava; tyhjäkäynti
+   950 ± 50 rpm vapaalla (A); SE-letkut puristetaan kiinni mittauksen ajaksi (B); huuhtelukupeilla
+   vain tyhjäkäynti (A). Simulaattorin oletus 850 rpm jää Hondan alueen alapuolelle tarkoituksella.
+3. **D2 ennallaan:** Hondan raja 20 mmHg ≈ 2,67 kPa (B) on keltaisella kaistalla (1,5–3,0 kPa).
+
+*Avoinna:* ruuvien kiertosuunta (ei löytynyt), kierteen nousu, kaasutinnumeroiden ja SE-letkujen
+fyysinen tarkistus sekä alkuperäinen korjaamokäsikirja (bf50a-huoltotiedot.md §3).
 
 ---
 
@@ -453,14 +532,14 @@ Lukema on aina D1:n **keskiarvo yli syklin**, ja näyttö on aina D3:n **poikkea
 
 | # | tilanne | miten tunnistetaan | mitä UI näyttää | mitä käyttäjä tekee |
 |---|-----|-----|-----|-----|
-| 1 | Moottori sammuksissa | kaikki kanavat 0 ± 2 kPa gauge, ei pulssia ≥3 s | "Moottori ei käy" + **automaattinen nollakalibrointi** ajetaan | käynnistää moottorin |
+| 1 | Moottori sammuksissa | kaikki kanavat 0 ± 2 kPa gauge, ei pulssia ≥3 s ja tasot paikallaan (1 s:n vaihtelu < 0,1 kPa) | "Moottori ei käy" + **automaattinen nollakalibrointi** ajetaan | käynnistää moottorin |
 | 2 | Käynnistyy / epävakaa | pulssi havaittu, mutta rpm-hajonta > 15 % | "Odota, käynti tasaantuu" + rpm harmaana, palkit piilossa | odottaa |
 | 3 | Joutokäynti vakaa, **synkronissa** | rpm 600–1200 ja vakaa ≥3 s, `spread` ≤ **1,5 kPa** | 🟢 "Synkronoitu", Δ-luvut, rpm ja ±hajonta | valmis |
 | 4a | Joutokäynti vakaa, **lähellä** | sama, `spread` **1,5–3,0 kPa** | 🟡 suurin poikkeama korostettuna + säätösuunta sanallisesti | hienosäätää |
 | 4b | Joutokäynti vakaa, **ei synkronissa** | sama, `spread` > **3,0 kPa** | 🔴 sama näkymä, voimakkaampi korostus | säätää nimettyä sylinteriä |
-| 5 | Kierrosluku ajautuu säädön aikana | rpm muuttuu > 50 rpm / 2 s | Δ-luvut **pysyvät näkyvissä** (yhteismuotoinen liike on jo poistettu), rpm korostuu muuttuvana | jatkaa säätöä |
+| 5 | Kierrosluku ajautuu säädön aikana | rpm muuttuu > 50 rpm / 2 s (suodatettu rpm) | Δ-luvut **pysyvät näkyvissä** (yhteismuotoinen liike on jo poistettu), rpm korostuu muuttuvana | jatkaa säätöä |
 | 6 | Yksi letku irti tai vuotaa | kanava 0 ± 2 kPa muiden pulssiessa | **VIKA**: "Kanava N: ei alipainetta — tarkista letku" | kytkee letkun |
-| 7 | Anturi rikki tai irti | ADC-lukema kiinni ääripäässä (< 0,10 V tai > 3,15 V) ≥ 1 s | **VIKA**: "Kanava N: anturivika" | vaihtaa anturin |
+| 7 | Anturi rikki tai irti | ADC-lukema kiinni ääripäässä (< 0,15 V tai > 2,95 V, D15) ≥ 1 s | **VIKA**: "Kanava N: anturivika" | vaihtaa anturin |
 | 8 | Kaikki letkut irti, moottori käy | kaikki kanavat 0 ± 2 kPa, mutta rpm tuntematon | "Ei mittaussignaalia — kaikki letkut irti?" | kytkee letkut |
 | 9 | Rpm liian korkea mittaukseen | rpm > 3000 | rpm näytetään, **synkronointiarvio piilotetaan** ("Säädä joutokäynnillä") | laskee kaasua |
 | 10 | Signaali saturoituu | ADC ≥ 2,68 V pulssin huipulla | varoitus: "Positiivinen paine leikkautuu (H1)" | — (kirjataan, ks. H1) |
@@ -506,6 +585,9 @@ merkityksessä (nollan tunnistus vs. letkuvian tunnistus); ne saattavat tarvita 
 | 30.10.2026 | D6: Honda BF50A (~2004), 3 kaasutinta, synkronointitulpat valmiina, kierre todennäköisesti M6 (varmistettava). |
 | 30.10.2026 | D6: tyhjäkäynti 850–950 rpm (omistajan tieto, varmistettava huolto-ohjeesta). |
 | 30.10.2026 | D9–D14 päätetty (SSE-transport, rivit 1+8 yhdistetty, kalibroinnin portitus, rpm-ikkuna 500–3000, MVP = satunnainen työkalu + RPM, simulaattori ensin). Firmware-arkkitehtuuri [docs/firmware.md](docs/firmware.md). Roadmap §11. |
+| 31.10.2026 | WP-8…WP-13 haaraan `dev/integraatio` ([docs/paketit.md](docs/paketit.md)): nauhoitusten toisto ja golden-testit, käytösmatriisin jälkityöt (rivit 1, 5, 6; uudet kynnykset omistajan päätettävinä), snapshotin `act`/`cond`, CI, moottoriajon pöytäkirja ja `sim_fit.py`, web-kirjastojen nosto. Yöajon jono [docs/yoajo/](docs/yoajo/). |
+| 31.10.2026 | Omistaja delegoi jatko.md:n "Avoimet 5" -kohdan päätökset orkestroijalle, ja orkestroija päätti ne (D15): rivin 7 rajat 150 / 2950 mV, WP-9:n kynnykset ja §8:n rivien 1 ja 5 tarkenteet, snapshotin `cond`-nimet, HX710B-lähteen säilytys sekä moottoriajon pöytäkirjan rajat. WP-9:n ja pöytäkirjan arvot ovat alustavia, ja ne tarkistetaan ensimmäisestä moottorinauhoituksesta. |
+| 31.10.2026 | D16: BF50A:n huoltotiedot lähteistä ([docs/bf50a-huoltotiedot.md](docs/bf50a-huoltotiedot.md)). Masterin oletus SYL 1 → SYL 3 (D7), D6:een tulppa 5 × 10 mm ja 5 mm:n tiiviste, tyhjäkäynti 950 ± 50 rpm, SE-letkut kiinni mittauksen ajaksi ja huuhtelukuppien kierrosraja. D2:een Hondan raja 2,67 kPa (rajat ennallaan) ja D5:een renkaan toteutettu pituus ~8,2 s. |
 
 ---
 
@@ -529,11 +611,11 @@ Pivotit (dataloggeri, NMEA 2000, EFI) ovat tietoisesti ulkona.
 | # | vaihe | vaatii | tila |
 |---|---|---|---|
 | M0 | Päätökset D9–D14, arkkitehtuuri ([docs/firmware.md](docs/firmware.md)), testiympäristö | — | ✅ |
-| M1 | Simulaattori, DSP (syklit, D1-luvut, RPM), kalibrointi, konfiguraatio, rengaspuskuri, käytösmatriisi — kaikki native-testein | — | kesken, ks. [docs/jatko.md](docs/jatko.md) |
-| M2 | Web-UI + PC-mock-palvelin (sama API kuin laitteella) | — | kesken, ks. [docs/jatko.md](docs/jatko.md) |
-| M3 | Processor + integraatiotestit simulaattorilla (jokainen §8:n rivi testinä) + ESP32-liima (1 kHz näytteenotto, NVS, SSE) | ESP32 | |
-| M4 | Laitteella simulaattorilla: UI puhelimessa, suorituskyky (näytteenoton jitter, heap, Wi-Fi) | ESP32 | |
-| M5 | XGZP-anturit protolevylle (rauta.md §6.6), ADC-lähde, penkkitesti T-haaralla | anturit | |
-| M6 | Ensimmäinen moottorikäynti (Honda BF50A), raakadata talteen | adapterit (D6: kierre varmistettava) | |
-| M7 | Viritys nauhoitetulla datalla, nauhoitukset regressiotesteiksi, D2:n lopulliset luvut | data | |
+| M1 | Simulaattori, DSP (syklit, D1-luvut, RPM), kalibrointi, konfiguraatio, rengaspuskuri, käytösmatriisi — kaikki native-testein | — | ✅ (jälkityöt WP-9 31.10.2026) |
+| M2 | Web-UI + PC-mock-palvelin (sama API kuin laitteella) | — | ✅ (WP-10: `act`, `cond`, mockin pariteetti) |
+| M3 | Processor + integraatiotestit simulaattorilla (jokainen §8:n rivi testinä) + ESP32-liima (1 kHz näytteenotto, NVS, SSE) | ESP32 | ✅ |
+| M4 | Laitteella simulaattorilla: UI puhelimessa, suorituskyky (näytteenoton jitter, heap, Wi-Fi) | ESP32 | osittain: 1000,00 Hz ilman aukkoja; `dev/integraatio`n laitetesti tekemättä ([docs/jatko.md](docs/jatko.md)) |
+| M5 | XGZP-anturit protolevylle (rauta.md §6.6), ADC-lähde, penkkitesti T-haaralla | anturit | osittain: anturit protolevyllä, penkkitesti kahdella kanavalla 31.10.2026; T-haara ja käsipumppu puuttuvat |
+| M6 | Ensimmäinen moottorikäynti (Honda BF50A), raakadata talteen | adapterit (D6: kierre varmistettava) | pöytäkirja [docs/moottoriajo.md](docs/moottoriajo.md) (WP-12) |
+| M7 | Viritys nauhoitetulla datalla, nauhoitukset regressiotesteiksi, D2:n lopulliset luvut | data | työkalut valmiina: toisto ja golden-testit (WP-8), `sim_fit.py` (WP-12) |
 | M8 | Kotelo (R5), mahdollinen PCB, sateenkaarimaali | H1–H5 | |

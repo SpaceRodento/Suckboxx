@@ -128,9 +128,11 @@ class AdcSource {
   // esp_adc_cal antaisi raw 0:lle offsetin coeff_b (eFuse Vref -karakterisoinnissa
   // 142 mV, libesp_adc_cal.a adc1_vref_atten_offset[3]) ja raw 4095:lle taulukon
   // pään 3060...3209 mV piirin Vrefistä riippuen (lut_adc1_low/high[19], Vref
-  // 1100 mV -> ~3134 mV). 142 mV ei alita rivin 7 rajaa fault_lo_mv = 100 eikä
-  // ~3134 mV ylitä rajaa fault_hi_mv = 3150, eli maadoittunut tai kiskoon
-  // oikosulkeutunut anturi jäisi huomaamatta.
+  // 1100 mV -> ~3134 mV). Oletusrajat 150 / 2950 mV (rivi 7, D15) ovat tämän
+  // ikkunan sisällä, mutta huoltosivun alue 50…500 / 2500…3250 mV (config.h)
+  // ei ole: ilman koodausta 142 mV ei alittaisi rajaa 100 eikä ~3134 mV
+  // ylittäisi rajaa 3150 (D15:tä edeltäneet oletukset), eli maadoittunut tai
+  // kiskoon oikosulkeutunut anturi jäisi huomaamatta.
   uint16_t toMv(int raw) const {
     if (raw <= 0) return 0;
     if (raw >= kAdcRawMax) return kAdcFullScaleMv;
@@ -247,6 +249,9 @@ void readSource(RawFrame& f, int64_t now_us) {
 // Alle kCatchUpMaxUs myöhästyminen otetaan kiinni: vTaskDelayUntil palaa heti,
 // kunnes tahti on saavutettu, ja näytteet ovat oikeassa seq-järjestyksessä
 // (myöhässä, mutta korkeintaan muutaman ms). Suurempi myöhästyminen ohitetaan.
+// Tahti ankkuroidaan ennen ensimmäistä lukua, joten hidas ensimmäinen luku
+// (ADC ~1,35 ms, 30.10.2026) myöhästyttää seuraavan jakson; setup on silloin
+// vielä kesken, ja käsittelytaski laskee sen late_boot:iin (procBootDone).
 void samplerLoop(void*) {
   TickType_t wake = xTaskGetTickCount();
   vTaskDelayUntil(&wake, 1);  // ensimmäinen näyte tickin kohdalle

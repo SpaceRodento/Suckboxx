@@ -1,0 +1,25 @@
+# Synteettinen (EngineSim, ei oikeaa dataa): joutokäynti 900 rpm, SYL 2 imee 2 kPa
+# vähemmän (läppä liian auki). Totuus: d = 0 / -2,0 / 0 kPa, spread 2,0 kPa.
+# Luotu 31.10.2026 (WP-8):
+#   tools/replay/build/replay --sim rpm=900 err2=2 noise=4 --seconds 8 \
+#     --seed 2 --out firmware/test/data/recordings/sim_near_syl2.csv
+# noise=4 mV kuten sim_idle_synced (jatko.md, 31.10.2026). zero_valid=1, gain_valid=0.
+# Odotukset (d, worst_ch) on kirjoitettu SYL 1 -masterille, joka oli D7:n oletus.
+# D16 (31.10.2026) vaihtoi oletuksen SYL 3:een, joten master kiinnitetään.
+set.master=0
+
+lock_min_s=3.0           # D12 / rivi 4a: vakaa >= stable_hold_s ennen tuomiota
+lock_max_s=6.0            # kuten sim_idle_synced (test_integration test_row2)
+never_states=synced,fault_sensor,fault_hose,fault_master   # D2: 2 kPa ei ole koskaan vihreä; §8: ehjät kanavat
+
+from_s=lock
+allowed_states=near       # rivi 4a, D2: 1,5 < 2,0 <= 3,0 kPa
+final_state=near
+headline=Lähellä          # rivi 4a (status.h, test_row4a)
+advice_prefix=SYL 2: sulje läppää   # rivi 4a + §4.7: d < 0 -> "sulje", pahin kanava nimetään (test_row4a)
+worst_ch=1                # rivi 4a: pahin kanava = SYL 2
+rpm=900                   # rivi 3/4: tarkkuus 1 % (test_row3_idle_synced)
+rpm_tol=9
+spread_median_min=1.85    # D1/D2: totuus 2,0 kPa ± 0,15 (test_integration assertVerdict, test_row4a)
+spread_median_max=2.15
+flags_never=uncal_zero    # D11: nollaus voimassa

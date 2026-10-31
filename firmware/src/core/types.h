@@ -38,8 +38,10 @@ struct RawFrame {
 struct SensorParams {
   float v_zero_mv = 2700.0f;
   float mv_per_kpa = 25.0f;
-  uint16_t fault_lo_mv = 100;    // käytösmatriisi rivi 7
-  uint16_t fault_hi_mv = 3150;   // rivi 7
+  // Rivi 7 (D15, 31.10.2026): rajat mitatun ADC-ikkunan (eFuse 142…3150 mV)
+  // sisällä ja anturin laillisen alueen (200…2700 mV, ±2 %FSS) ulkopuolella.
+  uint16_t fault_lo_mv = 150;    // käytösmatriisi rivi 7
+  uint16_t fault_hi_mv = 2950;   // rivi 7
   float fault_hold_s = 1.0f;     // rivi 7: yhtäjaksoisesti näin kauan
   uint16_t sat_mv = 2680;        // rivi 10: GN-anturi leikkaa 2700 mV:iin
   bool rail_comp = false;        // ratiometrinen korjaus rail_mv:llä (R6)
@@ -59,7 +61,10 @@ struct DspParams {
 };
 
 struct StatusParams {
-  uint8_t master = 0;            // D7, oletus SYL 1
+  // D7/D16 (31.10.2026): oletus SYL 3 = BF50A:n alin kaasutin, joka on Hondan
+  // synkronoinnin perus (docs/bf50a-huoltotiedot.md). NVS:ään tallennettu
+  // konfiguraatio ohittaa oletuksen (hal/nvs_store.cpp).
+  uint8_t master = 2;
   float tol_green_kpa = 1.5f;    // D2
   float tol_yellow_kpa = 3.0f;   // D2
   float off_kpa = 5.0f;          // rivit 1/8: kaikki |taso| alle tämän (kalibroimatonkin, D10)
@@ -72,6 +77,11 @@ struct StatusParams {
   float drift_rpm = 50.0f;       // rivi 5: muutos yli tämän ...
   float drift_window_s = 2.0f;   // ... tämän ikkunan aikana
   bool auto_zero = true;         // rivi 1: automaattinen nollakalibrointi
+  // WP-9: hyväksytty alustavasti 31.10.2026 (D15), tarkistetaan ensimmäisestä
+  // moottorinauhoituksesta. Perustelut ja mittaukset status.h:ssa ja calibration.h:ssa.
+  float hose_hyst_kpa = 0.2f;    // rivi 6: letkuvika poistuu vasta, kun |taso| >= hose_off_kpa + tämä
+  float drift_tau_s = 0.5f;      // rivi 5: rpm-arvion suodatus ennen ikkunavertailua, 0 = ei suodatusta
+  float zero_settle_kpa = 0.1f;  // rivi 1 ja nollaus: tason vaihteluväli 1 s:n aikana alle tämän
 };
 
 enum class SourceKind : uint8_t { Sim = 0, Adc = 1, Hx710b = 2 };
@@ -125,6 +135,19 @@ enum class SyncState : uint8_t {
   FaultMaster,      // rivi 12
 };
 
+// Kanavan luokitus käytösmatriisissa (status.h), snapshotin ch[i].cond
+// (docs/firmware.md §5). UI näyttää kanavakohtaisen tilan tästä eikä päättele
+// sitä luvuista, joten pitoajat ja kynnykset ovat yhdessä paikassa (WP-10).
+enum class ChannelCond : uint8_t {
+  Ok = 0,     // pulssi ja kelvollinen keskiarvo: mukana erotuksessa (D3)
+  Sat,        // kuten Ok, mutta pulssin huippu leikkautuu (rivi 10, flag_saturation)
+  Idle,       // ei pulssia missään kanavassa (rivit 1+8, D10)
+  NoPulse,    // ei pulssia muiden pulssiessa, vielä ohimenevä (Unstable)
+  Hose,       // rivi 6: ei alipainetta muiden pulssiessa
+  Blocked,    // rivin 6 laajennus: ei pulssia, mutta taso ei nollassa (tukos?)
+  Sensor,     // rivi 7
+};
+
 constexpr int kHeadlineLen = 80;   // UTF-8 tavuina, sis. NUL
 constexpr int kAdviceLen = 112;
 
@@ -134,7 +157,8 @@ struct StatusResult {
   bool show_bars = false;          // rivi 2: palkit piiloon
   bool show_verdict = false;       // vihreä/keltainen/punainen tuomio näkyvissä
   // Alipaine-ero masteriin: d = mean_master - mean_ch. Positiivinen = kanava
-  // imee enemmän kuin master (läppä suljetumpi) -> "avaa". Master = 0.
+  // imee enemmän kuin master (läppä suljetumpi) -> "avaa". Masterin oma d = 0
+  // (indeksi StatusParams::master, ei kiinteästi SYL 1).
   float vac_delta_kpa[kChannels] = {0.0f, 0.0f, 0.0f};
   float spread_kpa = 0.0f;         // max(d) - min(d)
   int8_t worst_ch = -1;            // suurin |d| ei-master-kanavista
@@ -145,6 +169,12 @@ struct StatusResult {
   bool request_auto_zero = false;  // rivi 1: Processor ajaa nollauksen
   char headline[kHeadlineLen] = {0};
   char advice[kAdviceLen] = {0};
+  // Ruuvineuvo rakenteisena (WP-10): kanava ja suunta, jotka advice nimeää
+  // ("SYL n: avaa|sulje läppää – …"). -1 = ei neuvoa. Suunta vac_delta_kpa:n
+  // merkistä: d > 0 (imee enemmän kuin master) -> act_open = true.
+  int8_t act_ch = -1;
+  bool act_open = false;
+  ChannelCond ch_cond[kChannels] = {ChannelCond::Idle, ChannelCond::Idle, ChannelCond::Idle};
 };
 
 }  // namespace sbx

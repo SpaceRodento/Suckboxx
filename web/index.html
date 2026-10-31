@@ -814,7 +814,7 @@ html.sun .msg.ok { color: #08702f; }
     <p id="cMsg" class="msg"></p>
 
     <h3>1. Nollaus</h3>
-    <p class="note">Moottori seis, letkut saavat olla kiinni – sammuneen moottorin imusarja on ilmanpaineessa. Laite nollaa myös itse, kun moottori on ollut sammuksissa muutaman sekunnin. Nollaus on tehtävä joka käynnistyksen jälkeen, muuten vihreää ei näytetä.</p>
+    <p class="note">Moottori seis, letkut saavat olla kiinni – sammuneen moottorin imusarja on ilmanpaineessa. Laite nollaa myös itse, kun moottori on ollut sammuksissa muutaman sekunnin. Nollaus katoaa, kun laite käynnistyy uudelleen (esim. virta katkeaa tai signaalilähde vaihtuu) tai anturiasetuksia muutetaan, ja ilman sitä vihreää ei näytetä. Moottorin sammutus ei poista nollausta.</p>
     <button id="bZero" type="button" class="btn">Nollaa</button>
     <p id="zMsg" class="msg"></p>
 
@@ -928,13 +928,11 @@ var es = null;                 // EventSource
 var cards = [];                // sylinterikorttien DOM-viitteet
 var armed = -1, armT = 0;      // masterin vaihdon vahvistus (kaksi napautusta)
 var wave = [], waveFs = 62.5, waveFixed = false, raf = 0, colors = [];
-var hoseOff = NaN;             // hose_off_kpa laitteelta (/api/config), ks. noteCfg()
 
 // ==== SSE (D9): EventSource yhdistää itse; suljettu yhteys avataan uudelleen ====
 function connect() {
   if (es) es.close();
   es = new EventSource('/events');
-  es.addEventListener('open', loadHoseOff);
   es.addEventListener('snap', function (e) {
     var s;
     try { s = JSON.parse(e.data); } catch (x) { return; }
@@ -990,22 +988,34 @@ function readTol(s) {
   return isNum(t[0]) && t[0] > 0 && isNum(t[1]) && t[1] > t[0] ? { g: t[0], y: t[1] } : null;
 }
 
-// Ruuvineuvo laitteen omasta tekstistä: status.h verdict() kirjoittaa "SYL n: avaa|sulje läppää – ..."
-// vain tuomiotilassa (Lähellä, Ei synkronissa) ja vain kun ero ylittää vihreän rajan. Jos ero on
-// rajan sisällä, tila on Synkronoitu tai "Lähellä – kalibroimaton", ja silloin advice on
-// pelkkä nollausohje eikä ruuvineuvoa ole. Kortin worst-kehys ja AVAA/SULJE näytetään vain, kun
-// neuvo on, ja täsmälleen sille kanavalle ja suunnalle, jonka teksti nimeää: ne toistavat laitteen
-// neuvon kortilla, UI ei johda neuvoa itse (ei omia kynnyksiä eikä etumerkkilogiikkaa).
-// Palauttaa {ch, open} tai null.
-// AVOIN: snapshotissa ei ole rakenteellista kenttää neuvolle (esim. act = {ch, dir}), joten teksti
-// jäsennetään. Jos sanamuoto muuttuu, kehys ja merkintä jäävät pois (turvallinen suunta; banneri
-// näyttää neuvon yhä) ja savutesti punastuu. Suositus: lisää kenttä snapshotiin.
-function parseAdvice(s) {
-  var st = s.state;
+// Ruuvineuvo laitteelta rakenteisena (snapshotin act, firmware.md §5): status.h verdict() asettaa
+// sen samassa kohdassa, jossa se kirjoittaa "SYL n: avaa|sulje läppää – ...", eli vain
+// tuomiotilassa (Lähellä, Ei synkronissa) ja vain kun ero ylittää vihreän rajan. Rajan sisällä
+// tila on Synkronoitu tai "Lähellä – kalibroimaton", advice on pelkkä nollausohje ja act null.
+// Kortin worst-kehys ja AVAA/SULJE näytetään vain, kun neuvo on, ja täsmälleen sille kanavalle ja
+// suunnalle, jonka laite nimeää: UI ei johda neuvoa itse (D11: ei omia kynnyksiä eikä
+// etumerkkilogiikkaa). Epäkelpo kenttä tai tila ilman tuomiota -> ei merkintää (turvallinen suunta;
+// banneri näyttää neuvon yhä). Palauttaa {ch, open} tai null.
+function readAct(s, n) {
+  var a = obj(s.act), st = s.state;
   if (s.verdict !== true || (st !== 'near' && st !== 'out_of_sync')) return null;
-  var m = /^SYL (\d+): (avaa|sulje) läppää/.exec(String(s.advice || ''));
-  return m ? { ch: Number(m[1]) - 1, open: m[2] === 'avaa' } : null;
+  var ok = isNum(a.ch) && a.ch % 1 === 0 && a.ch >= 0 && a.ch < n && typeof a.open === 'boolean';
+  return ok ? { ch: a.ch, open: a.open } : null;
 }
+
+// Kanavakohtainen vikapeite laitteen luokituksesta (ch[i].cond, firmware.md §5): UI ei päättele
+// kanavan tilaa pulssista, tasosta eikä kynnyksistä, joten pitoajat (letkuvika 0,5 s) ja
+// hose_off_kpa ovat vain laitteella. [teksti, harmaa]: punainen = vika (rivit 6, 7, 12),
+// harmaa = ohimenevä (laite odottaa, onko vika). ok, sat ja idle eivät peitä mittaria.
+var FOV = {
+  sensor: ['ANTURIVIKA', false], hose: ['LETKU IRTI?', false], blocked: ['EI PULSSIA', false],
+  no_pulse: ['EI PULSSIA', true]
+};
+// Diagnostiikkataulukon "Tila"-rivi samasta luokituksesta.
+var COND_TXT = {
+  ok: 'pulssi', sat: 'pulssi · leikkautuu', idle: 'ei pulssia', no_pulse: 'ei pulssia (odota)',
+  hose: 'letku irti?', blocked: 'ei pulssia (tukos?)', sensor: 'anturivika'
+};
 
 // Palkin väri tulee laitteen tuomiosta, ei pelkästä |d|:stä:
 //  - ilman tuomiota (verdict ei tosi) kaikki on neutraalia
@@ -1114,9 +1124,8 @@ function renderCyls(s) {
   var tg = dt.g, ty = dt.y, sc = 2 * ty;
   var st = String(s.state || '');
   var bars = s.bars === true;
-  var adv = parseAdvice(s);
+  var adv = readAct(s, cards.length);
   var faultSt = st === 'fault_hose' || st === 'fault_master' || st === 'fault_sensor';
-  var anyPulse = ch.some(function (x) { return x && x.pulse === true; });
   var y = function (v) { return 50 - v / sc * 50; };   // kPa -> % mittarin ylälaidasta
 
   for (var i = 0; i < cards.length; i++) {
@@ -1149,19 +1158,11 @@ function renderCyls(s) {
     tog(k.up, 'on', show && d > sc);
     tog(k.dn, 'on', show && d < -sc);
 
-    // Kanavakohtainen vikapeite: anturivika aina, letku/pulssi vikatilassa.
-    // Letkuvian raja on laitteen hose_off_kpa; jos sitä ei vielä tiedetä, ei väitetä irtinäistä letkua.
-    var fv = '', grey = false;
-    if (c.fault === true) {
-      fv = 'ANTURIVIKA';
-    } else if (faultSt && c.pulse !== true && anyPulse) {
-      fv = isNum(c.level) && isNum(hoseOff) && Math.abs(c.level) < hoseOff ? 'LETKU IRTI?' : 'EI PULSSIA';
-    } else if (faultSt && i === s.fault_ch) {
-      fv = 'VIKA';
-    } else if (st === 'unstable' && c.pulse === false && anyPulse) {
-      fv = 'EI PULSSIA';
-      grey = true;
-    }
+    // Kanavakohtainen vikapeite laitteen luokituksesta (FOV). Vikatilan nimeämä kanava saa
+    // peitteen aina, vaikka luokitus puuttuisi (turvallinen suunta).
+    var cf = FOV.hasOwnProperty(c.cond) ? FOV[c.cond] : null;
+    var fv = cf ? cf[0] : '', grey = cf ? cf[1] : false;
+    if (!fv && faultSt && i === s.fault_ch) fv = 'VIKA';
     txt(k.fov, fv);
     tog(k.fov, 'on', fv);
     tog(k.fov, 'grey', grey);
@@ -1174,7 +1175,7 @@ function renderCyls(s) {
     } else if (bars && isNum(d)) {
       dv = sg(d, 1);
       dh = Math.abs(d) < 0.05 ? 'tasan' : d > 0 ? 'imee enemmän' : 'imee vähemmän';
-    } else if (c.pulse === false && !fv) {
+    } else if (c.cond === 'idle') {
       dh = 'ei pulssia';
     }
     if (dv !== '—') {
@@ -1185,7 +1186,7 @@ function renderCyls(s) {
     }
     txt(k.dh, dh);
 
-    // Mitä ruuvia: vain kanavalle ja suuntaan, jonka laitteen neuvo nimeää (parseAdvice).
+    // Mitä ruuvia: vain kanavalle ja suuntaan, jonka laitteen neuvo nimeää (readAct).
     txt(k.act, isWorst ? (adv.open ? 'AVAA' : 'SULJE') : '');
   }
 
@@ -1193,7 +1194,7 @@ function renderCyls(s) {
   tog(mh, 'hot', st === 'fault_master');
   txt(mh, st === 'fault_master'
     ? 'Master ei kelpaa – napauta toista sylinteriä kahdesti valitaksesi uuden masterin'
-    : 'Napauta sylinteriä vaihtaaksesi masterin · palkki ylös = imee enemmän');
+    : 'Napauta sylinteriä kahdesti vaihtaaksesi masterin · palkki ylös = imee enemmän');
 }
 
 // D7: master vaihtuu vain vahvistetusti (kaksi napautusta), ettei nollataso
@@ -1328,7 +1329,7 @@ function renderDiag(s) {
   });
   h += '<tr><td>Tila</td>' + ch.map(function (c) {
     c = obj(c);
-    return '<td>' + (c.fault ? 'VIKA' : c.pulse ? 'pulssi' : 'ei pulssia') + (c.sat ? ' · sat' : '') + '</td>';
+    return '<td>' + (COND_TXT.hasOwnProperty(c.cond) ? COND_TXT[c.cond] : '—') + '</td>';
   }).join('') + '</tr></table><table>';
   var kv = [
     ['Näytetaajuus', fx(dg.fs, 1) + ' Hz'],
@@ -1390,19 +1391,6 @@ function parseNum(t) {
 }
 function optionsOf(f) { return f.key === 'source' ? SRC : f.key === 'master' ? MASTERS : null; }
 
-// hose_off_kpa on säädettävä kynnys (S5a). Mittausnäkymän vikapeite lukee sen laitteelta
-// (GET /api/config), ei kovakoodattua arvoa. Päivitetään SSE-yhteyden avautuessa ja aina,
-// kun asetukset ladataan; piirto päivitetään heti, ei vasta seuraavalla snapshotilla.
-function noteCfg(j) {
-  arr(obj(j).fields).forEach(function (f) {
-    if (f && f.key === 'hose_off_kpa' && isNum(f.value)) hoseOff = f.value;
-  });
-  if (S) renderCyls(S);
-}
-function loadHoseOff() {
-  api('/api/config').then(noteCfg).catch(function () { /* ei estä mittausta */ });
-}
-
 function cfgRow(f, i) {
   var id = 'f_' + i, inp, opts = optionsOf(f);
   var def = shown(f.def);
@@ -1428,7 +1416,6 @@ function cfgRow(f, i) {
 }
 function loadCfg() {
   return api('/api/config').then(function (j) {
-    noteCfg(j);
     fields = arr(obj(j).fields).filter(function (f) { return f && typeof f.key === 'string'; });
     var h = '', grp = null;
     fields.forEach(function (f, i) {

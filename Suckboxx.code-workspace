@@ -1,11 +1,45 @@
 {
+	// Järjestys on tarkoituksellinen:
+	// - "." ensin, jotta Claude Code ja terminaali aukeavat repon juuresta.
+	// - firmware omana juurenaan, koska PlatformIO IDE tunnistaa projektin vain
+	//   workspace-kansion juuresta löytyvästä platformio.ini:stä. Referenssi/-kansion
+	//   PIO-projektit eivät siksi näy projektivalitsimessa.
 	"folders": [
 		{
-			"path": "firmware"
+			"name": "Suckboxx",
+			"path": "."
 		},
 		{
-			"path": "."
+			"name": "firmware (PlatformIO)",
+			"path": "firmware"
 		}
 	],
-	"settings": {}
+	"settings": {
+		// firmware näkyy jo omana juurenaan, joten piilotetaan tupla Suckboxx-puusta
+		// (polku on suhteessa kunkin juuren alkuun, Referenssi/firmware jää näkyviin)
+		"files.exclude": {
+			"firmware": true
+		},
+		// .pio = build-tulosteet ja libdeps; Referenssi-projekteissa satoja tiedostoja
+		"search.exclude": {
+			"**/.pio": true
+		},
+		"files.watcherExclude": {
+			"**/.pio/**": true
+		},
+		// pio kaatuu UnicodeEncodeErroriin, jos sen tuloste putkitetaan cp1252-konsolissa
+		"terminal.integrated.env.windows": {
+			"PYTHONUTF8": "1"
+		}
+	},
+	"extensions": {
+		"recommendations": [
+			"platformio.platformio-ide",
+			"ms-python.python"
+		],
+		"unwantedRecommendations": [
+			"ms-vscode.cpptools-extension-pack",
+			"pioarduino.pioarduino-ide"
+		]
+	}
 }

@@ -76,6 +76,17 @@ struct Feed {
 int S(SyncState s) { return static_cast<int>(s); }
 int R(CalResult r) { return static_cast<int>(r); }
 
+// Masteria koskevat odotukset on kirjoitettu SYL 1 -masterille, joka oli D7:n
+// oletus. D16 (31.10.2026) vaihtoi oletuksen SYL 3:een, joten SYL 1 kiinnitetään
+// eksplisiittisesti: testit testaavat samaa kuin ennen. configure on lataus eikä
+// käyttäjän muutos, joten takeConfigDirty ei nouse.
+void pinSyl1Master(Processor& p) {
+  Config c = p.config();
+  c.status.master = 0;
+  TEST_ASSERT_TRUE(p.configure(c));
+  TEST_ASSERT_EQUAL_INT(0, p.master());
+}
+
 bool utf8Valid(const char* s) {
   const unsigned char* q = reinterpret_cast<const unsigned char*>(s);
   while (*q) {
@@ -99,10 +110,15 @@ bool utf8Valid(const char* s) {
   return true;
 }
 
+// Nollaus vaatii tason pysyneen paikallaan koko vakausikkunan (WP-9,
+// calibration.h kZeroSettleWindowS = 1 s) + yksi tick. Ennen WP-9:ää testit
+// pitivät tasoa 0,5 s; arvo oli asetelma, ei väite.
+constexpr float kSettledS = sbx::kZeroSettleWindowS + 0.1f;
+
 // Kalibroitu T-haara (R4, docs/rauta.md §7): nollaus ilmanpaineessa, sitten
 // sama alipaine kaikissa kanavissa ja 2 s mittaus.
 void zeroAtAtmosphere(Feed& f) {
-  f.holdKpa(0.0f, 0.0f, 0.0f, 0.5f);
+  f.holdKpa(0.0f, 0.0f, 0.0f, kSettledS);
   TEST_ASSERT_EQUAL_INT(R(CalResult::Ok), R(f.p.zeroNow()));
 }
 
@@ -223,7 +239,7 @@ void test_set_calibration_sanitizes_broken_gain() {
 void test_zero_now_at_atmosphere() {
   Processor p(g_mem, kRingCap);
   Feed f(p);
-  f.hold(2650, 2675, 2725, 0.5f);  // anturien offsetit -2, -1, +1 kPa (R4)
+  f.hold(2650, 2675, 2725, kSettledS);  // anturien offsetit -2, -1, +1 kPa (R4)
   TEST_ASSERT_EQUAL_INT(R(CalResult::Ok), R(p.zeroNow()));
   TEST_ASSERT_TRUE(p.calibration().zero_valid);
   TEST_ASSERT_FLOAT_WITHIN(1e-3f, 2.0f, p.calibration().offset_kpa[0]);
@@ -247,7 +263,7 @@ void test_zero_now_keeps_gain() {
   cal.gain_valid = true;
   p.setCalibration(cal);
   Feed f(p);
-  f.hold(2650, 2650, 2650, 0.5f);  // nimellinen -2 kPa
+  f.hold(2650, 2650, 2650, kSettledS);  // nimellinen -2 kPa
   TEST_ASSERT_EQUAL_INT(R(CalResult::Ok), R(p.zeroNow()));
   TEST_ASSERT_FLOAT_WITHIN(1e-3f, 2.1f, p.calibration().offset_kpa[0]);
   TEST_ASSERT_FLOAT_WITHIN(1e-3f, 1.9f, p.calibration().offset_kpa[2]);
@@ -272,7 +288,63 @@ void test_zero_now_rejected_without_atmosphere() {
   Config c;
   c.status.off_kpa = 8.0f;
   TEST_ASSERT_TRUE(p.configure(c));
-  f.holdKpa(0.0f, -6.0f, 0.0f, 0.5f);
+  f.holdKpa(0.0f, -6.0f, 0.0f, kSettledS);
+  TEST_ASSERT_EQUAL_INT(R(CalResult::Ok), R(p.zeroNow()));
+}
+
+// WP-9 (jatko.md 8): käsin nollaus vaatii tason vakauden. Juuri sammutetun
+// moottorin alipaine purkautuu: taso laskee -4 -> 0 kPa 1 kPa/s, kaikki
+// |taso| < off_kpa koko ajan. Ennen WP-9:ää zeroNow hyväksyi tämän ja kirjasi
+// laskevan tason offsetiksi. Raja: vaihteluväli 1 s:n aikana < zero_settle_kpa.
+void test_zero_now_rejects_bleeding_vacuum() {
+  Processor p(g_mem, kRingCap);
+  Config c;
+  c.status.auto_zero = false;   // vain käsin nollaus tässä
+  TEST_ASSERT_TRUE(p.configure(c));
+  Feed f(p);
+  for (int ms = 0; ms < 3000; ++ms) {   // -4,0 -> -1,0 kPa
+    const float kpa = -4.0f + static_cast<float>(ms) / 1000.0f;
+    f.holdKpa(kpa, kpa, kpa, 0.001f);
+  }
+  TEST_ASSERT_EQUAL_INT(R(CalResult::NotSettled), R(p.zeroNow()));
+  TEST_ASSERT_FALSE(p.calibration().zero_valid);
+  for (int i = 0; i < kChannels; ++i) TEST_ASSERT_EQUAL_FLOAT(0.0f, p.calibration().offset_kpa[i]);
+  TEST_ASSERT_EQUAL_STRING(sbx::calResultText(CalResult::NotSettled), p.calStatus().msg);
+  // Yksikin kanava liikkeessä (0,3 kPa/s) riittää hylkäämään. Taso-EMA:n
+  // jälkiviive (tau 0,5 s) asettuu ensin 2 s.
+  f.holdKpa(-1.0f, -1.0f, -1.0f, 2.0f);
+  for (int ms = 0; ms < 1100; ++ms) {
+    f.holdKpa(-1.0f, -1.0f + 0.32f * static_cast<float>(ms) / 1100.0f, -1.0f, 0.001f);
+  }
+  TEST_ASSERT_EQUAL_INT(R(CalResult::NotSettled), R(p.zeroNow()));
+  // Asettunut taso: nollaus onnistuu ja offset on lopullinen taso
+  // (-0,68 kPa = 2683 mV tasan).
+  f.holdKpa(-1.0f, -0.68f, -1.0f, 2.0f);
+  TEST_ASSERT_EQUAL_INT(R(CalResult::Ok), R(p.zeroNow()));
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 1.0f, p.calibration().offset_kpa[0]);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.68f, p.calibration().offset_kpa[1]);
+}
+
+void test_zero_now_needs_full_settle_window() {
+  // Vakautta ei voi osoittaa ilman ikkunan verran historiaa: käynnistyksen,
+  // asetusten muutoksen (DSP ja ikkuna nollautuvat) ja kalibroinnin jälkeen.
+  Processor p(g_mem, kRingCap);
+  Feed f(p);
+  f.holdKpa(0.0f, 0.0f, 0.0f, sbx::kZeroSettleWindowS - 0.1f);
+  TEST_ASSERT_EQUAL_INT(R(CalResult::NotSettled), R(p.zeroNow()));
+  f.holdKpa(0.0f, 0.0f, 0.0f, 0.2f);
+  TEST_ASSERT_EQUAL_INT(R(CalResult::Ok), R(p.zeroNow()));
+  // Nollaus nollasi DSP:n ja ikkunan: heti perään uusi nollaus odottaa.
+  f.holdKpa(0.0f, 0.0f, 0.0f, 0.5f);
+  TEST_ASSERT_EQUAL_INT(R(CalResult::NotSettled), R(p.zeroNow()));
+  TEST_ASSERT_TRUE(p.calibration().zero_valid);   // hylkäys ei mitätöi edellistä
+  const FormPair form[] = {{"tol_green_kpa", "1,2"}};
+  char err[sbx::kFormErrLen];
+  f.holdKpa(0.0f, 0.0f, 0.0f, kSettledS);
+  TEST_ASSERT_TRUE(p.applyConfigForm(form, 1, err, sizeof(err)));
+  f.holdKpa(0.0f, 0.0f, 0.0f, 0.5f);
+  TEST_ASSERT_EQUAL_INT(R(CalResult::NotSettled), R(p.zeroNow()));
+  f.holdKpa(0.0f, 0.0f, 0.0f, 0.6f);
   TEST_ASSERT_EQUAL_INT(R(CalResult::Ok), R(p.zeroNow()));
 }
 
@@ -422,7 +494,7 @@ void test_gain_capture_aborted_by_configure() {
 void test_reset_gain_keeps_zero_point() {
   Processor p(g_mem, kRingCap);
   Feed f(p);
-  f.hold(2650, 2650, 2650, 0.5f);
+  f.hold(2650, 2650, 2650, kSettledS);
   TEST_ASSERT_EQUAL_INT(R(CalResult::Ok), R(p.zeroNow()));
   f.hold(1400, 1475, 1450, 0.2f);
   TEST_ASSERT_TRUE(p.startGainCapture());
@@ -447,8 +519,45 @@ void test_reset_gain_keeps_zero_point() {
 // Master (D7) ja sen lomake
 // ---------------------------------------------------------------------------
 
+// D7/D16 (31.10.2026): oletusmaster on SYL 3 = BF50A:n alin kaasutin, joka on
+// Hondan synkronoinnin perus (docs/bf50a-huoltotiedot.md: Carburetion Manual
+// s. 7-13, luokka A). Processor ei kutsu configurea luodessaan, joten ketju
+// types.h -> StatusMachinen konstruktori -> neuvoteksti lukitaan päästä päähän.
+// Lopuksi Palauta oletukset (POST /api/config/reset) vie SYL 1:stä SYL 3:een:
+// sama tilanne kuin laitteella, jonka NVS:ssä on vanha SYL 1.
+void test_default_master_is_syl3_D16() {
+  Processor p(g_mem, kRingCap);
+  TEST_ASSERT_EQUAL_INT(2, p.config().status.master);
+  TEST_ASSERT_EQUAL_INT(2, p.master());
+  // SYL 1 imee 4 kPa syvemmin kuin muut: d = mean_SYL3 - mean_SYL1 = +4 -> avaa (D3).
+  EngineSim sim;
+  SimParams sp;
+  sp.sync_err_kpa[0] = -4.0f;
+  sim.configure(sp, sbx::SensorParams());
+  for (uint32_t n = 1; n <= 6000u; ++n) {
+    p.push(sim.next());
+    if (n % 50 == 0) p.tick(static_cast<float>(n) / 1000.0f);
+  }
+  const sbx::StatusResult& r = p.status();
+  TEST_ASSERT_TRUE_MESSAGE(r.show_verdict, r.advice);
+  TEST_ASSERT_EQUAL_INT(0, r.worst_ch);
+  TEST_ASSERT_EQUAL_FLOAT(0.0f, r.vac_delta_kpa[2]);   // master = nollataso
+  TEST_ASSERT_GREATER_THAN_FLOAT(3.5f, r.vac_delta_kpa[0]);
+  const char* head = "SYL 1: avaa läppää – imee ";
+  const char* tail = " kPa enemmän kuin SYL 3";
+  const size_t al = std::strlen(r.advice);
+  const size_t tl = std::strlen(tail);
+  TEST_ASSERT_TRUE_MESSAGE(std::strncmp(r.advice, head, std::strlen(head)) == 0, r.advice);
+  TEST_ASSERT_TRUE_MESSAGE(al > tl && std::strcmp(r.advice + al - tl, tail) == 0, r.advice);
+  // Palauta oletukset: tallennettu SYL 1 -> SYL 3.
+  TEST_ASSERT_TRUE(p.setMaster(0));
+  p.resetConfig();
+  TEST_ASSERT_EQUAL_INT(2, p.master());
+}
+
 void test_set_master_keeps_dsp_and_restarts_stability_D7() {
   Processor p(g_mem, kRingCap);
+  pinSyl1Master(p);
   EngineSim sim;
   sim.configure(SimParams(), sbx::SensorParams());
   uint32_t n = 0;
@@ -489,6 +598,7 @@ void test_set_master_keeps_dsp_and_restarts_stability_D7() {
 
 void test_master_form_strict_channel() {
   Processor p(g_mem, kRingCap);
+  pinSyl1Master(p);
   char err[sbx::kFormErrLen];
   const FormPair ok2[] = {{"ch", "2"}};
   TEST_ASSERT_TRUE(p.applyMasterForm(ok2, 1, err, sizeof(err)));
@@ -617,6 +727,7 @@ void test_config_form_error_texts_fit_and_stay_utf8() {
 
 void test_configure_rejects_invalid_config() {
   Processor p(g_mem, kRingCap);
+  pinSyl1Master(p);
   Config c;
   c.status.tol_green_kpa = 4.0f;  // > tol_yellow_kpa 3 (D2)
   TEST_ASSERT_FALSE(p.configure(c));
@@ -656,9 +767,10 @@ void test_conversion_change_invalidates_zero_D11() {
 void test_reset_config_and_config_json() {
   Processor p(g_mem, kRingCap);
   char err[sbx::kFormErrLen];
-  const FormPair form[] = {{"tol_green_kpa", "1.1"}, {"master", "2"}, {"push_rate_hz", "10"}};
+  // master "0": eri kuin oletus SYL 3 (D16), jotta palautus näkyy alla.
+  const FormPair form[] = {{"tol_green_kpa", "1.1"}, {"master", "0"}, {"push_rate_hz", "10"}};
   TEST_ASSERT_TRUE(p.applyConfigForm(form, 3, err, sizeof(err)));
-  TEST_ASSERT_EQUAL_INT(2, p.master());
+  TEST_ASSERT_EQUAL_INT(0, p.master());
   TEST_ASSERT_TRUE(p.takeConfigDirty());
   // GET /api/config = configToJson(config()) (§4.4).
   static char a[sbx::kConfigJsonSize];
@@ -670,10 +782,10 @@ void test_reset_config_and_config_json() {
   TEST_ASSERT_TRUE(std::strcmp(a, b) == 0);
   TEST_ASSERT_NOT_NULL(std::strstr(a, "\"key\":\"tol_green_kpa\""));
   TEST_ASSERT_NOT_NULL(std::strstr(a, "\"value\":1.1}"));
-  // POST /api/config/reset: oletukset, master SYL 1 (D7), pysyvä muutos.
+  // POST /api/config/reset: oletukset, master SYL 3 (D7/D16), pysyvä muutos.
   p.resetConfig();
   TEST_ASSERT_FLOAT_WITHIN(1e-6f, 1.5f, p.config().status.tol_green_kpa);
-  TEST_ASSERT_EQUAL_INT(0, p.master());
+  TEST_ASSERT_EQUAL_INT(2, p.master());
   TEST_ASSERT_EQUAL_INT(15, p.config().push_rate_hz);
   TEST_ASSERT_TRUE(p.takeConfigDirty());
 }
@@ -729,17 +841,18 @@ void test_wave_overflow_keeps_newest_and_partial_take() {
 void test_ring_and_csv_during_processing() {
   Processor p(g_mem, kRingCap);
   Feed f(p);
-  f.hold(2650, 2675, 2700, 0.5f);
+  // 1,1 s (WP-9: nollaus vaatii 1 s vakaata tasoa; ennen 0,5 s -> 600 näytettä).
+  f.hold(2650, 2675, 2700, 1.1f);
   TEST_ASSERT_EQUAL_INT(R(CalResult::Ok), R(p.zeroNow()));
   f.hold(1450, 1475, 1500, 0.1f);
   sbx::RawRing& ring = p.ring();
-  TEST_ASSERT_EQUAL_size_t(600, ring.size());
-  TEST_ASSERT_EQUAL_UINT32(599, ring.newestSeq());
+  TEST_ASSERT_EQUAL_size_t(1200, ring.size());
+  TEST_ASSERT_EQUAL_UINT32(1199, ring.newestSeq());
   // GET /api/raw.csv: jäädytys, mutta DSP ja tila jatkavat (push ei pysähdy).
   ring.freeze();
   CsvWriter csv(ring, p.config(), p.calibration());
   f.hold(1400, 1400, 1400, 0.2f);
-  TEST_ASSERT_EQUAL_size_t(600, ring.size());
+  TEST_ASSERT_EQUAL_size_t(1200, ring.size());
   TEST_ASSERT_EQUAL_INT(1400, p.channel(0).last_mv);
   static char out[64 * 1024];
   size_t len = 0;
@@ -752,16 +865,16 @@ void test_ring_and_csv_during_processing() {
   out[len] = '\0';
   ring.unfreeze();
   TEST_ASSERT_FALSE(csv.aborted());
-  TEST_ASSERT_NOT_NULL(std::strstr(out, "# samples=600\n"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "# samples=1200\n"));
   TEST_ASSERT_NOT_NULL(std::strstr(out, "# zero_valid=1\n"));
   TEST_ASSERT_NOT_NULL(std::strstr(out, "# offset_kpa=2,1,0\n"));
   // Ensimmäinen rivi ennen nollausta mitattu, kalibroitu nykyisellä nollauksella.
   TEST_ASSERT_NOT_NULL(std::strstr(out, "\n0,0,2650,2675,2700,0.000,0.000,0.000\n"));
   // Viimeinen jäädytystä edeltävä näyte: -50 kPa nimellinen -> -48 / -48 / -48.
-  TEST_ASSERT_NOT_NULL(std::strstr(out, "\n599,599,1450,1475,1500,-48.000,-48.000,-48.000\n"));
+  TEST_ASSERT_NOT_NULL(std::strstr(out, "\n1199,1199,1450,1475,1500,-48.000,-48.000,-48.000\n"));
   // Vapautuksen jälkeen rengas jatkaa; jäädytyksen pudotukset eivät ole aukkoja.
   f.hold(1400, 1400, 1400, 0.01f);
-  TEST_ASSERT_EQUAL_size_t(610, ring.size());
+  TEST_ASSERT_EQUAL_size_t(1210, ring.size());
   TEST_ASSERT_EQUAL_UINT32(0, ring.gaps());
 }
 
@@ -775,6 +888,8 @@ int main() {
   RUN_TEST(test_zero_now_at_atmosphere);
   RUN_TEST(test_zero_now_keeps_gain);
   RUN_TEST(test_zero_now_rejected_without_atmosphere);
+  RUN_TEST(test_zero_now_rejects_bleeding_vacuum);
+  RUN_TEST(test_zero_now_needs_full_settle_window);
   RUN_TEST(test_auto_zero_row1_once_per_no_signal_period);
   RUN_TEST(test_auto_zero_disabled);
   RUN_TEST(test_gain_capture_two_seconds_then_tick);
@@ -784,6 +899,7 @@ int main() {
   RUN_TEST(test_gain_second_start_refused);
   RUN_TEST(test_gain_capture_aborted_by_configure);
   RUN_TEST(test_reset_gain_keeps_zero_point);
+  RUN_TEST(test_default_master_is_syl3_D16);
   RUN_TEST(test_set_master_keeps_dsp_and_restarts_stability_D7);
   RUN_TEST(test_master_form_strict_channel);
   RUN_TEST(test_config_form_applies_all_pairs);

@@ -51,8 +51,8 @@ inline float applyCal(float nominal_kpa, int ch, const Calibration& cal) {
   return cal.gain[ch] * nominal_kpa + cal.offset_kpa[ch];
 }
 
-// NoZero on lisätty sopimuksen (docs/firmware.md §4.3) loppuun, joten muiden
-// arvojen numerot eivät muutu.
+// NoZero ja NotSettled (WP-9) on lisätty sopimuksen (docs/firmware.md §4.3)
+// loppuun, joten muiden arvojen numerot eivät muutu.
 enum class CalResult : uint8_t {
   Ok,
   NotAtmosphere,
@@ -61,6 +61,7 @@ enum class CalResult : uint8_t {
   Mismatch,
   GainOutOfRange,
   NoZero,
+  NotSettled,  // nollaus: taso liikkuu vielä (vuotava alipaine) tai historiaa < 1 s
 };
 
 // Vahvistuskalibroinnin hyväksymisrajat (docs/firmware.md §4.3).
@@ -106,6 +107,120 @@ inline CalResult computeZero(const float (&nominal_level)[kChannels], float max_
   cal.zero_valid = true;
   return CalResult::Ok;
 }
+
+// Nollauksen vakausportti (WP-9, jatko.md 8): ilmanpaine-ehdon lisäksi tason on
+// pysyttävä paikallaan. Juuri sammutetun moottorin alipaine jää loukkuun ja
+// purkautuu letkuista sekunteja, ja taso-EMA (level_tau_s) laskee sen perässä;
+// |taso| < off_kpa täyttyy jo ~1,2 s sammutuksesta (-55 kPa, tau 0,5 s), jolloin
+// käsin nollaus kirjasi vielä laskevan tason offsetiksi (mitattu EngineSimillä:
+// 1,5 s:n kohdalla 2,8 kPa, 2,0 s:n kohdalla 1,0 kPa, vrt. D2:n 1,5 kPa).
+// level_range[i] = kanavan tason vaihteluväli (max - min) viimeisen
+// kZeroSettleWindowS:n aikana samalla asteikolla kuin max_range_kpa
+// (Processor: kalibroitu taso, kuten StatusMachinen automaattisessa nollauksessa).
+// Tarkistusjärjestys: NotAtmosphere, NotSettled - perustavin puute ensin.
+// !(<) hylkää myös NaN:n ja äärettömän (ei historiaa).
+inline CalResult computeZero(const float (&nominal_level)[kChannels],
+                             const float (&level_range)[kChannels], float max_abs_kpa,
+                             float max_range_kpa, Calibration& cal) {
+  for (int i = 0; i < kChannels; ++i) {
+    if (!(std::fabs(nominal_level[i]) <= max_abs_kpa)) return CalResult::NotAtmosphere;
+  }
+  for (int i = 0; i < kChannels; ++i) {
+    if (!(level_range[i] < max_range_kpa)) return CalResult::NotSettled;
+  }
+  return computeZero(nominal_level, max_abs_kpa, cal);
+}
+
+// Vakausikkuna: 1 s (WP-9), hyväksytty alustavasti 31.10.2026 (D15). Raja zero_settle_kpa
+// (oletus 0,1 kPa, S5a) on vaihteluväli tämän ikkunan aikana, eli tason
+// liike enintään ~0,1 kPa/s - sama kulmakerroin kuin WP-4:n kaistassa
+// (0,3 kPa / 3 s). Lyhyempi ikkuna kuin off_hold_s, jotta vakausehto kulkee
+// rivin 1 pitoajan (off_hold_s) rinnalla eikä sen perässä (jatko.md 8: nollaus
+// 5,6-8 s sammutuksesta). Kohina ei laukaise porttia: taso-EMA:n 1 s:n
+// vaihteluväli EngineSimillä (8 siementä x 56 s) enintään 0,023 kPa 2 mV:n,
+// 0,039 kPa 4 mV:n (laitteella mitattu, puhelin yhdistettynä, jatko.md) ja
+// 0,084 kPa 8 mV:n RMS-kohinalla (test_integration:
+// test_wp9_settle_gate_ignores_adc_noise). Marginaali 4 mV:lla 2,5-kertainen.
+constexpr float kZeroSettleWindowS = 1.0f;
+
+// Kanavien tasojen vaihteluväli liukuvassa kZeroSettleWindowS:n ikkunassa
+// (~20 Hz:n päivityksistä; 10-50 Hz ja epätasainen dt käyvät). Päivitykset
+// kootaan lokeroihin, joiden alkujen väli on vähintään ikkuna / kSlots, joten
+// jokainen näyte on mukana min/max:ssa nopeudesta riippumatta ja kapasiteetti
+// kattaa >= (kCap - 1) / kSlots ≈ 1,47 ikkunaa. Ei muistinvarausta.
+class LevelSettle {
+ public:
+  static constexpr int kSlots = 32;
+  static constexpr int kCap = 48;
+
+  void reset() {
+    n_ = 0;
+    head_ = 0;
+  }
+
+  // now monotoninen; kutsuja nollaa taaksepäin hypyssä (StatusMachine::update).
+  void add(const float (&level)[kChannels], float now) {
+    const float spacing = kZeroSettleWindowS / static_cast<float>(kSlots);
+    const int last = (head_ - 1 + kCap) % kCap;
+    if (n_ == 0 || now - slot_[last].t >= spacing) {
+      Slot& s = slot_[head_];
+      s.t = now;
+      s.bad = false;
+      for (int i = 0; i < kChannels; ++i) {
+        s.lo[i] = level[i];
+        s.hi[i] = level[i];
+        if (!std::isfinite(level[i])) s.bad = true;
+      }
+      head_ = (head_ + 1) % kCap;
+      if (n_ < kCap) ++n_;
+    } else {
+      Slot& s = slot_[last];
+      for (int i = 0; i < kChannels; ++i) {
+        if (!std::isfinite(level[i])) s.bad = true;
+        if (level[i] < s.lo[i]) s.lo[i] = level[i];
+        if (level[i] > s.hi[i]) s.hi[i] = level[i];
+      }
+    }
+    now_ = now;
+  }
+
+  // Historiaa koko ikkunan verran: vanhin lokero alkoi viimeistään ikkunan alussa.
+  bool full() const {
+    if (n_ == 0) return false;
+    const int oldest = (head_ - n_ + kCap) % kCap;
+    return now_ - slot_[oldest].t >= kZeroSettleWindowS;
+  }
+
+  // max - min lokeroista, jotka alkoivat ikkunan sisällä (viimeisin add).
+  // Ääretön, jos historiaa ei ole koko ikkunaa tai jokin taso oli NaN: vakautta
+  // ei ole osoitettu.
+  float range(int ch) const {
+    const float inf = std::numeric_limits<float>::infinity();
+    if (ch < 0 || ch >= kChannels || !full()) return inf;
+    float lo = inf;
+    float hi = -inf;
+    for (int k = 0; k < n_; ++k) {
+      const Slot& s = slot_[(head_ - 1 - k + kCap) % kCap];
+      if (now_ - s.t > kZeroSettleWindowS) break;
+      if (s.bad) return inf;
+      if (s.lo[ch] < lo) lo = s.lo[ch];
+      if (s.hi[ch] > hi) hi = s.hi[ch];
+    }
+    return hi - lo;
+  }
+
+ private:
+  struct Slot {
+    float t;
+    float lo[kChannels];
+    float hi[kChannels];
+    bool bad;
+  };
+  Slot slot_[kCap] = {};
+  int n_ = 0;
+  int head_ = 0;
+  float now_ = 0.0f;
+};
 
 // Vahvistus: kaikki kanavat samassa alipaineessa (T-haara) -> gain niin, että
 // kanavat täsmäävät toisiinsa. Referenssi = kanavien nollakorjattujen
@@ -194,6 +309,10 @@ inline const char* calResultText(CalResult r) {
     case CalResult::NoZero:
       return "Nollaus puuttuu. Päästä alipaine pois (letkut ilmanpaineeseen), tee vaihe 1 "
              "Nollaa ja toista sitten vahvistuskalibrointi";
+    // Ei "vika": tavallisin syy on juuri sammutettu moottori, ja odotus riittää.
+    case CalResult::NotSettled:
+      return "Nollaus hylätty: lukemat liikkuvat vielä (alipaine purkautuu letkuista). "
+             "Odota, kunnes lukemat pysyvät paikallaan, ja yritä uudelleen";
   }
   return "Tuntematon kalibrointitulos";
 }
