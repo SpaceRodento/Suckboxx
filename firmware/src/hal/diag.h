@@ -12,7 +12,9 @@
 //   win, n, seq        ikkunan numero, näytteet (~100) ja viimeinen seq
 //   fs                 mitattu näytetaajuus, Hz (ikkunan aukottomista väleistä)
 //   dev_us, lag_us     ikkunan suurin |väli - 1000 µs| ja suurin myöhästyminen tahdista
-//   late, gaps         kumulatiiviset: myöhässä > kLateUs, seq-aukkoihin jääneet näytteet
+//   late, gaps         kumulatiiviset: myöhässä > kLateUs setupin jälkeen, seq-aukkoihin
+//                      jääneet näytteet
+//   late_boot          kumulatiivinen: myöhässä > kLateUs setupin aikana (procBootDone)
 //   q_drop, skipped    kumulatiiviset: jono täynnä, kiinnioton sijaan ohitetut jaksot
 //   hx_bad             kumulatiivinen: HX710B-luku hylätty (DOUT ei vapautunut)
 //   q_peak, q_len      ikkunan jonohuippu ja jonon koko

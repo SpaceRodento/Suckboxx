@@ -2,8 +2,9 @@
 // Suckboxx ESP32-liima - käsittelytaski (docs/firmware.md §4.9).
 //
 // Herää kProcPollMs välein ytimellä 1, tyhjentää samplerin jonon erissä ja laskee
-//  - ajoitustilastot: mitattu näytetaajuus, jitter, myöhästyneet, seq-aukot,
-//    jonon täyttöhuippu. Nämä jäävät WP-7b:hen (SnapshotMeta::fs_hz, diag).
+//  - ajoitustilastot: mitattu näytetaajuus, jitter, myöhästyneet (käynnistyksen
+//    aikana ja sen jälkeen erikseen, procBootDone), seq-aukot, jonon
+//    täyttöhuippu. Nämä jäävät WP-7b:hen (SnapshotMeta::fs_hz, diag).
 //  - kanavakohtaiset mV-tilastot 100 ms:n ikkunoissa (diagnostiikkasivu /diag)
 //  - WP-7b: Processor::push jokaiselle kehykselle ja tick 20 Hz:llä, kaikki
 //    Processorin mutexin alla (yksi lukitus per erä).
@@ -39,7 +40,8 @@ struct ProcWindow {
   uint16_t read_mean_us = 0;
   uint16_t read_max_us = 0;
   uint16_t q_peak = 0;      // jonon täyttöhuippu tyhjennysten alussa
-  uint32_t late = 0;        // kumulatiivinen: näytteet, joiden lag > kLateUs
+  uint32_t late = 0;        // kumulatiivinen: näytteet, joiden lag > kLateUs, procBootDone()n jälkeen
+  uint32_t late_boot = 0;   // samat ennen procBootDone()a (käynnistyksen transientti)
   uint32_t gaps = 0;        // kumulatiivinen: seq-aukkoihin jääneet näytteet
   // WP-7a: mV-tilastot, indeksit 0..2 = SYL 1..3, kRailIndex = kisko
   uint16_t mv_min[kChannels + 1] = {0, 0, 0, 0};
@@ -62,6 +64,12 @@ struct ProcPeriod {
 // samplerStartin jälkeen. cfg ja cal NVS:stä (setCalibration: zero_valid = false, D11).
 bool procStart(const Config& cfg, const Calibration& cal);
 void procWindow(ProcWindow& out);
+
+// setupin lopussa: tästä hetkestä otetut myöhästyneet näytteet lasketaan
+// late:en, sitä ennen otetut late_boot:iin. Käynnistyksessä sampler pyörii jo,
+// kun käsittelytaski, Wi-Fi ja web vasta alustetaan (main.cpp), joten
+// ensimmäisten jaksojen kiinniotot eivät kerro ajonaikaisesta ajoituksesta.
+void procBootDone();
 
 // Processor mutexin takana (§4.8). Lukitse, käytä, vapauta - ei odotuksia välissä.
 Processor& processor();

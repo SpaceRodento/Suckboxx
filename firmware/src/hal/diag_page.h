@@ -40,6 +40,7 @@ button{margin-top:18px;padding:8px 16px;font:inherit}
 <tr><td>Poikkeama 1 ms:stä (µs)</td><td class="n" id="dev">–</td><td class="n" id="devp">–</td></tr>
 <tr><td>Myöhästyminen (µs)</td><td class="n" id="lag">–</td><td class="n" id="lagp">–</td></tr>
 <tr><td>Myöhässä &gt; 250 µs</td><td class="n" id="late">–</td><td class="n" id="lated">–</td></tr>
+<tr><td>… käynnistyksessä</td><td class="n" id="lateb">–</td><td class="n"></td></tr>
 <tr><td>Aukot (seq)</td><td class="n" id="gaps">–</td><td class="n" id="gapsd">–</td></tr>
 <tr><td>Jonon pudotukset</td><td class="n" id="qd">–</td><td class="n" id="qdd">–</td></tr>
 <tr><td>Ohitetut jaksot</td><td class="n" id="sk">–</td><td class="n" id="skd">–</td></tr>
@@ -99,6 +100,7 @@ function show(){
   s('dev',F0.format(d.dev_us));s('devp',F0.format(mx('dev',d.dev_us)));
   s('lag',F0.format(d.lag_us));s('lagp',F0.format(mx('lag',d.lag_us)));
   s('late',F0.format(d.late));s('lated','+'+F0.format(d.late-b.late));
+  s('lateb',F0.format(d.late_boot));
   s('gaps',F0.format(d.gaps));s('gapsd','+'+F0.format(d.gaps-b.gaps));
   s('qd',F0.format(d.q_drop));s('qdd','+'+F0.format(d.q_drop-b.qd));
   s('sk',F0.format(d.skipped));s('skd','+'+F0.format(d.skipped-b.sk));

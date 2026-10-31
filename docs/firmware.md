@@ -433,7 +433,8 @@ size_t snapshotJson(Processor& p, const SnapshotMeta& m, char* buf, size_t n);
 
 ### 4.9 ESP32-liima (WP-7)
 
-Tiedostot `src/main.cpp` ja `src/hal/*` (Arduino-ESP32 2.0.17, ESPAsyncWebServer 3.6.0).
+Tiedostot `src/main.cpp` ja `src/hal/*` (Arduino-ESP32 2.0.17, ESPAsyncWebServer 3.12.1,
+AsyncTCP 3.5.0; versiot lukittu `platformio.ini`:ssä ja `static_assert`illa `hal/web.cpp`:ssä).
 
 - **Näytteenotto:** oma FreeRTOS-taski ytimellä 1, `vTaskDelayUntil` 1 ms:n välein
   (`CONFIG_FREERTOS_HZ` = 1000). Lähde `Config::source`n mukaan: `EngineSim::next()`, ADC1
@@ -447,7 +448,10 @@ Tiedostot `src/main.cpp` ja `src/hal/*` (Arduino-ESP32 2.0.17, ESPAsyncWebServer
 - **Tahdistus (WP-7a):** `seq` laskee 1 ms:n jaksoja. Alle 3 ms:n myöhästyminen otetaan
   kiinni. Pidempi pysähdys (esim. flash-kirjoitus) ohitetaan, ja seq hyppää yli, jolloin
   pudotus näkyy aukkona eikä näytteitä väärennetä. Jonon alkio on `RawFrame` sekä aikaleima,
-  myöhästyminen ja lähteen lukuaika (diagnostiikka).
+  myöhästyminen ja lähteen lukuaika (diagnostiikka). Yli 250 µs myöhässä otetut näytteet
+  lasketaan kahteen laskuriin näytteen aikaleiman mukaan: setupin aikana `late_boot`
+  (sampler käy jo, kun käsittelytaski, Wi-Fi ja web alustetaan; ensimmäinen ADC-luku on
+  hidas) ja setupin jälkeen (`procBootDone`) `late` (sarjalokissa `kaynn` ja `myoh`).
 - **Käsittely:** `tick` 20 Hz, snapshot `push_rate_hz`:llä SSE-tapahtumana `snap`. Processor
   mutexin takana. Web-käsittelijät ajetaan AsyncTCP-taskissa ytimellä 0.
 
@@ -455,7 +459,7 @@ Tiedostot `src/main.cpp` ja `src/hal/*` (Arduino-ESP32 2.0.17, ESPAsyncWebServer
   |---|---|---|---|
   | `sbx_sample` | 1 | 20 | näytteenotto, `vTaskDelayUntil` 1 ms |
   | `sbx_proc` | 1 | 5 | jonon tyhjennys 4 ms:n välein → `Processor::push`, `tick` 20 Hz |
-  | `sbx_push` | 0 | 11 | SSE-lähetys; `async_tcp` + 1, koska ESPAsyncWebServer 3.6.0:n `AsyncEventSource` lukee asiakkaan TCP-osoittimen ilman lukkoa, joten `send()` ja `count()` kutsutaan vain täältä |
+  | `sbx_push` | 0 | 11 | SSE-lähetys; `async_tcp` + 1, koska `AsyncEventSource` (myös 3.12.1) nollaa asiakkaan TCP-osoittimen katkeamisessa ilman lukkoa, joten `send()` ja `count()` kutsutaan vain täältä (`hal/web.cpp`) |
   | `async_tcp` | 0 | 10 | web-käsittelijät (task watchdog 5 s) |
 
 - **Wi-Fi AP:** SSID `Suckboxx`, salasana `alipaine123`, kanava 1, enintään 4 asiakasta
@@ -477,6 +481,13 @@ Tiedostot `src/main.cpp` ja `src/hal/*` (Arduino-ESP32 2.0.17, ESPAsyncWebServer
   ja striimaa `CsvWriter`illa chunked-vastauksena; rengas vapautetaan latauksen lopussa tai
   `onDisconnect`issa, kumpi tahansa ensin. Snapshot rakennetaan `sbx_push`issa Processorin
   mutexin alla juuri ennen lähetystä.
+- **Web-kirjasto (WP-13, 31.10.2026):** 3.6.0 → 3.12.1 ja AsyncTCP 3.3.2 → 3.5.0. Korjattu
+  kirjastossa: `_handleDisconnect`in iteraattori (3.7.0), `close()`n itselukitus (3.7.7,
+  rekursiivinen mutex) ja `avgPacketsWaiting`in jako nollalla (3.9.5); AsyncTCP 3.5.0:n
+  rajaton tapahtumajono poistaa 3.3.2:n ainoan tunnetun aukon `sbx_push`in suojassa. Auki:
+  `_onDisconnect` nollaa `_client`in yhä ilman lukkoa, ja `events.close()` mitätöi oman
+  iteraattorinsa, joten `sbx_push`-järjestely ja `close()`-kielto jäävät. Analyysi rivi
+  riviltä `hal/web.cpp`:n alussa. Laitetesti ennen masteria.
 
 ---
 

@@ -7,6 +7,8 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 
+#include <atomic>
+
 #include "hal/hal_config.h"
 #include "hal/sampler.h"
 #include "hal/serial_stream.h"
@@ -78,12 +80,22 @@ constexpr uint32_t kTickMs = 50;  // §4.9: tick 20 Hz
 ProcWindow g_window;  // mutexin alla
 PeriodAcc g_period;   // mutexin alla
 
+// Käynnistyksen raja (procBootDone, loopTask): aika kirjoitetaan ennen lippua
+// (release), käsittelytaski lukee lipun ensin (acquire).
+uint32_t g_boot_done_us = 0;
+std::atomic<bool> g_boot_done{false};
+
 // Käsittelytaskin oma tila
 WindowAcc g_acc;
 bool g_have_last = false;
 uint32_t g_last_seq = 0;
 uint32_t g_last_t_us = 0;
 uint32_t g_late = 0;
+uint32_t g_late_boot = 0;
+// Tosi, kunnes ensimmäinen rajan jälkeen otettu näyte tulee. Jono on FIFO,
+// joten sen jälkeen kaikki näytteet ovat rajan jälkeen; lukitus pitää t_us-
+// vertailun kiertoturvallisena (32 bittiä kiertää 71 min:ssa, ero ±35 min).
+bool g_booting = true;
 uint32_t g_gaps = 0;
 uint32_t g_windows = 0;
 bool g_led = false;
@@ -108,7 +120,17 @@ void onSample(const SampleMsg& m) {
   g_last_seq = seq;
   g_last_t_us = m.t_us;
 
-  if (m.lag_us > kLateUs) ++g_late;
+  if (g_booting && g_boot_done.load(std::memory_order_acquire) &&
+      static_cast<int32_t>(m.t_us - g_boot_done_us) >= 0) {
+    g_booting = false;
+  }
+  if (m.lag_us > kLateUs) {
+    if (g_booting) {
+      ++g_late_boot;
+    } else {
+      ++g_late;
+    }
+  }
   keepMax(g_acc.lag_max_us, m.lag_us);
   keepMax(g_acc.read_max_us, m.read_us);
   g_acc.read_sum_us += m.read_us;
@@ -140,6 +162,7 @@ void closeWindow(uint32_t now_ms) {
   w.read_max_us = g_acc.read_max_us;
   w.q_peak = g_acc.q_peak;
   w.late = g_late;
+  w.late_boot = g_late_boot;
   w.gaps = g_gaps;
   for (int i = 0; i < kStatSlots; ++i) {
     if (g_acc.n > 0) {
@@ -214,6 +237,12 @@ bool procStart(const Config& cfg, const Calibration& cal) {
   digitalWrite(kPinLed, LOW);
   return xTaskCreatePinnedToCore(procLoop, "sbx_proc", kProcStack, nullptr, kProcPrio, &g_task,
                                  kProcCore) == pdPASS;
+}
+
+void procBootDone() {
+  if (g_boot_done.load(std::memory_order_relaxed)) return;
+  g_boot_done_us = static_cast<uint32_t>(esp_timer_get_time());  // sama kello kuin SampleMsg::t_us
+  g_boot_done.store(true, std::memory_order_release);
 }
 
 void procWindow(ProcWindow& out) {
