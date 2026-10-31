@@ -9,7 +9,7 @@ name: CI
 
 on:
   push:
-    branches: [master, "dev/**", "wp/**"]
+    branches: [master, "dev/**", "wp/**", "yo/**"]
   pull_request:
     branches: [master]
 
@@ -117,3 +117,8 @@ jobs:
         run: python3 tools/mock_server.py --check-snapshot
       - name: py_compile tools/**/*.py
         run: find tools -name '*.py' -print0 | xargs -0 python3 -m py_compile
+      # tools/test_*.py (esim. sim_fit, WP-12) tarvitsee numpyn ja scipyn.
+      - name: numpy ja scipy
+        run: pip install numpy scipy
+      - name: unittest tools/test_*.py
+        run: python3 -m unittest discover -s tools -p 'test_*.py'
