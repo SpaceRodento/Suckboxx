@@ -122,11 +122,6 @@ class Dsp {
   // pulssi on vain 6,7 ms päässä: leveämpi ikkuna (0,25 x pulssin leveys)
   // kasvatti naapurin pudotusta ja hukkasi pieniä omia pulsseja (821 vs 892/1001).
   static constexpr float kOwnHalfWindow = 1.0f;
-  // Varatila, kun muut kanavat eivät kanna tietoa (kaksi letkua irti): oma
-  // pulssi on >= tämä x kolmen viimeisimmän pulssin syvin. Vuotopulssi on
-  // <= 0,37 x oma (xtalk 0,3 + suotimen ylitys); tämän tilan suunnitteluraja on
-  // siksi xtalk 0,3.
-  static constexpr float kDepthRatio = 0.45f;
   // Varatilassa jakso hyväksytään vain viitteen +- tämän sisällä. Yhdeltä
   // kanavalta ei voi erottaa rpm-pudotuksen jälkeistä vuotopulssia (xtalk x
   // kasvanut pulssi) vanhan nopeuden omasta: väli voi osua mihin tahansa
@@ -320,8 +315,6 @@ class Dsp {
     float decay_k = 1.0f;        // kerroin per näyte jaksolle decay_for
     float decay_for = 0.0f;
     float fire_top = 0.0f;       // huippu ennen viimeisintä rajaa
-    uint32_t b_int = 0;          // viimeisin raja (merkin varareuna)
-    float b_frac = 0.0f;
 
     // Rengaspuskurit: suodatettu (merkki, omistajuus) ja kalibroitu (integraali).
     float ring[kRing] = {};
@@ -334,7 +327,6 @@ class Dsp {
     float pulse_depth = 0.0f;    // lasku huipusta pohjaan
     uint32_t hf_int = 0;
     float hf_frac = 0.0f;
-    float depth1 = 0.0f, depth2 = 0.0f;  // kahden edellisen pulssin syvyys (varatila)
 
     // Omat pulssit: keskikohdat (uusin ensin), syvyydet ja integraali
     // viimeisimmästä omasta keskikohdasta.
@@ -425,13 +417,10 @@ class Dsp {
     c.since_boundary = 0;
     c.decay = c.decay_k = 1.0f;
     c.decay_for = c.fire_top = 0.0f;
-    c.b_int = 0;
-    c.b_frac = 0.0f;
     c.wait_rise = false;
     c.mark_lvl = c.pulse_depth = 0.0f;
     c.hf_int = 0;
     c.hf_frac = 0.0f;
-    c.depth1 = c.depth2 = 0.0f;
     c.own_n = 0;
     c.own_d1 = c.own_d2 = 0.0f;
     c.acc = 0.0f;
@@ -609,12 +598,6 @@ class Dsp {
       if (y > c.run_hi) c.run_hi = y;
       const float thr = c.run_hi - d;
       if (y < thr) {
-        // Laskeva ylitys interpoloidaan näytteiden väliin (merkin varareuna).
-        float f = 1.0f;
-        const float dy = c.y_prev - y;
-        if (dy > 0.0f) f = (c.y_prev - thr) / dy;
-        if (f < 0.0f) f = 0.0f;
-        if (f > 1.0f) f = 1.0f;
         c.fire_top = c.run_hi;
         // Edellinen pulssi ei noussut merkkitasolle ennen uutta rajaa: sen
         // keskikohtaa ei tunneta, joten se ohitetaan (oma ketju jatkuu ja
@@ -623,8 +606,6 @@ class Dsp {
         roll(c, y);
         c.since_boundary = 0;
         c.decay = 1.0f;
-        c.b_int = n_ - 1u;
-        c.b_frac = f;
         c.armed = false;
         c.run_lo = y;
         c.t_lo = n_;
@@ -667,11 +648,8 @@ class Dsp {
         break;
       }
     }
-    if (!found) {
-      // Lasku kesti yli puskurin (< 300 rpm): raja kelpaa laskevaksi reunaksi.
-      c.hf_int = c.b_int;
-      c.hf_frac = c.b_frac;
-    }
+    // Lasku kesti yli puskurin (vain alle rpm_min:n): keskikohtaa ei tunneta.
+    if (!found) return;
     uint32_t from = c.t_lo;
     if (n_ - from > static_cast<uint32_t>(kRing - 2)) from = n_ - static_cast<uint32_t>(kRing - 2);
     for (uint32_t j = from; j != n_; ++j) {
@@ -737,8 +715,10 @@ class Dsp {
   // kanava putoaa samaan aikaan 1/xtalk-kertaisesti; oman pulssin keskellä
   // muut kanavat näkevät vain vuodon (xtalk x). Suhde ei riipu sylinterien
   // pulssien keskinäisestä koosta. Alipaineen askel pudottaa kaikkia yhtä
-  // paljon, joten sekään ei ole oma pulssi. Kun muut kanavat eivät kanna
-  // tietoa (letku irti, anturivika), käytetään kanavan omaa syvyyshistoriaa.
+  // paljon, joten sekään ei ole oma pulssi. Pudotus = suurin arvo ikkunassa
+  // [hf - leveys, hr] (pulssia ennen) miinus pienin keskikohdan +-
+  // kOwnHalfWindow:ssa, sama ikkuna kaikille kanaville (sama suodin = sama viive).
+  // info kertoo, kantoiko jokin muu kanava tietoa (ks. informative).
   bool isOwn(int i, float m_age, float width, bool& info) const {
     const float s = kOwnHalfWindow;
     float top_new = m_age - 0.5f * width;
@@ -756,14 +736,9 @@ class Dsp {
       if (f > fo) fo = f;
       if (informative(j)) info = true;
     }
-    if (info) return fi > 0.0f && fi - fo >= kOwnMargin * fi;
-    // Haussa jokainen pulssi on ehdokas: kolmen samankokoisen vaatimus
-    // (ownPulse) hylkää jonot, joissa on vuotopulsseja, ja moottorin
-    // käynnistyksen askel ei saa myrkyttää syvyyshistoriaa.
-    const Chan& c = ch_[i];
-    if (!c.pub.has_pulse) return true;
-    const float deepest = c.depth1 > c.depth2 ? c.depth1 : c.depth2;
-    return c.pulse_depth >= kDepthRatio * deepest;
+    // Ilman tietoa kantavia kanavia jokainen pulssi on ehdokas: syklin
+    // hyväksyntä (ownPulse) vaatii silloin samankokoiset rajapulssit.
+    return !info || (fi > 0.0f && fi - fo >= kOwnMargin * fi);
   }
 
   // Pulssi mitattu: keskikohta, omistajuus ja oman pulssin sykli.
@@ -777,8 +752,6 @@ class Dsp {
     mf -= whole;
     bool info = false;
     const bool own = isOwn(i, age(mi, mf), width, info);
-    c.depth2 = c.depth1;
-    c.depth1 = c.pulse_depth;
     if (own) ownPulse(i, mi, mf, info);
   }
 
@@ -834,7 +807,7 @@ class Dsp {
   //    "vahvisti" 3T-välin. Kierrosluvun muutos ei vaikuta lomitukseen, joten
   //    uusi jakso kelpaa heti ilman viitettä.
   //  - Varatila (muut kanavat eivät kanna tietoa): saman kokoiset rajapulssit
-  //    ja jakso viitteen kMinPeriodRatio...kMaxPeriodRatio-kertainen.
+  //    ja jakso viitteen +- kFallbackWindow.
   void ownPulse(int i, uint32_t mi, float mf, bool info) {
     Chan& c = ch_[i];
     const bool cut = n_ - mi < static_cast<uint32_t>(kRing - 1);
