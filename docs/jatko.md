@@ -29,60 +29,57 @@ Jokainen paketti kulki: toteutus → vastakkainen katselmointi → korjaus → t
 | Paketti | Tiedostot | Tila |
 |---|---|---|
 | WP-1 simulaattori | `core/engine_sim.h`, `test_engine_sim` | ✅ korjattu ja tarkistettu |
-| WP-2 DSP | `core/dsp.h`, `test_dsp`, `test/support/synth_signal.h` | ⚠️ korjattu osittain: tarkistus löysi regression, ks. alla |
+| WP-2 DSP | `core/dsp.h`, `test_dsp`, `test/support/synth_signal.h` | ✅ uudelleensuunniteltu (kanavien välinen omistajuus), 5 korjaus- ja tarkistuskierrosta; kierros 6 tarkistamatta, ks. alla |
 | WP-3 sovelluslogiikka | `core/calibration.h`, `config.h`, `json_writer.h`, `raw_ring.h` + testit | ✅ korjattu ja tarkistettu |
 | WP-4 status | `core/status.h`, `test_status` | ✅ hyväksytty (vain minor-havaintoja) |
 | WP-5 UI | `web/index.html`, `src/web/web_page.h`, `tools/mock_server.py`, `tools/embed_web.py`, `tools/ui_screenshots.js` | ✅ korjattu ja tarkistettu (Playwright 126/126 lähde, 131/131 minimoitu) |
 
-`tools/run_native_tests.sh`: 8 testikokonaisuutta, **207 testiä, 0 virhettä**.
+`tools/run_native_tests.sh`: 8 testikokonaisuutta, **223 testiä, 0 virhettä** (test_dsp 51).
 
 ## Avoimet havainnot (prioriteettijärjestyksessä)
 
-### WP-2 DSP: tarkistus ei hyväksynyt (2 × major)
+### WP-2 DSP: uudelleensuunniteltu, kierros 6 tarkistamatta
 
-Korjaus ratkaisi alkuperäiset ongelmat (painehypyt vakiokierroksilla, korkeiden kierrosten
-tunnistus, käynnistyslukitus 0,9 s → 0,45 s), mutta tarkistaja löysi EngineSim-ajoilla kaksi
-asiaa. Tarkistajan mittausohjelmat olivat pilven scratchpadissa eivätkä säily; tilanteet on
-toistettava testeinä.
+Ensimmäisen korjauksen jälkeen syklintunnistus mitoitettiin uudelleen kuudella kierroksella
+(korjaaja → kaksi riippumatonta tarkistajaa, jotka mittasivat EngineSim-ketjulla tiukalla
+mittarilla: jokaisen kirjatun syklin molemmat merkit kohdistetaan simulaattorin imuihin).
+Ydin, joka ratkaisi vuotopulssien ja kierrosmuutosten ongelmat:
+- **Kanavien välinen pulssin omistajuus:** vuotopulssin aikana sen aiheuttanut sylinteri näkyy
+  omalla kanavallaan paljon syvempänä, joten vuoto ei voi olla syklin raja. Vertailu tehdään
+  aina, myös käynnistyksessä.
+- **Todistajat:** muiden kanavien omien pulssien on osuttava syklissä opittuihin paikkoihin
+  (1/3, 2/3), mikä hylkää ohitetun pulssin (2T) eikä vaadi viitejaksoa (rpm:n muutos näkyy
+  noin yhden jakson päästä).
+- **Vikaantunut kanava** (mV-vika tai letku irti, tunnistetaan tasosta) on heti pois
+  vertailusta ja asettuu palattuaan uudelleen.
+Tulos kierroksen 5 tarkistuksessa (sadat tuhannet ajot, xtalk 0/0,3/0,5): väärät syklit 0
+rpm-pudotuksissa, blipeissä, alipaineen askelissa ja rampeissa, käynnistyksissä,
+uudelleenkäynnistyksissä (myös heikko sylinteri) ja letkun irrotuksessa/takaisinkytkennässä.
+Mitatut rajat ovat `dsp.h`:n otsikossa ja tiivistettynä docs/firmware.md §4.2:ssa.
 
-1. **UUSI REGRESSIO: kierrosluvun pudotus yli ~1,8-kertaisesti lukitsee kanavan pulse_timeoutiin
-   asti** (`dsp.h` ~rivit 626–644, perustelu ~186–188). Lukittuna stale-aikakatkaisu on
-   1,8 × ref_period. Kun todellinen jakso on sitä pidempi, jokainen segmentti katkaistaan kesken
-   syklin, yhtään väliä ei arvioida, `ratio_rejects` ei koskaan täyty eikä `ref_period`
-   referoidu uudelleen. Kanava odottaa 1 s:n pulse_timeoutin ja lukittuu sitten alusta.
-   - Mitattu (32 ajoa per rivi; vanha = 5f4e908): `/api/sim` rpm 3000→850: `has_pulse` putoaa
-     32/32 ajossa (max 688 ms), vanha 0/32. 2000→850 ja 1700→850: 32/32, vanha 0/32.
-     1500→850: 4/32. Ramppi 3000→850 300 ms:ssa: 32/32. Kaasun katkaisu 3000→850 rpm ja
-     −15→−55 kPa: 32/32 (vanha 12–16/32, lyhyemmät).
-   - Osuu simulaattoritilaan (jokainen rpm:n lasku on askel) ja oikeaan kaasun katkaisuun
-     (kaasutus → tyhjäkäynti).
-   - Korjausehdotukset: poistu lukituksesta (ref_period = 0), kun N peräkkäistä stale-katkaisua
-     ilman kirjausta; tai laske stale-katkaisu `ratio_rejects`iin; tai käytä stale-rajana
-     max(1,8 × ref, window_n_), kun since_cycle > 1,8 × ref. Lisää EngineSim-testit
-     3000→850 ja 2000→850 sekä nopea kaasun katkaisu.
-2. **Kaasun blippaus ei vieläkään toimi EngineSimillä.** 850→2500 rpm, −55→−25 kPa, syvyys 20→12,
-   300 ms ylös / 300 ms pito / 700 ms alas: 24/24 ajossa yli 500 ms:n aukko, kaksi kolmesta
-   kanavasta jäätyy 850–900 ms tyhjäkäyntiarvoihin, ja mediaani-rpm näyttää huipusta vain
-   0,43–0,48 (vanha 0,50).
-   - Nousu: tyhjäkäynnin A (20,7 kPa) elää pidempään kuin kutistuva pulssi (~12 kPa vs. 13,4 kPa
-     laukaisuraja). Uudelleenreferointi vie ~5 rajaa, koska jokainen liian lyhyt hylkäys
-     epäluotettavoittaa myös seuraavan välin (`kMaxRatioRejects` = 2).
-   - Lasku: `confirmPending`in ehto `pend_amp >= 0.7*depth` (`dsp.h` ~781) hylkää jokaisen syklin,
-     kun alipaine syvenee hidastuksessa.
-   - 1500–2000 rpm ≥ 300 ms:n nousulla toimii nyt (vanha jäätyi 0,6–1,0 s). 2500 rpm ei toimi
-     millään nousuajalla, 3000 rpm putoaa 24/24.
-   - `test_throttle_blip_tracks_rpm_and_vacuum` menee läpi vain siksi, että SynthSignal generoi
-     imutapahtumat ~2 sykliä etukäteen. Testin pitää ajaa EngineSimillä, tai SynthSignalin pitää
-     soveltaa rpm-muutos heti.
-3. Tiedoksi (ei estä):
-   - Hetkellinen 10–15 kPa:n painehyppy voi hukata enintään 2 sykliä (aukko ≤ 3,05 T), jos se
-     osuu pulssin kohdalle. Korjaaja hylkäsi vaatimuksen "≤ 2 T" perustellusti: yhden pulssin
-     menetyksen jälkeen 2T-väli on hylättävä. Rampit (todellinen kaasu) eivät hukkaa sykliä.
-   - Kohinansieto on hieman huonompi dokumentoidun 0,4 kPa RMS -rajan yläpuolella (0,5 kPa:
-     7 väärää sykliä / 60 s, vanha 4). Ota huomioon `hyst_min_kpa`n oletuksessa: 0,3 riittää
-     ~0,4 kPa RMS:lle, 0,6–0,8 kPa tarvitsee ~0,5.
-   - 6000 rpm:llä rpm-tarkkuus on ~1,5 % tunnistusrajan lähellä (rajat dokumentoitu `dsp.h`:n
-     otsikossa). Ei koske synkronointia (500–3000 rpm, tyhjäkäynti 850–950).
+**Kierros 6 (commit "korjaajan viimeisin tila") jäi tarkistamatta:** korjaaja keskeytyi tilin
+käyttörajaan loppumittauksen aikana. Siinä korjattiin kierroksen 5 tarkistajien löydökset:
+hetken kuolleen kanavan veto (terveiden kanavien has_pulse saattoi pudota jopa 1,4 s lyhyen
+letkuvian jälkeen), yhden todistajan taukopoikkeus (vuotosykli yksi letku irti, xtalk 0,5) ja
+testit mutanteille A4/N12/N21. Testit menevät läpi (223/223), mutta riippumaton mittaus puuttuu.
+
+Hyväksytyt poikkeamat (orkesteroijan päätös, dokumentoitu `dsp.h`:ssa):
+1. Yksittäisen syklin rpm-virhe nopeassa kaasun katkaisussa ≤ 10 % ja hetkellisen rpm-askeleen
+   ylittävä sykli ≤ 17 % (merkit oikeissa imuissa; näyttö ei vääristy).
+2. Alle 200 ms:n alipaineramppi voi maksaa ≤ 2 sykliä.
+3. Heikko sylinteri ≥ 4500 rpm:llä ja heikko kanava itse pikablipeissä voi menettää has_pulsen.
+4. xtalk 0,5:n blipeissä pidemmät välit (≤ 450 / 750 ms).
+5. Kaksi letkua irti (varatila) ja simulaattorin hetkellinen rpm-askel letkun ollessa irti:
+   väärät syklit mahdollisia (tila on joka tapauksessa FaultHose).
+6. Harvinaiset yhdistelmät: tauolliset tupla-/kolmoisblipit heikon sylinterin tai 3 %:n
+   jitterin kanssa, 100 ms:n nousun blipit, vika tuplablipin aikana.
+
+Avoimet:
+- Riippumaton tarkistus kierrokselle 6 (kaksi tarkistajaa, ~1 h, suurehko tokenikulutus).
+- Yhden letkun ollessa irti letkujen viive-eron raja on ~1,5 ms 6000 rpm:llä (kaikilla
+  letkuilla 2 ms). R1 (samat letkut) riittää.
+- Kun oikeaa moottoridataa on (M6), tarkista omistajuuden marginaali (`kOwnMargin` 25 %) ja
+  oikea xtalk-taso; simulaattorin oletukset eivät ole todennettuja.
 
 ### WP-5 UI (korjattu)
 Kaikki major- ja minor-havainnot on korjattu ja tarkistettu:
@@ -130,8 +127,7 @@ nollauksen (`CalResult::NoZero`). `fault_lo_mv` on 50…500 ja `fault_hi_mv` 250
   syklintunnistus, `NoZero`, viitelaskettu `freeze()`, `version()` ja `aborted()`.
 
 ## Seuraavaksi
-1. **WP-2:** korjaa rpm-pudotuksen lukkiutuminen ja blippaus EngineSim-testien kanssa (ks. yllä).
-   Synkronointi tyhjäkäynnillä vakiokaasulla toimii jo; nämä vaikuttavat kaasun muutoksiin.
+1. **WP-2:** halutessa riippumaton tarkistus kierrokselle 6 (ks. yllä); muuten valmis M3:een.
 2. Aja `pio test -e native` ja `pio run -e esp32dev`, ja korjaa GCC 8.4- ja Unity-erot.
 3. **M3:** `core/processor.h` + `snapshot.h` (Processor push/tick/snapshot, auto-zero, 2 s:n
    gain-kaappaus, aaltomuodon desimointi 62,5 Hz:iin, snapshot-JSON docs/firmware.md §5:n mukaan)

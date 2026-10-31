@@ -149,23 +149,43 @@ class Dsp {
 }
 ```
 
-- Syklintunnistus alipäästösuodatetusta signaalista (`lp_cutoff_hz`, resonanssi pois),
-  hystereesi `max(hyst_min_kpa, hyst_frac × A)` suhteellisena laukaisuna edellisestä
-  huipusta (A = pulssin amplitudi; lukittuna min(nousu, lasku), jotta painehyppy ei paisuta
-  sitä). Amplitudiportti `3 × hyst_min_kpa × |H(f_sykli)|` + jaksonpituuden johdonmukaisuus.
-  Sykli kirjataan vasta, kun sen päättänyt pulssi on nähty pohjaan asti (~10–35 ms
-  syklirajan jälkeen). Yksi sykli = yksi imupulssi = 2 kierrosta,
-  **rpm = 120 / T**.
-- `mean_kpa` (D1) lasketaan **kalibroiduista suodattamattomista** näytteistä täsmälleen yhden
-  syklin yli (resonanssi keskiarvoistuu pois kokonaisessa syklissä), sitten keskiarvo
-  `avg_cycles` viimeisimmän syklin yli. `min_kpa`/`p2p_kpa` suodatetusta signaalista;
-  `p2p_kpa` on pulssin nousu (lukittuna min(nousu, lasku)), tasaisessa käynnissä sama kuin
-  ikkunan p2p.
-- `xtalk` 0,3:een asti ei saa kolminkertaistaa rpm:ää (vuotopulssit ovat pienempiä).
+Valinnainen testikoukku: jos `SBX_DSP_CYCLE_HOOK(ch, period, end_int, end_frac)` on määritelty
+ennen otsaketta, jokainen kirjattu sykli raportoidaan (native-testien tiukka mittari). Ilman sitä
+ei koodia eikä tilaa. `sizeof(Dsp)` ≈ 4,9 kt, pino ≤ 112 t per funktio, ei kekoa.
+
+- **`push()` toimii kanavien yli:** ensin kaikki kolme kanavaa suodatetaan (4. kertaluvun
+  Butterworth-LP, `lp_cutoff_hz`), sitten tunnistus. Suodatettu signaali kertoo vain, missä
+  pulssit ovat; pulssiehdokas tulee suhteellisesta Schmitt-laukaisusta (hystereesi
+  `max(hyst_min_kpa, hyst_frac × A)`, amplitudiportti `3 × hyst_min_kpa × |H(f)|`).
+- **Pulssin omistajuus:** ehdokas on oma vain, jos sen pudotus on ≥ 25 % suurempi kuin minkään
+  muun elävän kanavan samanaikainen pudotus. Vuotopulssi (xtalk) ei koskaan ole syklin raja.
+  Vertailu tehdään aina, lukituksesta riippumatta (käynnistyksessä ei voi lukittua vuotojen
+  rytmiin). Suunnitteluraja xtalk ≤ 0,5.
+- **Sykli = oman pulssin keskikohdasta seuraavaan** (keskikohta = laskevan ja nousevan reunan
+  puoliväli tasolla pohja + 0,3 × syvyys). Jakso ja **rpm = 120 / T** tulevat keskikohdista.
+  Muiden kanavien omien pulssien on osuttava syklissä opittuihin paikkoihin (1/3 ja 2/3;
+  sytytysjärjestys ja letkujen kytkentä opitaan, unohdetaan kun mikään kanava ei pulssi).
+  Haku vaatii kolme samankokoista omaa pulssia. Jos muita eläviä kanavia ei ole (kaksi letkua
+  irti), varatila: samankokoiset pulssit ja jakso ±10 % edellisestä.
+- **Vikaantunut kanava** (mV ulkona tai letku irti = taso lähellä ilmanpainetta ja yli 12 kPa
+  muita korkeammalla) on heti kuollut: ei omia pulsseja, ei todistaja, ei vertailukanava.
+  Palattuaan se asettuu 64 näytettä kuten käynnistyksessä; takaisinkytkennän tasoaskel ei ole
+  pulssi. `sensor_fault`-lippu nousee edelleen vasta `fault_hold_s`:n jälkeen.
+- `mean_kpa` (D1) lasketaan **kalibroiduista suodattamattomista** näytteistä täsmälleen syklin
+  yli (keskikohdasta keskikohtaan), sitten `avg_cycles` viimeisimmän syklin yli
+  (Σ integraali / Σ jakso). Jos jakso hyppää yli 1,5- tai alle 0,55-kertaiseksi, näytön
+  keskiarvo alkaa alusta ja hypännyt sykli jätetään pois (näyttö pysyy yhden syklin ajan
+  edellisissä arvoissa). `min_kpa` suodatetusta signaalista; `p2p_kpa` on pulssin nousu
+  (lukittuna min(nousu, syvyys)), joten alipaineen askel ei paisuta sitä.
+- **Viive:** sykli kirjataan ~15–20 ms imun keskikohdan jälkeen; uusi kierrosluku näkyy noin
+  yhden uuden jakson päästä. `has_pulse` ei putoa rpm-pudotuksissa, blipeissä eikä alipaineen
+  muutoksissa (mitatut rajat ja poikkeukset: `dsp.h`:n otsikko ja [jatko.md](jatko.md)).
+- **Letkujen viive-ero** on pidettävä selvästi alle 0,1 × jakso (R1: samat letkut ±2 cm).
 - `sensor_fault`: mV ulkona `[fault_lo_mv, fault_hi_mv]` yhtäjaksoisesti `fault_hold_s`.
   `saturated`: `mv ≥ sat_mv` havaittu viimeisen 1 s aikana.
 - `RpmEstimate`: kanavien rpm:ien mediaani; `sd_rpm`/`cv` viimeisten `rpm_hist` jakson yli.
-- Laskentabudjetti: `push()` O(1) per näyte (sykliraja saa olla O(avg_cycles)).
+- Laskentabudjetti: `push()` O(1) per näyte (kaikki silmukat ≤ 64 ja kerran pulssia kohden;
+  sykliraja O(avg_cycles + rpm_hist)).
 
 ### 4.3 `calibration.h` (WP-3)
 

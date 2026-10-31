@@ -114,6 +114,11 @@
 //    alipaineen askeleessa: 0 myös vikaantuneella kanavalla. Yksi letku irti
 //    koko ajan pika-, tupla- ja tavallisissa blipeissä 3000 rpm:ään: 0 (xtalk
 //    0,5:een asti). Kanavan rpm ei ylitä 1,05 x todellista.
+//    Hyväksytyt harvinaiset poikkeukset (kierroksen 5 laajennettu mittaus,
+//    ennen kierroksen 6 korjauksia): tauolliset tupla- ja kolmoisblipit
+//    heikon sylinterin kanssa (18/27648 ajoa) tai 3 %:n jitterillä (3/192),
+//    100 ms:n nousun blipit ja vika tuplablipin aikana (5/194400) voivat
+//    kirjata terveelle kanavalle 2T/3T-syklin.
 //  - Terveen kanavan has_pulse ei putoa näissä (paitsi alla). Pisin väli:
 //    rpm-askel alas <= 2 uutta jaksoa + 30 ms (850 rpm: 311 ms, 600 rpm: 381
 //    ms), kaasun katkaisu 4500 -> 1500 / 150 ms 288 ms; blip nousu >= 300 ms
@@ -180,8 +185,10 @@
 //    asti käynnistyksissä ja 0,3:een asti käytössä; sen oma kanava saa jäädä
 //    ilman has_pulsea (pikablipeissä ja 4500-6000 rpm:llä se putoaa usein),
 //    mutta se ei estä muita - RpmEstimate on mediaani.
-//  - Letkujen viive-ero (R1: samat letkut +-2 cm, < 0,1 ms): 2 ms toimii
-//    kaikkialla; 3 ms:llä 4500-6000 rpm:n todistajan paikka on 0,11-0,15
+//  - Letkujen viive-ero (R1: samat letkut +-2 cm, < 0,1 ms): kaikilla
+//    letkuilla 2 ms toimii kaikkialla; yhden letkun ollessa irti (yksi
+//    todistaja, kSlotTolSingle) raja on ~1,5 ms 6000 rpm:llä ja ~2 ms 4500
+//    rpm:ään asti (2 ms 6000 rpm:llä: terve kanava ei lukitu). 3 ms:llä 4500-6000 rpm:n todistajan paikka on 0,11-0,15
 //    sivussa, jolloin has_pulse putoaa rpm-pudotuksissa ja 1/48 ajossa
 //    kirjautuu yksi vuotosykli (6000 -> 1500, xtalk 0,3).
 //  - Hetkellinen sammutus (simulaattori) katkaisee kesken olevan imun:
