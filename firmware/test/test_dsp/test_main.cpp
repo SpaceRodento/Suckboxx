@@ -1120,9 +1120,9 @@ void test_throttle_blip_engine_sim() {
   // aiemmin kuin vanha jakso; vanha versio jäädytti kaksi kanavaa 0,9 s:ksi
   // ja hyväksyi 150 ms:n nousussa ohitetun pulssin kahden syklin välin.
   // Raja kanavan pisimmälle välille: nousu >= 300 ms -> 300 ms, 150 ms ->
-  // 400 ms. Poikkeukset (48 ajon mittaus, ks. dsp.h): 3000 rpm / 300 ms
-  // xtalk 0,3:lla pahimmillaan 444 ms (pulssi 4,5 kPa juuri ennen pitoa),
-  // 2500 rpm / 300 ms 327 ms. Jokainen hyväksytty sykli < 3 % toteutuneesta.
+  // 400 ms. Poikkeus (48 ajon mittaus, ks. dsp.h): 3000 rpm / 300 ms
+  // xtalk 0,3:lla pahimmillaan 444 ms (pulssi 4,5 kPa juuri ennen pitoa).
+  // Jokainen hyväksytty sykli < 3 % toteutuneesta.
   struct Case {
     float rpm1;
     long rise;
@@ -1130,7 +1130,7 @@ void test_throttle_blip_engine_sim() {
   };
   const Case cases[] = {{1500.0f, 150, 400}, {1500.0f, 300, 300}, {1500.0f, 600, 300},
                         {2000.0f, 150, 400}, {2000.0f, 300, 300}, {2000.0f, 600, 300},
-                        {2500.0f, 150, 400}, {2500.0f, 300, 330}, {2500.0f, 600, 300},
+                        {2500.0f, 150, 400}, {2500.0f, 300, 300}, {2500.0f, 600, 300},
                         {3000.0f, 150, 400}, {3000.0f, 300, 450}, {3000.0f, 600, 300}};
   for (const Case& k : cases) {
     SimRun worst;
@@ -1185,7 +1185,7 @@ void test_throttle_blip_tracks_rpm_and_vacuum() {
   msg("blip 850 -> 2500: pisin väli %.0f ms, näytetty huippu %.2f x", static_cast<double>(worst_gap),
       static_cast<double>(worst_ratio));
   // Väli: sama raja kuin test_throttle_blip_engine_sim 2500 rpm / 300 ms.
-  TEST_ASSERT_LESS_OR_EQUAL(330, static_cast<int>(worst_gap));
+  TEST_ASSERT_LESS_OR_EQUAL(300, static_cast<int>(worst_gap));
   // 8 syklin keskiarvo kulkee perässä, mutta ei jäädy, jää vajaaksi eikä
   // ylitä huippua (väärä lyhyt jakso näkyisi ylityksenä).
   TEST_ASSERT_GREATER_THAN_FLOAT(0.9f, worst_ratio);

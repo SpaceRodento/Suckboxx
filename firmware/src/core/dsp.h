@@ -52,17 +52,28 @@
 //    askel (/api/sim) tai pulssin puolittuminen maksaa enintään 2 sykliä
 //    (väli ~3 jaksoa); has_pulse ei putoa, eikä väärää jaksoa hyväksytä.
 //  - Kierrosluvun muutokset (EngineSim, 4 siementä x xtalk 0/0,3 x 6 vaihetta):
-//    kaasunlisäys 850 -> 1500...3000 rpm, nousu 300-600 ms: pisin väli
-//    hyväksyttyjen syklien välillä <= 300 ms, paitsi 2500 rpm (<= 330 ms) ja
-//    3000 rpm xtalk 0,3:lla (<= 445 ms: pulssi kutistuu 20 -> 4,5 kPa
+//    kaasunlisäys 850 -> 1500...3000 rpm (-55 -> -25 kPa), nousu 300-600 ms:
+//    pisin väli hyväksyttyjen syklien välillä <= 300 ms, paitsi 3000 rpm /
+//    300 ms xtalk 0,3:lla (<= 445 ms: pulssi kutistuu 20 -> 4,5 kPa
 //    suodatettuna kahdessa syklissä). Nousu 150 ms: <= 400 ms. Näytetty
-//    huippu-rpm >= 0,9 x todellinen. Kaasun katkaisu ja rpm-askel alas
-//    (3000/2000/6000 -> 850, /api/sim): has_pulse ei putoa, väli <= ~640 ms
-//    (4 uutta jaksoa + 1 vahvistus), näyttö uudessa kierrosluvussa (< 3 %)
-//    1 s kuluttua. Yksittäisen syklin jakso vastaa toteutunutta <= 3 %:n
-//    sisällä, paitsi kerralla vaihtuvan kierrosluvun ylittävä sykli (5-9 %:
-//    pulssi on puoliksi vanhalla, puoliksi uudella nopeudella) ja 40 kPa/300 ms
-//    alipaineramppi 3 kPa:n pulssilla (<= 10 %).
+//    huippu-rpm >= 0,9 x käsketty huippu. Kierrosluvun lasku 3000/2000/1700/
+//    1500/6000 -> 850 (askel /api/sim, ramppi 300 ms-1 s, kaasun katkaisu
+//    -15 -> -55 kPa 300-700 ms): has_pulse ei putoa, väli <= 645 ms (4 uutta
+//    jaksoa + vahvistus), näyttö 1 s muutoksen jälkeen < 3 % toteutuneesta
+//    (samat 8 sykliä, tai muutoksen jälkeiset, jos keskiarvo alkoi alusta).
+//    Yksittäisen syklin jakso vastaa saman syklin toteutunutta (imun alusta
+//    alkuun ... keskeltä keskelle) <= 3 %:n sisällä, paitsi kerralla
+//    vaihtuvan kierrosluvun ylittävä sykli (<= 9 %: pulssi on puoliksi
+//    vanhalla, puoliksi uudella nopeudella; näytön keskiarvo alkaa
+//    seuraavasta syklistä alusta) ja 40 kPa / 300 ms katkaisu 3000 rpm:stä
+//    xtalk 0,3:lla (<= 10 %: suodatettu pulssi ~3,7 kPa, ramppi 5 kPa per
+//    sykli vääristää pulssin muotoa). Väärä raja (vuotopulssi T/3, ohitettu
+//    pulssi 2T) heittäisi >= 30 %.
+//  - Viive: sykli kirjataan, kun sen päättänyt pulssi on noussut pohjasta
+//    merkkitasolle (pohja + 0,3 x syvyys), ~15-20 ms imun keskikohdan
+//    jälkeen (suotimen ryhmäviive ~10 ms + puolet pulssista). Viitteestä
+//    poikkeava jakso pidetään ja kirjataan seuraavan kanssa (+1 jakso); yli
+//    1,8-kertainen pudotus vahvistetaan vielä seuraavalla pulssilla (+1).
 //  - Kohinasuoja: hyst_min_kpa 0,3 kestää ~0,4 kPa RMS raakakohinan ilman
 //    yhtään väärää sykliä; 0,6-0,8 kPa:n kohina vaatii ~0,5 (S5a).
 //  - Hajonta (rivi 2): jitter 5 % -> cv 0,046, 15 % -> 0,126, 20 % -> 0,15.
@@ -1148,13 +1159,7 @@ class Dsp {
 
   void recordCycle(Chan& c, const Cyc& cy) {
     // Näyttökeskiarvo alusta, jos kierrosluku muuttui kerralla (kRestartRatio).
-    const int n0 = c.cyc_count < avg_n_ ? c.cyc_count : avg_n_;
-    if (n0 > 0) {
-      float sp = 0.0f;
-      for (int k = 0; k < n0; ++k) sp += c.cyc_per[(c.cyc_head - 1 - k + kMaxAvgCycles) % kMaxAvgCycles];
-      const float avgp = sp / static_cast<float>(n0);
-      if (cy.period > kRestartRatio * avgp || cy.period < kMinPeriodRatio * avgp) c.cyc_count = 0;
-    }
+    if (periodJumped(c, cy.period)) c.cyc_count = 0;
     c.prev_ref = c.ref_period;
     c.ref_period = cy.period;
     c.cyc_int[c.cyc_head] = cy.integral;
@@ -1171,10 +1176,26 @@ class Dsp {
     ++c.pub.cycles;
     c.pub.has_pulse = true;
     c.since_cycle = 0;
+    publishAverages(c);
+    c.sd_rpm = rpmSpread(c);
+  }
 
-    // Näyttöarvot avg_cycles viimeisimmän syklin yli. Keskiarvo on
-    // sum(integraali) / sum(integraalin väli) eli aikapainotettu: sama kuin
-    // yksi integraali N kokonaisen syklin yli.
+  // Poikkeaako jakso yli kRestartRatio-kertaisesti (tai alle kMinPeriodRatio)
+  // näyttöikkunan keskijaksosta? Omat funktionsa, jotta recordCyclen pino
+  // pysyy -O0:llakin <= 128 tavussa.
+  bool periodJumped(const Chan& c, float period) const {
+    const int n0 = c.cyc_count < avg_n_ ? c.cyc_count : avg_n_;
+    if (n0 <= 0) return false;
+    float sp = 0.0f;
+    for (int k = 0; k < n0; ++k) sp += c.cyc_per[(c.cyc_head - 1 - k + kMaxAvgCycles) % kMaxAvgCycles];
+    const float avgp = sp / static_cast<float>(n0);
+    return period > kRestartRatio * avgp || period < kMinPeriodRatio * avgp;
+  }
+
+  // Näyttöarvot avg_cycles viimeisimmän syklin yli. Keskiarvo on
+  // sum(integraali) / sum(integraalin väli) eli aikapainotettu: sama kuin
+  // yksi integraali N kokonaisen syklin yli.
+  void publishAverages(Chan& c) const {
     const int n = c.cyc_count < avg_n_ ? c.cyc_count : avg_n_;
     float s_int = 0.0f, s_span = 0.0f, s_per = 0.0f, s_min = 0.0f, s_p2p = 0.0f;
     for (int k = 0; k < n; ++k) {
@@ -1185,32 +1206,31 @@ class Dsp {
       s_min += c.cyc_min[i];
       s_p2p += c.cyc_p2p[i];
     }
-    const float fs = static_cast<float>(kSampleRateHz);
     const float inv_n = 1.0f / static_cast<float>(n);
     c.pub.mean_kpa = s_int / s_span;
     c.pub.min_kpa = s_min * inv_n;
     c.pub.p2p_kpa = s_p2p * inv_n;
     // rpm = 120 / keskijakso (ei 120/T:n keskiarvo, joka on jitterillä harhainen
     // ylöspäin): kierroksia aikayksikössä.
-    c.pub.rpm = 120.0f * fs * static_cast<float>(n) / s_per;
+    c.pub.rpm = 120.0f * static_cast<float>(kSampleRateHz) * static_cast<float>(n) / s_per;
+  }
 
-    // Sykli-sykliltä hajonta rpm-yksiköissä rpm_hist viimeisimmästä jaksosta.
+  // Sykli-sykliltä hajonta rpm-yksiköissä rpm_hist viimeisimmästä jaksosta.
+  float rpmSpread(const Chan& c) const {
     const int m = c.per_count < rpm_hist_n_ ? c.per_count : rpm_hist_n_;
-    if (m >= 2) {
-      float sum = 0.0f;
-      for (int k = 0; k < m; ++k) {
-        sum += 120.0f * fs / c.per[(c.per_head - 1 - k + kMaxRpmHist) % kMaxRpmHist];
-      }
-      const float avg = sum / static_cast<float>(m);
-      float ss = 0.0f;
-      for (int k = 0; k < m; ++k) {
-        const float dv = 120.0f * fs / c.per[(c.per_head - 1 - k + kMaxRpmHist) % kMaxRpmHist] - avg;
-        ss += dv * dv;
-      }
-      c.sd_rpm = std::sqrt(ss / static_cast<float>(m - 1));
-    } else {
-      c.sd_rpm = 0.0f;
+    if (m < 2) return 0.0f;
+    const float fs = static_cast<float>(kSampleRateHz);
+    float sum = 0.0f;
+    for (int k = 0; k < m; ++k) {
+      sum += 120.0f * fs / c.per[(c.per_head - 1 - k + kMaxRpmHist) % kMaxRpmHist];
     }
+    const float avg = sum / static_cast<float>(m);
+    float ss = 0.0f;
+    for (int k = 0; k < m; ++k) {
+      const float dv = 120.0f * fs / c.per[(c.per_head - 1 - k + kMaxRpmHist) % kMaxRpmHist] - avg;
+      ss += dv * dv;
+    }
+    return std::sqrt(ss / static_cast<float>(m - 1));
   }
 
   DspParams dp_;
