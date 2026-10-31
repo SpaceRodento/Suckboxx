@@ -25,7 +25,7 @@ moottoriajo (M6) tuottaa käyttökelpoista dataa ja viritys (M7) on nopea.
 | WP-13 | HAL-huolto: ESPAsyncWebServer ja `myoh` | 9, 10 | ESP32-käännös; laitetesti | `src/hal/*`, `platformio.ini` | ✅ yhdistetty; katselmoitu (R13); laitetesti tekemättä |
 | WP-14 | Dokumentaation yhtenäistys | — | muiden paketit | `docs/roadmap.md`, `SUUNNITTELU.md` §11, `jatko.md` (orkestroija) | ✅ tämä dokumentaatio |
 | WP-15 | Omistajan päätökset kirjaksi (D15) | 5 | — | `types.h` (rivi 7), SUUNNITTELU.md §5/§8, `roadmap.md`, `firmware.md`, `moottoriajo.md` | ✅ yhdistetty |
-| WP-16 | BF50A-huoltotiedot ja käyttöohjeen UI-löydökset | 2 | WP-15, S6 | `docs/bf50a-huoltotiedot.md`, `types.h` (master), `status.h` (neuvoteksti), `web/index.html`, `moottoriajo.md`, `kayttoohje.md`, `hankinnat.md` | käynnissä |
+| WP-16 | BF50A-huoltotiedot ja käyttöohjeen UI-löydökset | 2 | WP-15, S6 | `docs/bf50a-huoltotiedot.md`, `types.h` (master), `status.h` (neuvoteksti), `web/index.html`, `moottoriajo.md`, `kayttoohje.md`, `hankinnat.md` | ✅ yhdistetty |
 | S1 | Katselmus: WP-9 ja WP-10 | — | — | `docs/katselmukset/2026-10-31-status-wp9-wp10.md` | ✅ yhdistetty; ei korkeita löydöksiä |
 | R13 | Katselmus: WP-13 (HAL, kirjastot 3.12.1/3.5.0) | — | — | `docs/katselmukset/2026-10-31-wp13-hal-kirjastot.md` | ✅ yhdistetty; ei korkeita löydöksiä |
 | S2 | DSP: voimakas paluuaalto | 6 | WP-8 | `dsp.h`, DSP-testit | käynnissä |

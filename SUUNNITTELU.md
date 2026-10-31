@@ -430,6 +430,12 @@ orkestroijalle, ja orkestroija päätti ne:
 5. **Moottoriajon pöytäkirjan rajat** H1:lle, riville 9 ja D2:lle
    ([docs/moottoriajo.md](docs/moottoriajo.md) §6.1, §6.3, §6.4) hyväksytään sellaisinaan.
    Ne tarkistetaan ensimmäisestä ajosta.
+6. **Kalibroimattomana annetaan ruuvineuvo** (rivit 4a/4b, nykyinen käytös WP-4:stä lähtien).
+   D11 kieltää vain vihreän. *Perustelu:* nollaus on ajopöytäkirjassa ennen käynnistystä, ja
+   automaattinen nollaus tekee sen sammutuksen jälkeen; neuvon piilottaminen olisi uusi
+   käytös ilman laitetestiä. Riski: anturien ±2 kPa:n offsetit voivat yksinään tuottaa
+   AVAA/SULJE-neuvon, kunnes nollaus on tehty (S1-katselmus, löydös 1). Lisätty 31.10.2026
+   iltapäivällä.
 
 ### D16 — BF50A:n huoltotiedot lähteistä ✅ PÄÄTETTY 31.10.2026 (tarkistettava moottorilta)
 
