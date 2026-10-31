@@ -6,7 +6,102 @@
 // nojaa näihin lukuihin, joten tämän moduulin virhe näkyy suoraan vääränä
 // säätöohjeena.
 //
-// (Otsikon mitatut rajat päivitetään mittausten jälkeen.)
+// Ketju per kanava:
+//
+//   kPa ──┬──► EMA ───────────────────────────────────────► level_kpa (aina voimassa)
+//         ├──► 4. kert. Butterworth-LP ──► suhteellinen Schmitt ──► pulssiehdokas
+//         │      (rengaspuskuri)            └► keskikohta, omistajuus ──► oma pulssi
+//         └──► suodattamaton integraali omasta keskikohdasta omaan ──► D1-keskiarvo
+//   mV ───────► vika- (rivi 7) ja saturaatiomonitori (rivi 10)
+//
+// Suodatettua signaalia käytetään VAIN siihen, missä pulssit ovat. Keskiarvo
+// lasketaan suodattamattomasta signaalista täsmälleen yhden syklin yli (oman
+// pulssin keskikohdasta seuraavaan), jolloin letkuresonanssi ja kohina
+// keskiarvoistuvat pois ilman suotimen viivettä (D1). Jakso ja rpm tulevat
+// samoista keskikohdista: laskevan ja nousevan reunan puoliväli tasolla pohja +
+// 0,3 x syvyys, joka ei riipu laukaisukynnyksestä eikä pulssin koosta.
+//
+// Pulssin omistajuus (isOwn). Sylinterien imut ovat 240 kampiasteen välein, ja
+// Dsp saa kaikki kolme kanavaa samalla näytteellä. Vuotopulssin (xtalk) keskellä
+// sen aiheuttanut sylinteri on omassa imussaan, joten sen kanava putoaa samaan
+// aikaan 1/xtalk-kertaisesti; oman pulssin keskellä muut kanavat näkevät vain
+// vuodon. Pulssi on oma, kun sen pudotus on >= kOwnMargin (25 %) suurempi kuin
+// minkään muun kanavan samanaikainen pudotus: vuodolla ero on negatiivinen,
+// yhteisellä alipaineen askeleella ~0, omalla pulssilla 1 - xtalk >= 0,5. Suhde
+// ei riipu sylinterien pulssien keskinäisestä koosta. Vuotopulssi ei koskaan
+// ole syklin raja eikä päivitä viitteitä. Toinen kanava kantaa tietoa, kun sillä
+// on has_pulse, anturi kunnossa ja oma pulssi pisimmän jakson sisällä.
+//
+// Sykli = kaksi peräkkäistä omaa pulssia. Kirjataan, kun
+//  - jakso on rpm-alueella ja pulssi läpäisee amplitudiehdon (ampOk);
+//  - haussa (ei has_pulse) kolme peräkkäistä omaa pulssia ovat samankokoisia;
+//  - lomitus: jokaisella tietoa kantavalla kanavalla on syklin sisällä
+//    täsmälleen yksi oma pulssi, 1/3:n ja 2/3:n kohdalla +- kSlotTol. Ohitettu
+//    pulssi (2T) siirtää merkit 1/6 jaksoa paikoiltaan, myös silloin kun kaikki
+//    kanavat ohittivat saman kierroksen. Lomitus ei riipu kierrosluvun
+//    muutoksesta, joten uusi jakso kelpaa heti ilman viitettä.
+//  - varatila (muut kanavat eivät kanna tietoa, esim. kaksi letkua irti):
+//    rajapulssit samankokoiset ja jakso viitteen +- kFallbackWindow.
+// Jakson hypätessä yli 1,5-kertaiseksi näytön keskiarvo alkaa alusta seuraavasta
+// syklistä (askeleen ylittävä sykli ei jää näyttöön).
+//
+// Laukaisu (suhteellinen Schmitt) tarvitsee pulssin koon A. Kaasunlisäyksessä
+// kaikkien sylinterien pulssit kutistuvat yhtä aikaa: A laskee muiden kanavien
+// tuoreeseen omaan syvyyteen (peerDepth), ja jos rajaa ei tule 1,2 x jakson
+// aikana, A vaimenee (kDecayStart). Vuotopulssi saa laukaista - omistajuus
+// hylkää sen.
+//
+// Mitatut rajat (EngineSim -> mV -> nimellinen kPa -> Dsp, oletusparametrit,
+// 1 % jitter; 4 siementä x xtalk 0/0,3 x 6 vaihetta, C:ssä x xtalk 0,5 x 16
+// vaihetta; väärä sykli = jokin merkki (loppu, loppu - jakso) osuu lähimpänä
+// toisen sylinterin imuun tai merkit eivät ole peräkkäiset omat imut):
+//  - Väärät syklit: 0 kaikissa rpm-pudotuksissa (3000...6000 -> 600...1500,
+//    askel, ramppi 150 ms-1 s, kaasun katkaisu 150-700 ms), blipeissä (850/950
+//    -> 1500...3000 rpm, nousu 150-600 ms, pikablipit, tuplablipit) ja
+//    alipaineen askelissa ja rampeissa vakiokierroksilla (8-25 kPa, 20-200 ms,
+//    600-950 rpm, xtalk 0...0,5, jitter 1 ja 5 %). Vakiokierroksilla kanavan
+//    rpm ei ylitä 1,05 x todellista.
+//  - has_pulse ei putoa näissä. Pisin väli kirjattujen syklien välillä:
+//    rpm-askel alas <= 2 uutta jaksoa + 10 ms (850 rpm: 290 ms, 600 rpm: 382
+//    ms), kaasun katkaisu 4500 -> 1500 / 150 ms 278 ms; blip nousu >= 300 ms
+//    <= 272 ms, nousu 150 ms <= 358 ms, pikablip <= 393 ms; alipaineen askel
+//    <= 3,04 jaksoa (5 % jitter 3,21), ramppi 200 ms 1,05 jaksoa, 20-100 ms
+//    <= 3,03 jaksoa (peittää askeleen tavoin yhden pulssin).
+//  - Jokaisen kanavan rpm ja keskiarvo oikein 1,5 s muutoksen jälkeen (rpm
+//    0,01 %, keskiarvo <= 0,051 kPa); RpmEstimate 1,2 s jälkeen <= 0,2 %.
+//  - Yksittäisen syklin jakso vs saman syklin toteutunut (imun keskeltä
+//    keskelle) < 3 %, paitsi: 40 kPa / 300 ms kaasun katkaisu 3000 rpm:stä <= 9,6
+//    % ja 4500 -> 1500 / 150 ms <= 7,3 % (suodatettu 4 kPa:n pulssi rampin
+//    päällä: keskikohta siirtyy, raja on silti oikea); kerralla vaihtuvan rpm:n
+//    ylittävä sykli <= 16,3 % (6000 -> 850: pulssi puoliksi 7 x hitaampi) ja
+//    sen naapurisykli <= 5,3 %.
+//  - Lukitus käyvään signaaliin tai käynnistyksessä: <= 3,5 sykliä + 40 ms
+//    (EngineSim ilmanpaineesta: 600 rpm 651 ms, 850 rpm 465 ms, 1500 rpm 271
+//    ms, 3000 rpm 184 ms).
+//  - Pienin havaittava imupulssi: 850-1500 rpm 1-1,5 kPa, 3000 rpm 2, 4500 rpm
+//    2,5, 6000 rpm 4,5 kPa; xtalk 0,3:lla 3 / 3,5 / 6,5 kPa (6000 rpm 4 kPa
+//    xtalk 0,3: 89 % sykleistä). Rpm-virhe rajallakin <= 1 %.
+//  - Kohina: hyst_min_kpa 0,3 kestää 0,4 kPa RMS (+ 3 kPa 112 Hz) ilman yhtään
+//    väärää sykliä; 0,6-0,8 kPa vaatii ~0,5 (S5a).
+//  - Hajonta (rivi 2): jitter 5 % -> cv 0,046, 15 % -> 0,135.
+//  - Viive: sykli kirjataan, kun sen päättänyt pulssi on noussut takaisin
+//    merkkitasolle, ~15-20 ms imun keskikohdan jälkeen.
+//  - Suunnitteluraja xtalk: omistajuus 0,5 asti (marginaali 1 - xtalk >= 0,5 >
+//    kOwnMargin); varatila (yksi kanava) 0,3. Letkujen viive-ero (R1: samat
+//    letkut +-2 cm, < 0,1 ms) saa olla enintään ~0,1 x jakso - jitter: 3 ms
+//    toimii 1500 rpm:iin, 3000 rpm:stä ylöspäin ei (lomitus hylkää syklit,
+//    pudotuksissa 4500/6000 -> 1500 kirjautui vuotosyklejä).
+//  - Varatilan rajat (kaksi letkua irti; tila on joka tapauksessa FaultHose):
+//    rpm-muutos yli +-10 % syklissä katkaisee lukituksen (uusi haku ~1 s), ja
+//    hetkellinen 3000 -> 850 / 4500 -> 1500 rpm:n pudotus xtalk 0,3:lla kirjasi
+//    vuotosyklin 2-5 ajossa 48:sta: yhdeltä kanavalta uuden käynnin vuotopulssi
+//    (xtalk x kasvanut pulssi) on vanhan oman kokoinen ja osuu vanhaan
+//    jaksoon. Yksi letku irti + sama pudotus 4500 -> 1500: 4/48 (omistajan
+//    kanava on tasainen ja toisen kanavan oma palautuminen peittää vuodon).
+//
+// Testikoukku: jos SBX_DSP_CYCLE_HOOK(kanava, jakso, loppu_int, loppu_frac) on
+// määritelty ennen tätä otsaketta, recordCycle kutsuu sitä jokaisesta
+// kirjatusta syklistä (native-testit). Määrittelemättömänä ei koodia eikä tilaa.
 
 #include <cmath>
 #include <cstdint>
@@ -146,9 +241,10 @@ class Dsp {
   // omistajuuden ikkunat ja integraalin katkaisu ovat <= ~60 ms taaksepäin.
   static constexpr int kRing = 64;
   // Lomituksen paikkatoleranssi (osuus jaksosta): toisen kanavan oma pulssi
-  // 1/3:n tai 2/3:n kohdalla +- tämä. Jitter 5 % (3 sigmaa), kiihdytys ja
-  // letkujen 1,5 ms:n viive-ero 6000 rpm:llä siirtävät sitä < 0,1; ohitetun
-  // pulssin välissä (2T) merkit ovat 1/6 sivussa.
+  // 1/3:n tai 2/3:n kohdalla +- tämä. Jitter 5 % (3 sigmaa ~0,08) ja
+  // kiihdytys siirtävät sitä < 0,1; ohitetun pulssin välissä (2T) merkit ovat
+  // 1/6 sivussa. 0,125 päästi kiihdytyksessä 3T-välin (sivussa 0,12); letkujen
+  // viive-ero (R1: < 0,1 ms) syö tästä 6000 rpm:llä 0,005 / ms.
   static constexpr float kSlotTol = 0.1f;
   // Kanavan muistamat omat keskikohdat (lomitustarkistus muille kanaville):
   // kolme riittää toteamaan, osuuko väliin kaksi.

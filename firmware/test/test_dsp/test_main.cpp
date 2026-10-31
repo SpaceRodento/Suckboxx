@@ -13,7 +13,30 @@
 #include <unity.h>
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+
+// Testikoukku (dsp.h, recordCycle): jokainen kirjattu sykli talteen, myös
+// saman näytteen aikana kirjatut. avg_cycles = 1 -näyttö näki vain viimeisen,
+// ja hypänneen syklin näyttö ei päivity lainkaan, joten yksittäisten syklien
+// tarkistus tehdään näistä.
+struct CycleRecord {
+  int ch;
+  float period;       // näytteinä
+  uint32_t end_int;   // loppumerkki (pulssin keskikohta) Dsp:n näyteindeksinä
+  float end_frac;
+  long t;             // testin näyte, jolla sykli kirjattiin
+};
+static constexpr int kMaxCycleRecords = 4096;
+static CycleRecord g_cycles[kMaxCycleRecords];
+static int g_cycle_count = 0;
+static bool g_capture = false;
+static long g_capture_t = 0;
+static void captureCycle(int ch, float period, uint32_t end_int, float end_frac) {
+  if (!g_capture || g_cycle_count >= kMaxCycleRecords) return;
+  g_cycles[g_cycle_count++] = CycleRecord{ch, period, end_int, end_frac, g_capture_t};
+}
+#define SBX_DSP_CYCLE_HOOK(ch, period, end_int, end_frac) captureCycle((ch), (period), (end_int), (end_frac))
 
 #include "core/dsp.h"
 #include "core/engine_sim.h"
@@ -376,6 +399,40 @@ void test_amplitude_gate_scales_with_filter_gain() {
   msg("6000 rpm: p2p %.2f kPa hyväksytty; 1500 rpm: p2p %.2f kPa hyväksytty vain alemmalla rajalla",
       static_cast<double>(p2p_hi), static_cast<double>(g_rig.dsp.channel(0).p2p_kpa));
   TEST_ASSERT_LESS_THAN_FLOAT(0.9f, g_rig.dsp.channel(0).p2p_kpa);
+
+  // Skaalatun rajan varassa (suodatettu p2p ~0,6 kPa) hyväksytään vain
+  // tasavälinen jono: samat 2 kPa:n, 6 ms:n kuopat 25 ms:n välein lukittuvat,
+  // mutta vuorotellen 21 ja 29 ms:n välein (suhde 1,38, kuin kohinaa) eivät.
+  const int gaps[2][2] = {{25, 25}, {21, 29}};
+  for (int k = 0; k < 2; ++k) {
+    Dsp dsp;
+    float kpa[kChannels];
+    RawFrame raw;
+    long next = 100, start = -1000;
+    int n = 0;
+    for (long t = 0; t < 4000; ++t) {
+      if (t == next) {
+        start = t;
+        next += gaps[k][n++ % 2];
+      }
+      float v = -10.0f;
+      if (t - start < 6) {
+        const float sn = std::sin(3.14159265f * static_cast<float>(t - start) / 6.0f);
+        v -= 2.0f * sn * sn;
+      }
+      for (int c = 0; c < kChannels; ++c) {
+        kpa[c] = v;
+        raw.mv[c] = static_cast<uint16_t>(2700.0f + 25.0f * v);
+      }
+      dsp.push(kpa, raw);
+    }
+    if (k == 0) {
+      TEST_ASSERT_TRUE(dsp.channel(0).has_pulse);
+      TEST_ASSERT_LESS_THAN_FLOAT(0.9f, dsp.channel(0).p2p_kpa);
+    } else {
+      TEST_ASSERT_EQUAL_UINT32(0, dsp.channel(0).cycles);
+    }
+  }
 }
 
 void test_fractional_boundary_single_cycle_mean() {
@@ -665,6 +722,32 @@ void test_has_pulse_after_engine_start_from_atmosphere() {
   }
   msg("käynnistys ilmanpaineesta: kaikki kanavat pulssivat viimeistään %.0f ms:n jälkeen (%.2f sykliä)",
       static_cast<double>(worst), static_cast<double>(static_cast<float>(worst) / periodMs(850.0f)));
+
+  // Sammutus ja uusi käynnistys pienemmällä pulssilla: sammutuksen 55 kPa:n
+  // nousu jää haun amplitudiarvioon, ellei vanha segmentti vanhene (pisimmän
+  // jakson jälkeen ilman rajaa). Muuten 4 kPa:n pulssit eivät koskaan
+  // laukaisisi, eikä kanava lukittuisi uudelleen. Käynnistysaskeleen
+  // suodatettu ylitys (~6 kPa) vanhenee samoin: mitattu 1,16 s.
+  SynthParams p = idleParams();
+  g_rig.begin(p);
+  g_rig.run(2.0f);
+  p.engine_on = false;
+  g_rig.syn.setParams(p);
+  g_rig.run(1.5f);
+  for (int c = 0; c < kChannels; ++c) TEST_ASSERT_FALSE(g_rig.dsp.channel(c).has_pulse);
+  p.engine_on = true;
+  p.depth_kpa = 4.0f;
+  g_rig.syn.setParams(p);
+  int relock = -1;
+  for (int i = 0; i < 3000 && relock < 0; ++i) {
+    g_rig.step();
+    bool all = true;
+    for (int c = 0; c < kChannels; ++c) all = all && g_rig.dsp.channel(c).has_pulse;
+    if (all) relock = i;
+  }
+  msg("uudelleenkäynnistys 4 kPa:n pulssilla: lukitus %.0f ms", static_cast<double>(relock));
+  TEST_ASSERT_GREATER_OR_EQUAL(0, relock);
+  TEST_ASSERT_LESS_OR_EQUAL(1500, relock);
 }
 
 // --- tason ja pulssin muutokset käydessä (kaasu, /api/sim) --------------------------
@@ -791,20 +874,25 @@ void test_pulse_depth_changes_keep_lock() {
   for (const Change& ch : cases) checkChange(ch);
 }
 
-// --- kierrosluvun muutokset EngineSimillä (laitteen oma simulaattori) ------------------
+// --- kierrosluvun ja alipaineen muutokset EngineSimillä (laitteen oma simulaattori) --
 //
 // SynthSignal luo imuhetket ~2 sykliä etukäteen, joten sen kierrosluku seuraa
-// käskyä viiveellä, ja kaasunlisäys näytti DSP:lle loivemmalta kuin laitteen
-// oletuslähde (D14). Nämä testit ajavat saman ketjun kuin laite: EngineSim ->
+// käskyä viiveellä. Nämä testit ajavat saman ketjun kuin laite: EngineSim ->
 // mV -> (mv - v_zero) / mv_per_kpa -> Dsp, oletusparametrein (resonanssi,
 // kohina, 1 %:n jitter).
 //
-// Totuus jaksoille tulee kaksoissimulaattorista: sama siemen ja samat
-// kierroslukukomennot, mutta ilman kohinaa, resonanssia ja ristivuotoa ja
-// vakiopulssilla. EngineSim arpoo jitterin samassa järjestyksessä
-// parametreista riippumatta, joten kaksosen imut osuvat täsmälleen samoihin
-// hetkiin; sen sin^2-kuopan painopiste on imun keskikohta ja pinta-ala kertoo
-// leveyden (alku = keskikohta - leveys / 2).
+// Totuus tulee kaksoissimulaattorista: sama siemen ja samat kierroslukukomennot,
+// mutta ilman kohinaa, resonanssia, ristivuotoa ja letkuvikoja ja vakiopulssilla.
+// EngineSim arpoo jitterin samassa järjestyksessä parametreista riippumatta,
+// joten kaksosen imut osuvat täsmälleen samoihin hetkiin; sen sin^2-kuopan
+// painopiste on imun keskikohta ja pinta-ala kertoo leveyden.
+//
+// Tiukka syklitarkistus: JOKAINEN kirjattu sykli (testikoukku, ks. alku)
+// tarkistetaan. Syklin loppumerkki ja alkumerkki (loppu - jakso) liitetään
+// lähimpään MINKÄ TAHANSA sylinterin imun keskikohtaan (merkin viive =
+// suotimen ryhmäviive, mitataan muutosta edeltävistä sykleistä). Sykli on
+// väärä, jos kumpikaan merkki osuu toisen sylinterin imuun (vuotopulssin raja)
+// tai merkit eivät ole saman sylinterin peräkkäiset imut (ohitettu pulssi, 2T).
 namespace {
 
 struct SimTruth {
@@ -840,31 +928,28 @@ struct SimTruth {
     }
   }
 
-  // Kanavan c syklin jakso P (ms), hyväksytty hetkellä t (arvioidaan ajon
-  // jälkeen, kun kaikki kuopat on nähty). Sykli kirjataan, kun sen
-  // päättänyt pulssi on nähty pohjaan asti, joten se on toteutunut sykli,
-  // joka päättyi viimeisimpään ennen t:tä olleeseen imuun - tai sitä
-  // edeltävään, jos pari kirjattiin vasta seuraavan pulssin jälkeen
-  // (yli 1,8-kertainen pudotus). Muita ehdokkaita ei hyväksytä: ohitetun
-  // pulssin kahden syklin väli voi osua kiihdytyksessä lähelle jotakin
-  // vanhempaa sykliä. Toteutunut jakso on väli [alusta alkuun,
-  // keskikohdasta keskikohtaan]: rajan voi määritellä missä tahansa
-  // pulssin kohdassa, ja kierrosluvun muuttuessa pulssin leveys muuttuu.
-  double cycleError(int c, long t, double p) const {
-    int k = count[c] - 1;
-    while (k >= 0 && mid[c][k] > static_cast<double>(t)) --k;
-    double best = 1.0;
-    for (int j = k; j >= 1 && j >= k - 1; --j) {
-      const double ps = start[c][j] - start[c][j - 1];
-      const double pm = mid[c][j] - mid[c][j - 1];
-      const double lo = ps < pm ? ps : pm;
-      const double hi = ps < pm ? pm : ps;
-      double e = 0.0;
-      if (p < lo) e = (lo - p) / ps;
-      if (p > hi) e = (p - hi) / ps;
-      if (e < best) best = e;
+  // Lähin imu (sylinteri, indeksi) hetkeen t.
+  void nearest(double t, int& cyl, int& idx) const {
+    double best = 1.0e18;
+    cyl = idx = -1;
+    for (int c = 0; c < kChannels; ++c) {
+      for (int k = 0; k < count[c]; ++k) {
+        const double d = std::fabs(mid[c][k] - t);
+        if (d < best) {
+          best = d;
+          cyl = c;
+          idx = k;
+        }
+      }
     }
-    return best;
+  }
+
+  // Kanavan c toteutunut kierrosluku n viimeisimmän jakson yli (viimeisin imu <= t).
+  float realised(int c, double t, int n) const {
+    int k = count[c] - 1;
+    while (k >= 0 && mid[c][k] > t) --k;
+    if (k - n < 0) return 0.0f;
+    return static_cast<float>(120000.0 * n / (mid[c][k] - mid[c][k - n]));
   }
 
   // Toteutunut kierrosluku hetken t_from jälkeen alkaneiden ja ennen t
@@ -887,20 +972,100 @@ struct SimTruth {
 
 SimTruth g_truth;
 
+struct Strict {
+  int records = 0;
+  int wrong = 0;
+  double worst = 0.0;           // pahin jaksovirhe oikeissa sykleissä (ei askeleen ylittävää)
+  double worst_straddle = 0.0;  // hetkellisen muutoksen ylittävä sykli
+};
+
+// Merkin viive imun keskikohdasta (suotimen ryhmäviive ~11,5 ms): mediaani
+// muutosta edeltävistä sykleistä.
+double markerDelay(long t_from, long t_to) {
+  double r[256];
+  int n = 0;
+  for (int i = 0; i < g_cycle_count && n < 256; ++i) {
+    const CycleRecord& rc = g_cycles[i];
+    if (rc.t < t_from || rc.t >= t_to) continue;
+    const double te = static_cast<double>(rc.end_int) + static_cast<double>(rc.end_frac) - 1.0;
+    double best = 1.0e9;
+    for (int k = 0; k < g_truth.count[rc.ch]; ++k) {
+      const double d = te - g_truth.mid[rc.ch][k];
+      if (d >= 0.0 && d < 30.0 && d < best) best = d;
+    }
+    if (best < 1.0e9) r[n++] = best;
+  }
+  if (n < 3) return 11.5;
+  for (int i = 1; i < n; ++i) {
+    const double v = r[i];
+    int j = i - 1;
+    while (j >= 0 && r[j] > v) {
+      r[j + 1] = r[j];
+      --j;
+    }
+    r[j + 1] = v;
+  }
+  return r[n / 2];
+}
+
+// Ajon viimeiset 150 ms jätetään pois: Dsp kirjaa syklin ~18 ms imun
+// keskikohdan jälkeen, mutta kaksosen kuoppa valmistuu vasta imun lopussa
+// (600 rpm: 25 ms), joten viimeisen imun totuus voi puuttua.
+Strict strictCheck(long t_from, long t_change, long t_until, double step_t) {
+  Strict s;
+  const double delay = markerDelay(t_from, t_change);
+  for (int i = 0; i < g_cycle_count; ++i) {
+    const CycleRecord& rc = g_cycles[i];
+    if (rc.t < t_from || rc.t > t_until) continue;
+    ++s.records;
+    const double te = static_cast<double>(rc.end_int) + static_cast<double>(rc.end_frac) - 1.0 - delay;
+    const double ts = te - static_cast<double>(rc.period);
+    int ce = -1, ke = -1, cs = -1, ks = -1;
+    g_truth.nearest(te, ce, ke);
+    g_truth.nearest(ts, cs, ks);
+    if (ce != rc.ch || cs != rc.ch || ke - ks != 1) {
+      ++s.wrong;
+      continue;
+    }
+    const double pm = g_truth.mid[rc.ch][ke] - g_truth.mid[rc.ch][ks];
+    const double e = std::fabs(static_cast<double>(rc.period) - pm) / pm;
+    const double end_e = 2.0 * g_truth.mid[rc.ch][ke] - g_truth.start[rc.ch][ke];  // imun loppu
+    const bool straddle = step_t >= 0.0 && step_t >= g_truth.start[rc.ch][ks] - 2.0 && step_t <= end_e + 2.0;
+    if (straddle) {
+      if (e > s.worst_straddle) s.worst_straddle = e;
+    } else if (e > s.worst) {
+      s.worst = e;
+    }
+  }
+  return s;
+}
+
 struct SimRun {
-  long max_gap = 0;          // pisin väli hyväksyttyjen syklien välillä (ms), muutoksen yli
-  bool dropped = false;      // has_pulse putosi jollain kanavalla
-  double worst_cycle = 0.0;  // pahin yksittäisen syklin jaksovirhe (avg_cycles 1)
-  float disp_err = 0.0f;     // RpmEstimate vs toteutunut, kun muutoksen lopusta >= 1 s
-  float peak_shown = 0.0f;   // näytetty huippu-rpm muutoksen aikana
-  float mean_err = 0.0f;     // keskiarvovirhe lopussa
-  int cycles = 0;
+  long max_gap = 0;            // pisin väli kirjattujen syklien välillä (ms), muutoksen yli
+  bool dropped = false;        // has_pulse putosi jollain (kytketyllä) kanavalla
+  int wrong = 0;               // väärät syklit (tiukka tarkistus)
+  double worst_cycle = 0.0;    // pahin jaksovirhe (ei askeleen ylittävää sykliä)
+  double worst_straddle = 0.0; // hetkellisen askeleen ylittävä sykli
+  float disp_err = 0.0f;       // RpmEstimate vs toteutunut, kun muutoksen lopusta >= 1 s
+  float peak_shown = 0.0f;     // näytetty huippu-rpm muutoksen aikana
+  float mean_err = 0.0f;       // keskiarvovirhe lopussa
+  float ch_rpm_err = 0.0f;     // jokaisen kanavan rpm vs toteutunut 8, t >= check_from
+  float ch_mean_err = 0.0f;    // jokaisen kanavan mean_kpa vs totuus, t >= check_from
+  float rpm_ratio = 0.0f;      // suurin kanavan rpm / nimellis-rpm (t >= 2000)
+};
+
+struct SimOpts {
+  long t0 = 2500, t_end = 2500, total = 5000;  // muutos t0..t_end, ajo total ms
+  double step_t = -1.0;     // hetkellisen muutoksen hetki (askeleen ylittävä sykli)
+  long check_from = -1;     // kanavien rpm/mean-tarkistus tästä hetkestä (-1 = ei)
+  int hose_mask = 0;        // letku irti näillä kanavilla (bitti c) hetkestä hose_t
+  long hose_t = 0;
 };
 
 // Muutos: sched(t, p) asettaa parametrit hetkellä t (ms) ja palauttaa true,
-// jos ne muuttuivat. t0..t_end = muutos, seurataan 2 s:sta loppuun.
+// jos ne muuttuivat. Seuranta alkaa 2 s:sta.
 template <typename F>
-SimRun runSim(sbx::SimParams p, long t0, long t_end, long total, F sched) {
+SimRun runSim(sbx::SimParams p, const SimOpts& o, F sched) {
   using sbx::EngineSim;
   sbx::SimParams q = p;  // kaksonen: vain ajoitus
   q.base_kpa = -50.0f;
@@ -912,32 +1077,27 @@ SimRun runSim(sbx::SimParams p, long t0, long t_end, long total, F sched) {
   static EngineSim sim;
   static EngineSim twin;
   static Dsp dsp;
-  static Dsp one;
-  // Yksittäiset syklit (kanava, hetki, jakso) arvioidaan ajon jälkeen.
-  // Pidetty sykli kirjataan samalla näytteellä kuin sen ratkaissut, ja
-  // avg_cycles 1 näyttää vain jälkimmäisen; pidetyn jakso on kuitenkin
-  // hyväksytty vain, jos se on jatkoa jälkimmäiselle (classify).
-  static constexpr int kMaxEv = 2048;
-  static int ev_c[kMaxEv];
-  static long ev_t[kMaxEv];
-  static double ev_p[kMaxEv];
-  int n_ev = 0;
   SensorParams sp;
   sim = EngineSim();
   twin = EngineSim();
   sim.configure(p, sp, true);
   twin.configure(q, sp, true);
   dsp.configure(DspParams(), sp);
-  DspParams d1;
-  d1.avg_cycles = 1;
-  one.configure(d1, sp);
   g_truth.clear();
+  g_cycle_count = 0;
+  g_capture = true;
   SimRun r;
   uint32_t prev[kChannels] = {0, 0, 0};
-  uint32_t prev1[kChannels] = {0, 0, 0};
   long last[kChannels] = {2000, 2000, 2000};
-  for (long t = 0; t < total; ++t) {
-    if (sched(t, p)) {
+  for (long t = 0; t < o.total; ++t) {
+    bool reconf = sched(t, p);
+    if (o.hose_mask != 0 && t == o.hose_t) {
+      for (int c = 0; c < kChannels; ++c) {
+        if (o.hose_mask & (1 << c)) p.fault[c] = sbx::SimFault::HoseOff;
+      }
+      reconf = true;
+    }
+    if (reconf) {
       q.rpm = p.rpm;
       sim.configure(p, sp);
       twin.configure(q, sp);
@@ -946,61 +1106,76 @@ SimRun runSim(sbx::SimParams p, long t0, long t_end, long total, F sched) {
     g_truth.add(twin.next(), t);
     float kpa[kChannels];
     for (int c = 0; c < kChannels; ++c) kpa[c] = (static_cast<float>(f.mv[c]) - sp.v_zero_mv) / sp.mv_per_kpa;
+    g_capture_t = t;
     dsp.push(kpa, f);
-    one.push(kpa, f);
     if (t < 2000) {
-      for (int c = 0; c < kChannels; ++c) {
-        prev[c] = dsp.channel(c).cycles;
-        prev1[c] = one.channel(c).cycles;
-      }
+      for (int c = 0; c < kChannels; ++c) prev[c] = dsp.channel(c).cycles;
       continue;
     }
     for (int c = 0; c < kChannels; ++c) {
+      if (o.hose_mask & (1 << c)) continue;
       const ChannelState& s = dsp.channel(c);
       if (!s.has_pulse) r.dropped = true;
       if (s.cycles != prev[c]) {
         prev[c] = s.cycles;
-        if (t >= t0 && t - last[c] > r.max_gap) r.max_gap = t - last[c];
+        if (t >= o.t0 && t - last[c] > r.max_gap) r.max_gap = t - last[c];
         last[c] = t;
-        ++r.cycles;
       }
-      const ChannelState& s1 = one.channel(c);
-      if (s1.cycles != prev1[c]) {
-        prev1[c] = s1.cycles;
-        if (n_ev < kMaxEv) {
-          ev_c[n_ev] = c;
-          ev_t[n_ev] = t;
-          ev_p[n_ev] = 120000.0 / static_cast<double>(s1.rpm);
-          ++n_ev;
+      if (s.has_pulse && s.rpm / sim.trueRpm() > r.rpm_ratio) r.rpm_ratio = s.rpm / sim.trueRpm();
+      if (o.check_from >= 0 && t >= o.check_from && t % 10 == 0) {
+        // Kirjaus tulee ~15-20 ms imun keskikohdan jälkeen: verrataan kahteen
+        // viimeisimpään 8 syklin ikkunaan ja otetaan parempi.
+        float best = 1.0f;
+        for (int sh = 0; sh <= 30; sh += 30) {
+          const float rr = g_truth.realised(c, static_cast<double>(t - sh), 8);
+          if (rr > 0.0f && std::fabs(s.rpm - rr) / rr < best) best = std::fabs(s.rpm - rr) / rr;
         }
+        if (best > r.ch_rpm_err) r.ch_rpm_err = best;
+        const float me = std::fabs(s.mean_kpa - sim.trueMeanKpa(c));
+        if (me > r.ch_mean_err) r.ch_mean_err = me;
       }
     }
     const RpmEstimate e = dsp.rpm();
-    if (t >= t0 && t <= t_end + 1000 && e.rpm > r.peak_shown) r.peak_shown = e.rpm;
-    if (t >= t_end + 1000 && t % 20 == 0) {
+    if (t >= o.t0 && t <= o.t_end + 1000 && e.rpm > r.peak_shown) r.peak_shown = e.rpm;
+    if (o.hose_mask == 0 && t >= o.t_end + 1000 && t % 20 == 0) {
       // Näyttö on avg_cycles (8) syklin keskiarvo, joka alkaa alusta, kun
       // jakso muuttuu kerralla yli 1,5-kertaiseksi. 850 rpm:llä 8 sykliä on
       // 1,13 s, joten liukuvan muutoksen jälkeen ikkunassa on 1 s kohdalla
       // vielä muutoksen loppua: verrataan samojen 8 toteutuneen syklin
       // keskiarvoon tai, jos näyttö alkoi alusta, muutoksen jälkeisiin.
       const float r8 = g_truth.realisedSince(-1, t);
-      const float rs = g_truth.realisedSince(t_end, t);
+      const float rs = g_truth.realisedSince(o.t_end, t);
       const float e8 = std::fabs(e.rpm - r8) / r8;
       const float es = std::fabs(e.rpm - rs) / rs;
       const float de = e8 < es ? e8 : es;
       if (de > r.disp_err) r.disp_err = de;
     }
   }
-  for (int i = 0; i < n_ev; ++i) {
-    const double e = g_truth.cycleError(ev_c[i], ev_t[i], ev_p[i]);
-    if (e > r.worst_cycle) r.worst_cycle = e;
-  }
+  g_capture = false;
+  const Strict st = strictCheck(2000, o.t0, o.total - 150, o.step_t);
+  r.wrong = st.wrong;
+  r.worst_cycle = st.worst;
+  r.worst_straddle = st.worst_straddle;
   for (int c = 0; c < kChannels; ++c) {
-    if (total - last[c] > r.max_gap) r.max_gap = total - last[c];
+    if (o.hose_mask & (1 << c)) continue;
+    if (o.total - last[c] > r.max_gap) r.max_gap = o.total - last[c];
     const float me = std::fabs(dsp.channel(c).mean_kpa - sim.trueMeanKpa(c));
     if (me > r.mean_err) r.mean_err = me;
   }
   return r;
+}
+
+void worstOf(SimRun& w, const SimRun& r) {
+  if (r.max_gap > w.max_gap) w.max_gap = r.max_gap;
+  w.dropped = w.dropped || r.dropped;
+  w.wrong += r.wrong;
+  if (r.worst_cycle > w.worst_cycle) w.worst_cycle = r.worst_cycle;
+  if (r.worst_straddle > w.worst_straddle) w.worst_straddle = r.worst_straddle;
+  if (r.disp_err > w.disp_err) w.disp_err = r.disp_err;
+  if (r.mean_err > w.mean_err) w.mean_err = r.mean_err;
+  if (r.ch_rpm_err > w.ch_rpm_err) w.ch_rpm_err = r.ch_rpm_err;
+  if (r.ch_mean_err > w.ch_mean_err) w.ch_mean_err = r.ch_mean_err;
+  if (r.rpm_ratio > w.rpm_ratio) w.rpm_ratio = r.rpm_ratio;
 }
 
 // Lineaarinen muutos (r0, b0, d0) -> (r1, b1, d1) hetkestä t0 ramp ms:ssa
@@ -1036,16 +1211,25 @@ struct Blip {
   }
 };
 
+// Askel/ramppi vakiokierroksilla vaiheen ph/nph kohdalla syklistä.
+SimOpts phased(float rpm, int ph, int nph, long ramp, long tail) {
+  SimOpts o;
+  o.t0 = 2500 + static_cast<long>(120000.0f / rpm * static_cast<float>(ph) / static_cast<float>(nph));
+  o.t_end = o.t0 + ramp;
+  o.total = o.t_end + tail;
+  if (ramp == 0) o.step_t = static_cast<double>(o.t0);
+  return o;
+}
+
 }  // namespace
 
 void test_rpm_step_down_keeps_lock() {
-  // /api/sim-askel alas (D14: jokainen rpm:n lasku on askel). Pyöristetty
-  // versio laski lukituksen 1 s:ksi: vanhenemisaika 1,8 x vanha jakso
-  // katkaisi jokaisen uuden välin, eikä viite koskaan vaihtunut. Nyt:
-  // has_pulse ei putoa, väli <= 4 uutta jaksoa + vahvistus, näyttö uudessa
-  // kierrosluvussa 1 s kuluttua. Askeleen ylittävä sykli (pulssi puoliksi
-  // vanhalla, puoliksi uudella nopeudella) saa heittää <= 10 %; väärä jakso
-  // (vuotopulssien T/3, puuttuvan pulssin 2T) heittäisi >= 30 %.
+  // /api/sim-askel alas (D14: jokainen rpm:n lasku on askel). Kaikki kanavat
+  // putoavat samaan aikaan, joten omistajuus erottaa uuden käynnin
+  // vuotopulssit (T/3) omista, ja lomitus (muiden kanavien omat pulssit
+  // jaksossa 1/3:n ja 2/3:n kohdalla) hyväksyy uuden jakson heti ilman
+  // viitettä. Askeleen ylittävä sykli (pulssi puoliksi vanhalla nopeudella)
+  // kirjataan, mutta näytön keskiarvo alkaa sen jälkeen alusta.
   const float from[] = {3000.0f, 2000.0f, 6000.0f};
   for (float r0 : from) {
     SimRun worst;
@@ -1055,30 +1239,28 @@ void test_rpm_step_down_keeps_lock() {
         p.rpm = r0;
         p.xtalk = xi ? 0.3f : 0.0f;
         p.seed = static_cast<uint32_t>(1 + ph);
-        const long t0 = 2500 + static_cast<long>(static_cast<float>(ph) * 120000.0f / r0 / 3.0f);
-        const SimRun r = runSim(p, t0, t0, t0 + 2500, Ramp{r0, 850.0f, -55.0f, -55.0f, 20.0f, 20.0f, t0, 0});
-        TEST_ASSERT_FALSE_MESSAGE(r.dropped, "has_pulse putosi");
-        if (r.max_gap > worst.max_gap) worst.max_gap = r.max_gap;
-        if (r.worst_cycle > worst.worst_cycle) worst.worst_cycle = r.worst_cycle;
-        if (r.disp_err > worst.disp_err) worst.disp_err = r.disp_err;
+        const SimOpts o = phased(r0, ph, 3, 0, 2500);
+        worstOf(worst, runSim(p, o, Ramp{r0, 850.0f, -55.0f, -55.0f, 20.0f, 20.0f, o.t0, 0}));
       }
     }
-    msg("rpm-askel %.0f -> 850: pisin väli %.0f ms, pahin syklin jakso %.2f %%, näyttö 1 s jälkeen %.2f %%",
-        static_cast<double>(r0), static_cast<double>(worst.max_gap), worst.worst_cycle * 100.0,
-        static_cast<double>(worst.disp_err * 100.0f));
-    TEST_ASSERT_LESS_OR_EQUAL(static_cast<int>(4.0f * periodMs(850.0f)) + 85, static_cast<int>(worst.max_gap));
-    TEST_ASSERT_LESS_THAN_FLOAT(0.10f, static_cast<float>(worst.worst_cycle));
+    msg("rpm-askel %.0f -> 850: väärät %.0f, pisin väli %.0f ms, syklin jakso %.2f %% (ylittävä %.2f %%), näyttö 1 s %.2f %%",
+        static_cast<double>(r0), static_cast<double>(worst.wrong), static_cast<double>(worst.max_gap),
+        worst.worst_cycle * 100.0, worst.worst_straddle * 100.0, static_cast<double>(worst.disp_err * 100.0f));
+    TEST_ASSERT_FALSE_MESSAGE(worst.dropped, "has_pulse putosi");
+    TEST_ASSERT_EQUAL_INT(0, worst.wrong);
+    TEST_ASSERT_LESS_OR_EQUAL(static_cast<int>(4.0f * periodMs(850.0f)) + 60, static_cast<int>(worst.max_gap));
+    TEST_ASSERT_LESS_THAN_FLOAT(0.03f, static_cast<float>(worst.worst_cycle));
+    TEST_ASSERT_LESS_THAN_FLOAT(0.13f, static_cast<float>(worst.worst_straddle));
     TEST_ASSERT_LESS_THAN_FLOAT(0.03f, worst.disp_err);
   }
 }
 
 void test_rpm_ramp_and_throttle_chop() {
   // Kierrosluku 3000 -> 850 rampilla (vakioalipaine) ja kaasun katkaisu
-  // (alipaine -15 -> -55 kPa samaan aikaan). Pyöristetty versio menetti
-  // lukituksen jokaisessa 300 ms:n tapauksessa. Rampin yksittäinen sykli
-  // vastaa toteutunutta < 3 %; 40 kPa/300 ms -katkaisussa 3000 rpm:n
-  // pulssi on xtalk 0,3:lla vain ~3,7 kPa suodatettuna ja ramppi 5 kPa per
-  // sykli, mikä vääristää pulssin muotoa (<= 10 %).
+  // (alipaine -15 -> -55 kPa samaan aikaan). 40 kPa/300 ms -katkaisussa 3000
+  // rpm:n pulssi on suodatettuna vain ~4 kPa ja ramppi 5 kPa per sykli, mikä
+  // siirtää pulssin keskikohtaa: yksittäinen jakso heittää <= 10 % (raja ei
+  // silti ole väärä). Muualla < 3 %.
   struct Case {
     long ramp;
     float b0, d0, cycle_tol;
@@ -1095,34 +1277,73 @@ void test_rpm_ramp_and_throttle_chop() {
         p.depth_kpa = k.d0;
         p.xtalk = xi ? 0.3f : 0.0f;
         p.seed = static_cast<uint32_t>(3 + ph);
-        const long t0 = 2500 + 17 * ph;
-        const SimRun r = runSim(p, t0, t0 + k.ramp, t0 + k.ramp + 2500,
-                                Ramp{3000.0f, 850.0f, k.b0, -55.0f, k.d0, 20.0f, t0, k.ramp});
-        TEST_ASSERT_FALSE_MESSAGE(r.dropped, "has_pulse putosi");
-        if (r.max_gap > worst.max_gap) worst.max_gap = r.max_gap;
-        if (r.worst_cycle > worst.worst_cycle) worst.worst_cycle = r.worst_cycle;
-        if (r.mean_err > worst.mean_err) worst.mean_err = r.mean_err;
+        SimOpts o;
+        o.t0 = 2500 + 17 * ph;
+        o.t_end = o.t0 + k.ramp;
+        o.total = o.t_end + 2500;
+        worstOf(worst, runSim(p, o, Ramp{3000.0f, 850.0f, k.b0, -55.0f, k.d0, 20.0f, o.t0, k.ramp}));
       }
     }
-    msg("3000 -> 850 rpm %.0f ms, alipaine %.0f -> -55: pisin väli %.0f ms, pahin syklin jakso %.2f %%, ka %.3f kPa",
-        static_cast<double>(k.ramp), static_cast<double>(k.b0), static_cast<double>(worst.max_gap),
-        worst.worst_cycle * 100.0, static_cast<double>(worst.mean_err));
-    TEST_ASSERT_LESS_OR_EQUAL(static_cast<int>(4.0f * periodMs(850.0f)) + 85, static_cast<int>(worst.max_gap));
+    msg("3000 -> 850 rpm %.0f ms, alipaine %.0f -> -55: väärät %.0f, pisin väli %.0f ms, syklin jakso %.2f %%, ka %.3f kPa",
+        static_cast<double>(k.ramp), static_cast<double>(k.b0), static_cast<double>(worst.wrong),
+        static_cast<double>(worst.max_gap), worst.worst_cycle * 100.0, static_cast<double>(worst.mean_err));
+    TEST_ASSERT_FALSE_MESSAGE(worst.dropped, "has_pulse putosi");
+    TEST_ASSERT_EQUAL_INT(0, worst.wrong);
+    TEST_ASSERT_LESS_OR_EQUAL(static_cast<int>(4.0f * periodMs(850.0f)) + 60, static_cast<int>(worst.max_gap));
     TEST_ASSERT_LESS_THAN_FLOAT(k.cycle_tol, static_cast<float>(worst.worst_cycle));
     TEST_ASSERT_LESS_THAN_FLOAT(0.1f, worst.mean_err);
+  }
+}
+
+void test_rpm_drop_every_channel_recovers() {
+  // Pudotus 1200-1500 rpm:iin ristivuodolla: uuden käynnin T/3 osui vanhaan
+  // jaksoon, ja kanava saattoi lukittua pysyvästi vuotopulssien rytmiin
+  // (rpm 3x, D1-keskiarvo ~1,6 kPa pielessä -> väärä tuomio, D2 1,5 kPa).
+  // Jokaisen kanavan rpm ja keskiarvo on oltava oikein 1,5 s muutoksen
+  // jälkeen, eikä yhtään väärää sykliä saa kirjata.
+  struct Case {
+    float r0, r1, b0, b1, d0, d1;
+    long ramp;
+  };
+  const Case cases[] = {{4500.0f, 1500.0f, -55.0f, -55.0f, 20.0f, 20.0f, 0},
+                        {3500.0f, 1200.0f, -55.0f, -55.0f, 20.0f, 20.0f, 0},
+                        {3000.0f, 1200.0f, -55.0f, -55.0f, 20.0f, 20.0f, 0},
+                        {4500.0f, 1500.0f, -10.0f, -50.0f, 8.0f, 20.0f, 150}};
+  for (const Case& k : cases) {
+    SimRun worst;
+    for (int xi = 0; xi < 2; ++xi) {
+      for (int ph = 0; ph < 3; ++ph) {
+        sbx::SimParams p;
+        p.rpm = k.r0;
+        p.base_kpa = k.b0;
+        p.depth_kpa = k.d0;
+        p.xtalk = xi ? 0.3f : 0.0f;
+        p.seed = static_cast<uint32_t>(1 + ph);
+        SimOpts o = phased(k.r0, ph, 3, k.ramp, 3000);
+        o.check_from = o.t_end + 1500;
+        worstOf(worst, runSim(p, o, Ramp{k.r0, k.r1, k.b0, k.b1, k.d0, k.d1, o.t0, k.ramp}));
+      }
+    }
+    msg("%.0f -> %.0f rpm (%.0f ms): väärät %.0f, kanavan rpm %.2f %%, keskiarvo %.3f kPa 1,5 s jälkeen, väli %.0f ms",
+        static_cast<double>(k.r0), static_cast<double>(k.r1), static_cast<double>(k.ramp),
+        static_cast<double>(worst.wrong), static_cast<double>(worst.ch_rpm_err * 100.0f),
+        static_cast<double>(worst.ch_mean_err), static_cast<double>(worst.max_gap));
+    TEST_ASSERT_FALSE_MESSAGE(worst.dropped, "has_pulse putosi");
+    TEST_ASSERT_EQUAL_INT(0, worst.wrong);
+    TEST_ASSERT_LESS_THAN_FLOAT(0.03f, worst.ch_rpm_err);
+    TEST_ASSERT_LESS_THAN_FLOAT(0.15f, worst.ch_mean_err);
+    TEST_ASSERT_LESS_OR_EQUAL(static_cast<int>(4.0f * periodMs(k.r1)) + 60, static_cast<int>(worst.max_gap));
   }
 }
 
 void test_throttle_blip_engine_sim() {
   // Kaasunlisäys tyhjäkäynniltä ja paluu (synkronoinnissa käyttäjä blippaa ja
   // odottaa tyhjäkäyntiä): 850 -> 1500...3000 rpm, nousu 150/300/600 ms.
-  // Pulssi kutistuu nousun aikana suodatettuna 20 -> 4,5...10 kPa ja tulee
-  // aiemmin kuin vanha jakso; vanha versio jäädytti kaksi kanavaa 0,9 s:ksi
-  // ja hyväksyi 150 ms:n nousussa ohitetun pulssin kahden syklin välin.
-  // Raja kanavan pisimmälle välille: nousu >= 300 ms -> 300 ms, 150 ms ->
-  // 400 ms. Poikkeus (48 ajon mittaus, ks. dsp.h): 3000 rpm / 300 ms
-  // xtalk 0,3:lla pahimmillaan 444 ms (pulssi 4,5 kPa juuri ennen pitoa).
-  // Jokainen hyväksytty sykli < 3 % toteutuneesta.
+  // Pulssi kutistuu nousun aikana suodatettuna 20 -> 4,5...10 kPa; kaikki
+  // kanavat ohittavat silloin pulsseja yhtä aikaa, ja ohitetun pulssin 2T-väli
+  // voisi näyttää yhdeltä sykliltä (jokaisen kanavan ikkunassa yksi merkki
+  // muilta). Lomitus vaatii merkit 1/3:n ja 2/3:n kohdalle. Raja kanavan
+  // pisimmälle välille: nousu >= 300 ms -> 300 ms, 150 ms -> 400 ms.
   struct Case {
     float rpm1;
     long rise;
@@ -1131,26 +1352,34 @@ void test_throttle_blip_engine_sim() {
   const Case cases[] = {{1500.0f, 150, 400}, {1500.0f, 300, 300}, {1500.0f, 600, 300},
                         {2000.0f, 150, 400}, {2000.0f, 300, 300}, {2000.0f, 600, 300},
                         {2500.0f, 150, 400}, {2500.0f, 300, 300}, {2500.0f, 600, 300},
-                        {3000.0f, 150, 400}, {3000.0f, 300, 450}, {3000.0f, 600, 300}};
+                        {3000.0f, 150, 400}, {3000.0f, 300, 300}, {3000.0f, 600, 300}};
   for (const Case& k : cases) {
     SimRun worst;
     float ratio = 10.0f;
-    for (int xi = 0; xi < 2; ++xi) {
-      for (int ph = 0; ph < 2; ++ph) {
-        sbx::SimParams p;
-        p.xtalk = xi ? 0.3f : 0.0f;
-        p.seed = static_cast<uint32_t>(1 + 2 * ph + xi);
-        const long t0 = 2500 + 47 * ph;
-        const SimRun r = runSim(p, t0, t0 + k.rise + 1000, t0 + k.rise + 3000, Blip{k.rpm1, t0, k.rise});
-        TEST_ASSERT_FALSE_MESSAGE(r.dropped, "has_pulse putosi");
-        if (r.max_gap > worst.max_gap) worst.max_gap = r.max_gap;
-        if (r.worst_cycle > worst.worst_cycle) worst.worst_cycle = r.worst_cycle;
-        if (r.peak_shown / k.rpm1 < ratio) ratio = r.peak_shown / k.rpm1;
-      }
+    for (int run = 0; run < 7; ++run) {
+      // 6 ajoa + toistetapaus: 3000 rpm / 300 ms, xtalk 0,3, siemen 4, alku
+      // 2523 ms - kaikki kanavat ohittivat pulsseja, ja vanhentunut muiden
+      // kanavien syvyys (ennen tämän kanavan omaa pulssia) piti kynnyksen
+      // liian matalana: 2T kirjattiin.
+      const bool repro = run == 6;
+      if (repro && !(k.rpm1 == 3000.0f && k.rise == 300)) continue;
+      const int xi = run % 2, ph = run / 2;
+      sbx::SimParams p;
+      p.xtalk = (xi || repro) ? 0.3f : 0.0f;
+      p.seed = repro ? 4u : static_cast<uint32_t>(1 + 2 * ph + xi);
+      SimOpts o;
+      o.t0 = repro ? 2523 : 2500 + 47 * ph;
+      o.t_end = o.t0 + k.rise + 1000;
+      o.total = o.t_end + 2000;
+      const SimRun r = runSim(p, o, Blip{k.rpm1, o.t0, k.rise});
+      worstOf(worst, r);
+      if (r.peak_shown / k.rpm1 < ratio) ratio = r.peak_shown / k.rpm1;
     }
-    msg("blip 850 -> %.0f rpm, nousu %.0f ms: pisin väli %.0f ms, pahin syklin jakso %.2f %%, huippu %.2f x",
-        static_cast<double>(k.rpm1), static_cast<double>(k.rise), static_cast<double>(worst.max_gap),
-        worst.worst_cycle * 100.0, static_cast<double>(ratio));
+    msg("blip 850 -> %.0f rpm, nousu %.0f ms: väärät %.0f, pisin väli %.0f ms, syklin jakso %.2f %%, huippu %.2f x",
+        static_cast<double>(k.rpm1), static_cast<double>(k.rise), static_cast<double>(worst.wrong),
+        static_cast<double>(worst.max_gap), worst.worst_cycle * 100.0, static_cast<double>(ratio));
+    TEST_ASSERT_FALSE_MESSAGE(worst.dropped, "has_pulse putosi");
+    TEST_ASSERT_EQUAL_INT(0, worst.wrong);
     TEST_ASSERT_LESS_OR_EQUAL(k.gap_ms, static_cast<int>(worst.max_gap));
     TEST_ASSERT_LESS_THAN_FLOAT(0.03f, static_cast<float>(worst.worst_cycle));
     TEST_ASSERT_GREATER_THAN_FLOAT(0.85f, ratio);
@@ -1160,10 +1389,7 @@ void test_throttle_blip_engine_sim() {
 void test_throttle_blip_tracks_rpm_and_vacuum() {
   // Katselmoinnin blip EngineSimillä: 850 -> 2500 rpm ja -55 -> -25 kPa,
   // syvyys 20 -> 12 (300 ms ylös, 300 ms pito, 700 ms alas). Vanhalla
-  // verhokäyrällä rpm ja keskiarvo jäätyivät ~0,9 s; pyöristetyllä versiolla
-  // kaksi kanavaa jäätyi yhä 0,9 s ja näytetty huippu oli 0,43-0,48 x.
-  // (Aiempi SynthSignal-versio meni läpi vain siksi, että generaattori
-  // luo imut ~2 sykliä etukäteen ja nousu näkyi loivempana.)
+  // verhokäyrällä rpm ja keskiarvo jäätyivät ~0,9 s.
   long worst_gap = 0;
   float worst_ratio = 10.0f;
   float top_ratio = 0.0f;
@@ -1172,8 +1398,13 @@ void test_throttle_blip_tracks_rpm_and_vacuum() {
       sbx::SimParams p;
       p.seed = seed;
       p.xtalk = xi ? 0.3f : 0.0f;
-      const SimRun r = runSim(p, 2500, 3800, 6300, Blip{2500.0f, 2500, 300});
+      SimOpts o;
+      o.t0 = 2500;
+      o.t_end = 3800;
+      o.total = 6300;
+      const SimRun r = runSim(p, o, Blip{2500.0f, 2500, 300});
       TEST_ASSERT_FALSE_MESSAGE(r.dropped, "has_pulse putosi");
+      TEST_ASSERT_EQUAL_INT(0, r.wrong);
       TEST_ASSERT_LESS_THAN_FLOAT(0.03f, static_cast<float>(r.worst_cycle));
       TEST_ASSERT_LESS_THAN_FLOAT(0.1f, r.mean_err);
       TEST_ASSERT_LESS_THAN_FLOAT(0.03f, r.disp_err);
@@ -1184,12 +1415,210 @@ void test_throttle_blip_tracks_rpm_and_vacuum() {
   }
   msg("blip 850 -> 2500: pisin väli %.0f ms, näytetty huippu %.2f x", static_cast<double>(worst_gap),
       static_cast<double>(worst_ratio));
-  // Väli: sama raja kuin test_throttle_blip_engine_sim 2500 rpm / 300 ms.
   TEST_ASSERT_LESS_OR_EQUAL(300, static_cast<int>(worst_gap));
   // 8 syklin keskiarvo kulkee perässä, mutta ei jäädy, jää vajaaksi eikä
   // ylitä huippua (väärä lyhyt jakso näkyisi ylityksenä).
   TEST_ASSERT_GREATER_THAN_FLOAT(0.9f, worst_ratio);
   TEST_ASSERT_LESS_THAN_FLOAT(1.03f, top_ratio);
+}
+
+void test_vacuum_steps_with_crosstalk_engine_sim() {
+  // Alipaineen hetkellinen askel ylös ja alas ristivuodolla (xtalk 0,3)
+  // vakiokierroksilla, askel 16 kohdassa sykliä: askeleen kanssa samaan aikaan
+  // osuva vuotopulssi näytti omalta, ja kanava kirjasi T/3-jaksoja (rpm 3x).
+  // Askel on kaikilla kanavilla sama, joten omistajuus ei pidä sitä omana
+  // pulssina. Askel voi peittää yhden pulssin (väli <= 3 jaksoa).
+  struct Case {
+    float rpm, b0, b1;
+    int phases;
+  };
+  const Case cases[] = {{850.0f, -53.0f, -40.0f, 16}, {850.0f, -40.0f, -53.0f, 16}, {850.0f, -55.0f, -30.0f, 16},
+                        {850.0f, -30.0f, -55.0f, 16}, {600.0f, -58.0f, -45.0f, 8}};
+  // Tarkistajan toistetapaukset (T/3 hyväksyttiin): 600 rpm siemen 1 askel
+  // 2512 ms:ssa ja 850 rpm -55 -> -30 siemen 2 askel 2623 ms:ssa.
+  struct Repro {
+    float rpm, b0, b1;
+    uint32_t seed;
+    long t0;
+  };
+  const Repro repro[] = {{600.0f, -58.0f, -45.0f, 1, 2512}, {850.0f, -55.0f, -30.0f, 2, 2623}};
+  for (const Case& k : cases) {
+    SimRun worst;
+    for (int ph = 0; ph <= k.phases; ++ph) {
+      sbx::SimParams p;
+      p.rpm = k.rpm;
+      p.base_kpa = k.b0;
+      p.xtalk = 0.3f;
+      p.seed = static_cast<uint32_t>(1 + ph % 2);
+      SimOpts o = phased(k.rpm, ph, k.phases, 0, 1500);
+      bool run = ph < k.phases;
+      for (const Repro& rp : repro) {
+        if (ph == k.phases && rp.rpm == k.rpm && rp.b0 == k.b0 && rp.b1 == k.b1) {
+          p.seed = rp.seed;
+          o.t0 = o.t_end = rp.t0;
+          o.step_t = static_cast<double>(rp.t0);
+          o.total = rp.t0 + 1500;
+          run = true;
+        }
+      }
+      if (run) worstOf(worst, runSim(p, o, Ramp{k.rpm, k.rpm, k.b0, k.b1, 20.0f, 20.0f, o.t0, 0}));
+    }
+    msg("%.0f rpm askel %.0f -> %.0f kPa, xtalk 0,3: väärät %.0f, rpm max %.3f x, pisin väli %.2f jaksoa",
+        static_cast<double>(k.rpm), static_cast<double>(k.b0), static_cast<double>(k.b1),
+        static_cast<double>(worst.wrong), static_cast<double>(worst.rpm_ratio),
+        static_cast<double>(static_cast<float>(worst.max_gap) / periodMs(k.rpm)));
+    TEST_ASSERT_FALSE_MESSAGE(worst.dropped, "has_pulse putosi");
+    TEST_ASSERT_EQUAL_INT(0, worst.wrong);
+    TEST_ASSERT_LESS_THAN_FLOAT(1.2f, worst.rpm_ratio);
+    TEST_ASSERT_LESS_OR_EQUAL(static_cast<int>(3.1f * periodMs(k.rpm)), static_cast<int>(worst.max_gap));
+  }
+}
+
+void test_fast_vacuum_ramps_with_crosstalk() {
+  // Nopea kaasun liike (25 kPa 20-50 ms:ssa) ristivuodolla: sama vuotopulssin
+  // ja alipaineen muutoksen yhdistelmä kuin askeleessa, 16 kohdassa sykliä.
+  const long ramps[] = {20, 50};
+  for (long ramp : ramps) {
+    for (int dir = 0; dir < 2; ++dir) {
+      const float b0 = dir ? -30.0f : -55.0f;
+      const float b1 = dir ? -55.0f : -30.0f;
+      SimRun worst;
+      for (int ph = 0; ph < 16; ++ph) {
+        sbx::SimParams p;
+        p.base_kpa = b0;
+        p.xtalk = 0.3f;
+        p.seed = static_cast<uint32_t>(1 + ph % 2);
+        const SimOpts o = phased(850.0f, ph, 16, ramp, 1500);
+        worstOf(worst, runSim(p, o, Ramp{850.0f, 850.0f, b0, b1, 20.0f, 20.0f, o.t0, ramp}));
+      }
+      msg("ramppi %.0f -> %.0f kPa %.0f ms, xtalk 0,3: väärät %.0f, rpm max %.3f x, pisin väli %.2f jaksoa",
+          static_cast<double>(b0), static_cast<double>(b1), static_cast<double>(ramp),
+          static_cast<double>(worst.wrong), static_cast<double>(worst.rpm_ratio),
+          static_cast<double>(static_cast<float>(worst.max_gap) / periodMs(850.0f)));
+      TEST_ASSERT_FALSE_MESSAGE(worst.dropped, "has_pulse putosi");
+      TEST_ASSERT_EQUAL_INT(0, worst.wrong);
+      TEST_ASSERT_LESS_THAN_FLOAT(1.2f, worst.rpm_ratio);
+    }
+  }
+}
+
+void test_ownership_fallback_hoses_off() {
+  // Omistajuus vaatii, että jokin muu kanava kantaa tietoa. Letku irti (rivi
+  // 6): sen kanava on tasainen, mutta sylinterin vuoto näkyy yhä muilla
+  // kanavilla. Yksi letku irti: kaksi muuta vertaavat toisiaan (vuoto näkyy
+  // molemmissa yhtä suurena -> ei omaa). Kaksi irti: varatila, jossa rajapulssien
+  // on oltava samankokoiset ja jakson viitteen +-10 % sisällä. Kumpikaan ei
+  // saa kirjata väärää sykliä 18 kPa:n alipaineaskelissa (xtalk 0,3 ja 0,5);
+  // varatilassa myös 850 -> 2500 rpm:n blipissä (lukitus saa siinä katketa).
+  const int masks[] = {4, 6};  // kanava 3 irti; kanavat 2 ja 3 irti
+  for (int mask : masks) {
+    SimRun worst;
+    for (int dir = 0; dir < 4; ++dir) {
+      const float b0 = (dir & 1) ? -35.0f : -53.0f;
+      const float b1 = (dir & 1) ? -53.0f : -35.0f;
+      for (int ph = 0; ph < 8; ++ph) {
+        sbx::SimParams p;
+        p.base_kpa = b0;
+        p.xtalk = (dir & 2) ? 0.5f : 0.3f;
+        p.seed = static_cast<uint32_t>(1 + ph % 2);
+        SimOpts o = phased(850.0f, ph, 8, 0, 2000);
+        o.hose_mask = mask;
+        o.check_from = o.t0 + 1500;
+        worstOf(worst, runSim(p, o, Ramp{850.0f, 850.0f, b0, b1, 20.0f, 20.0f, o.t0, 0}));
+      }
+    }
+    msg("letkut irti (maski %.0f), askeleet: väärät %.0f, kanavan rpm %.2f %%, ka %.3f kPa, väli %.0f ms",
+        static_cast<double>(mask), static_cast<double>(worst.wrong), static_cast<double>(worst.ch_rpm_err * 100.0f),
+        static_cast<double>(worst.ch_mean_err), static_cast<double>(worst.max_gap));
+    TEST_ASSERT_FALSE_MESSAGE(worst.dropped, "has_pulse putosi");
+    TEST_ASSERT_EQUAL_INT(0, worst.wrong);
+    TEST_ASSERT_LESS_THAN_FLOAT(0.03f, worst.ch_rpm_err);
+    TEST_ASSERT_LESS_THAN_FLOAT(0.15f, worst.ch_mean_err);
+    TEST_ASSERT_LESS_OR_EQUAL(static_cast<int>(3.1f * periodMs(850.0f)), static_cast<int>(worst.max_gap));
+  }
+  // Yksi letku irti ja rpm-askel 3000 -> 850: kaksi muuta kanavaa vertaavat
+  // toisiaan. Sylinterin, jonka letku on irti, vuoto näkyy molemmissa yhtä
+  // suurena; ilman marginaalia (kOwnMargin) tasapeli tulkittiin omaksi
+  // pulssiksi, ja kanava menetti lukituksen.
+  SimRun one_off;
+  for (int ph = 0; ph < 6; ++ph) {
+    for (uint32_t seed = 1; seed <= 4; ++seed) {
+      sbx::SimParams p;
+      p.rpm = 3000.0f;
+      p.xtalk = 0.3f;
+      p.seed = seed;
+      SimOpts o = phased(3000.0f, ph, 6, 0, 2000);
+      o.hose_mask = 4;
+      worstOf(one_off, runSim(p, o, Ramp{3000.0f, 850.0f, -55.0f, -55.0f, 20.0f, 20.0f, o.t0, 0}));
+    }
+  }
+  msg("yksi letku irti, rpm-askel 3000 -> 850: väärät %.0f, pisin väli %.0f ms", static_cast<double>(one_off.wrong),
+      static_cast<double>(one_off.max_gap));
+  TEST_ASSERT_FALSE_MESSAGE(one_off.dropped, "has_pulse putosi");
+  TEST_ASSERT_EQUAL_INT(0, one_off.wrong);
+
+  // Varatilan blip: kaksi letkua irti.
+  SimRun blip;
+  for (int xi = 0; xi < 2; ++xi) {
+    for (int ph = 0; ph < 3; ++ph) {
+      sbx::SimParams p;
+      p.xtalk = xi ? 0.3f : 0.0f;
+      p.seed = static_cast<uint32_t>(1 + ph);
+      SimOpts o;
+      o.t0 = 2500 + 47 * ph;
+      o.t_end = o.t0 + 1300;
+      o.total = o.t_end + 2000;
+      o.hose_mask = 6;
+      o.check_from = o.t_end + 1500;
+      worstOf(blip, runSim(p, o, Blip{2500.0f, o.t0, 300}));
+    }
+  }
+  // Varatilan kaasun katkaisu 3000 -> 850 rpm, -15 -> -55 kPa 300 ms:ssa:
+  // pulssi kasvaa, ja uuden käynnin vuotopulssi on vanhan oman kokoinen vain,
+  // jos rajapulssien samankokoisuutta ei vaadita (tapaukset, joissa se
+  // hyväksyttiin). Yhdeltä kanavalta ei voi erottaa kaikkia: ks. dsp.h.
+  for (uint32_t seed = 1; seed <= 2; ++seed) {
+    for (long t0 = 2500; t0 <= 2506; t0 += 6) {
+      sbx::SimParams p;
+      p.rpm = 3000.0f;
+      p.base_kpa = -15.0f;
+      p.depth_kpa = 10.0f;
+      p.xtalk = 0.3f;
+      p.seed = seed;
+      SimOpts o;
+      o.t0 = t0;
+      o.t_end = t0 + 300;
+      o.total = o.t_end + 2500;
+      o.hose_mask = 6;
+      o.check_from = o.t_end + 2000;
+      worstOf(blip, runSim(p, o, Ramp{3000.0f, 850.0f, -15.0f, -55.0f, 10.0f, 20.0f, t0, 300}));
+    }
+  }
+  msg("varatila (kaksi letkua irti), blip ja kaasun katkaisu: väärät %.0f, rpm lopuksi %.2f %%",
+      static_cast<double>(blip.wrong), static_cast<double>(blip.ch_rpm_err * 100.0f));
+  TEST_ASSERT_EQUAL_INT(0, blip.wrong);
+  TEST_ASSERT_LESS_THAN_FLOAT(0.03f, blip.ch_rpm_err);
+  // Letku irrotetaan käynnin aikana: kanava kantaa tietoa vielä has_pulsen
+  // ajan, mutta sen omia pulsseja ei enää tule. Muut kanavat eivät saa
+  // pudottaa has_pulsea (rivi 6 vaatii, että ne pulssivat).
+  SimRun unplug;
+  for (int ph = 0; ph < 4; ++ph) {
+    sbx::SimParams p;
+    p.xtalk = 0.3f;
+    p.seed = static_cast<uint32_t>(1 + ph);
+    SimOpts o;
+    o.t0 = 2500 + 31 * ph;
+    o.t_end = o.t0;
+    o.total = o.t0 + 2500;
+    o.hose_mask = 4;
+    o.hose_t = o.t0;
+    worstOf(unplug, runSim(p, o, [](long, sbx::SimParams&) { return false; }));
+  }
+  msg("letku irrotetaan käynnin aikana: muiden pisin väli %.0f ms, väärät %.0f", static_cast<double>(unplug.max_gap),
+      static_cast<double>(unplug.wrong));
+  TEST_ASSERT_FALSE_MESSAGE(unplug.dropped, "has_pulse putosi muilta kanavilta");
+  TEST_ASSERT_EQUAL_INT(0, unplug.wrong);
+  TEST_ASSERT_LESS_OR_EQUAL(700, static_cast<int>(unplug.max_gap));
 }
 
 // --- pulssin katoaminen ------------------------------------------------------------
@@ -1775,8 +2204,12 @@ int main() {
   RUN_TEST(test_pulse_depth_changes_keep_lock);
   RUN_TEST(test_rpm_step_down_keeps_lock);
   RUN_TEST(test_rpm_ramp_and_throttle_chop);
+  RUN_TEST(test_rpm_drop_every_channel_recovers);
   RUN_TEST(test_throttle_blip_engine_sim);
   RUN_TEST(test_throttle_blip_tracks_rpm_and_vacuum);
+  RUN_TEST(test_vacuum_steps_with_crosstalk_engine_sim);
+  RUN_TEST(test_fast_vacuum_ramps_with_crosstalk);
+  RUN_TEST(test_ownership_fallback_hoses_off);
   RUN_TEST(test_pulse_timeout_when_signal_goes_flat);
   RUN_TEST(test_noise_and_resonance_alone_never_pulse);
   RUN_TEST(test_level_ema_tracks_step_with_tau);
