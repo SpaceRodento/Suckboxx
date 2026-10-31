@@ -432,10 +432,20 @@ class SimFitTest(unittest.TestCase):
             with self.subTest(f.name):
                 o = sim_fit.fit_recording(f)
                 self.assertTrue(o.get("truth"), "otsakkeesta puuttuu sim=")
+                # H1: leikkautuneesta signaalista absoluuttitaso ei ole havaittavissa
+                # (jatko.md Avoimet 4), joten D1:n raja koskee niillä vain kanavien
+                # eroja: leikkautuminen on sama kaikissa kanavissa (rauta.md §1.3).
+                # S2:n golden sim_return_wave_h1 (31.10.2026): harha -0,26...-0,29 kPa.
+                clipped = {f"taso{i + 1}" for i, ch in enumerate(o["channels"])
+                           if ch.get("h1", {}).get("verdict") == "leikkautuu"}
+                clip_diffs = []
                 seen = set()
                 for t in o["truth"]:
                     k = t["key"]
                     seen.add(k)
+                    if k in clipped:
+                        clip_diffs.append(t["diff"])
+                        continue
                     if k.startswith("taso"):
                         lim = 0.15                  # D1: kanavan keskiarvo
                     elif k.startswith("res_hz"):
@@ -446,6 +456,13 @@ class SimFitTest(unittest.TestCase):
                         lim = tol[k]
                     self.assertLessEqual(abs(t["diff"]), lim,
                                          f"{f.name} {k}: {t['est']:.4f} vs {t['true']:.4f}")
+                if clip_diffs:
+                    # D1/D2 erotuksena: yhteismuotoinen harha kumoutuu.
+                    self.assertLessEqual(max(clip_diffs) - min(clip_diffs), 0.15,
+                                         f"{f.name}: leikkautuneiden tasojen harha {clip_diffs}")
+                    # Leikkautuminen poistaa positiivisen huipun, joten taso arvioituu
+                    # alipaineisemmaksi, ei koskaan ylipaineisemmaksi (H1).
+                    self.assertLessEqual(max(clip_diffs), 0.0, f"{f.name}: {clip_diffs}")
                 self.assertTrue({"rpm", "depth", "noise", "taso1"} <= seen, seen)
 
     # --- lomake ja CLI --------------------------------------------------
