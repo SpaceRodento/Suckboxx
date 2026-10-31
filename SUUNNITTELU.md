@@ -12,6 +12,7 @@
 > | [docs/hankinnat.md](docs/hankinnat.md) | osaluettelo, tilauskoodit, mitä *ei* kannata ostaa |
 > | [docs/firmware.md](docs/firmware.md) | firmware-arkkitehtuuri, moduulit, rajapinnat, web-API |
 > | [docs/jatko.md](docs/jatko.md) | M1/M2:n tila ja avoimet katselmointihavainnot (jatko pöytäkoneella) |
+> | [docs/ideat.md](docs/ideat.md) | Aivoriihi: mihin laite voisi pystyä (ideat ryhmiteltynä, TOP 7, vaatimukset roadmapille) |
 > | [Suckboxx.md](Suckboxx.md) | lähtöaineisto: vapaamuotoinen spec + Geminin luonnos |
 > | [tools/](tools/) | mitoituslaskennat — kaikki luvut näissä dokumenteissa tulevat näistä |
 
