@@ -566,3 +566,72 @@ Sim-avaimet: `engine_on` (0/1), `rpm`, `jitter`, `drift`, `base`, `err1`, `err2`
   `ubuntu-26.04`, jossa on sama g++ 15.2 ja Python 3.14 kuin WSL:ssä, joten jokaisen
   run-askeleen voi toistaa sellaisenaan WSL:ssä. Python 3.10 vastaa Windowsin Pythonia,
   jolla oraakkelit ajetaan.
+
+### 6.1 Nauhoitusten toisto (WP-8)
+
+Raakanauhoitus (laitteen `GET /api/raw.csv` tai `tools/serial_record.py`) ajetaan PC:llä
+saman `Processor`-koodin läpi kuin laitteella, ja nauhoitus odotuksineen on
+regressiotesti (SUUNNITTELU.md §7 vaihe 4). Lukija, toisto, yhteenveto ja odotukset ovat
+`test/support/recording.h`:ssa, jota käyttävät sekä `test_replay` että `tools/replay`.
+
+```sh
+bash tools/replay/build.sh            # -> tools/replay/build/replay (WSL; MinGW-g++: SAN=0)
+R=tools/replay/build/replay
+$R ajo.csv                                       # yhteenveto
+$R ajo.csv --jsonl ajo.jsonl                     # tikkikohtainen aikasarja
+$R ajo.csv --set hyst_min_kpa=0.5 --set avg_cycles=16   # viritys (S5a, config.h:n avaimet)
+$R ajo.csv --no-cal                              # kalibroimattomana (D11: ei vihreää)
+$R ajo.csv --from lock                           # tilastot ensimmäisestä tuomiosta alkaen
+$R ajo.csv --expect ajo.expect                   # odotukset ilman testiajoa (koodi 1 = rikottu)
+$R --sim rpm=900 err2=2 noise=4 --seconds 8 --seed 2 --out x.csv   # EngineSimin nauhoitus
+```
+
+- **Muodot.** Sarakkeet tunnistetaan nimestä (`seq`, `ch1_mv`, `ch2_mv`, `ch3_mv`
+  pakollisia), joten `/api/raw.csv`, `serial_record.py`:n tiedosto (`%g`-luvut, CRLF) ja
+  laitteen raaka sarjavirta kelpaavat. Toisto käyttää vain mV:tä; kPa-sarakkeet ovat
+  laitteen laskemia. `# aborted=` lopettaa luvun (ehjä alkuosa toistetaan), ja viimeinen rivi
+  ilman rivinvaihtoa ohitetaan varoituksella. Rikkinäinen rivi, kasvamaton seq, yli 65535:n
+  seq-hyppy, `fs_hz` ≠ 1000 tai `format` ≠ 1 hylkää tiedoston.
+- **Konfiguraatio ja kalibrointi otsakkeesta.** `v_zero_mv`, `mv_per_kpa`, `rail_comp`,
+  `rail_nominal_mv` ja `source` → `Config` (`configSetText`); `offset_kpa`, `gain`,
+  `zero_valid` ja `gain_valid` → `Processor::restoreCalibration`. Se on vain
+  native-käännöksessä (`SUCKBOXX_NATIVE_TEST`), koska laitteen `setCalibration` mitätöi
+  nollauksen aina (D11). `--set` sovelletaan sen jälkeen `configure`lla, joten anturin
+  siirtofunktion tai lähteen muutos mitätöi nollauksen kuten laitteella. Otsake on
+  lataushetken tila: jos nollaus tehtiin kesken nauhoitetun ikkunan, alkuosa toistuu uudella
+  offsetilla. Kiskojännitettä ei tallenneta (`rail_mv` = 0, kuten protolevyllä).
+- **Ajoitus kuten `proc_task.cpp`.** Herätys 4 ms:n välein (`kProcPollMs`) vie kehykset,
+  joiden `seq - seq0` < T, ja tick kutsutaan, kun edellisestä on ≥ 50 ms (`last_tick = now`,
+  joten tikit tulevat 52 ms:n välein). Puuttuvaa seq:iä ei syötetä (DSP laskee aikaa
+  näytteinä), mutta kello etenee aukon yli. `now_s` on aika nauhoituksen alusta, ja toisto
+  alkaa kylmästä Processorista. `--poll-ms 1 --tick-ms 50` on `test_integration`in
+  Bench-ajoitus.
+- **JSONL** (`--jsonl`), rivi per tick: `t`, `state`, `rpm`, `rpm_cv` (null, kun arvio ei
+  ole voimassa), `spread`, `d` [3], `worst`, `flags` {`sat`, `uncal_zero`, `uncal_gain`,
+  `drift`}, `fault_ch`, `headline`, `advice`. Nimet ja kanavanumerot kuten snapshotissa (§5).
+- **Yhteenveto** (stdout): aika tiloittain, ensimmäinen lukitus (synced/near/out_of_sync),
+  rpm ka ± hajonta tikeistä, joilla arvio on voimassa, spreadin mediaani ja p95
+  tuomiotikeistä (`show_verdict`) sekä vikatilat kanavineen.
+- **`--sim`** (myös WP-12:n `tools/sim_fit.py`:n rajapinta): `/api/sim`-avaimet
+  (`sim_api.h`, §5) `key=value`-pareina `--sim`in jälkeen, `--seconds` (≤ 65,536 s,
+  16-bittinen seq-ikkuna), `--seed` (oletus 1), `--set` anturiparametreille. Tiedosto
+  kirjoitetaan `CsvWriter`illa tuoreesta EngineSimistä (seq alkaa nollasta), ja otsakkeen
+  loppuun lisätään `generator=`, `sim_seed=` ja `sim=` (GET `/api/sim` -JSON), jotta totuus
+  kulkee tiedostossa. Otsakkeen kalibrointi on offset 0 ja gain 1, `zero_valid=1`
+  (`--zero-valid 0`: kuin laite ilman nollausta) ja `gain_valid=0` (`--gain-valid 1`).
+  EngineSimissä ei ole anturivirheitä `/api/sim`-avaimilla, joten nollaus antaisi offsetin 0.
+  Sama komento ja kääntäjä tuottavat tavulleen saman tiedoston.
+- **Golden-vektorit:** `firmware/test/data/recordings/<nimi>.csv` + `<nimi>.expect`.
+  `test_replay` ajaa jokaisen parin, ja pari ilman toista kaataa testin. Uusi nauhoitus:
+  kopioi CSV (lyhyt pätkä riittää, aloita otsakkeesta), kirjoita `.expect` väitteineen ja
+  niiden päättäjineen, tarkista `replay x.csv --expect x.expect`. Koodia ei muuteta.
+  Muoto on `test/test_replay/test_main.cpp`:n otsakkeessa: `from_s` (s tai `lock`),
+  `final_state`, `allowed_states`, `never_states`, `lock_min_s`, `lock_max_s`, `rpm` +
+  `rpm_tol`, `spread_median_min`/`_max`, `spread_p95_max`, `worst_ch`, `fault_ch`,
+  `headline`, `advice_prefix`, `flags_never`, `flags_always`, `no_cal`, `set.<avain>`.
+  Tuntematon avain on virhe. Testi löytää kansion `__FILE__`:n tai työhakemiston kautta
+  (`run_native_tests.sh` ja `pio test -e native`); `SBX_RECORDINGS_DIR` ohittaa haun.
+- **Ero laitteeseen:** ESP32:n float-laskenta ja kirjastot (esim. `tanf`) voivat erota
+  PC:stä viimeisissä biteissä, joten odotukset ovat toleransseja eivätkä bittivertailuja.
+  Pitkän pysähdyksen (flash) aikana laitteen käsittelytaski seisoo myös ja tikkaa kerran
+  perään, toisto 52 ms:n välein. Offset tallentuu 4 ja gain 6 desimaalilla (< 1e-4 kPa).
