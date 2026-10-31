@@ -313,6 +313,12 @@ class Dsp {
   // pudotuksessa (yli 2,3 x) yksittäisen merkin paikka voi osua 2T-välissäkin
   // oikeaan kohtaan.
   static constexpr float kBothRatio = 1.4f;
+  // Yhden todistajan sykli: todistajan paikka nopeusmuutoksella korjattuna
+  // (ks. confirm) tämän sisällä.
+  static constexpr float kSlotTolSingle = 0.08f;
+  // Letku irti: kanava on ilmanpaineessa (yli -kVentKpa) ja yli kVentKpa
+  // muiden yläpuolella.
+  static constexpr float kVentKpa = 12.0f;
   // Näytön keskiarvo aloitetaan alusta, jos uusi jakso on yli 1,5 x (tai alle
   // kMinPeriodRatio x) näytettävien syklien keskijakso: kierrosluku muuttui
   // kerralla, eikä vanhan käynnin syklejä ole syytä näyttää vielä sekunnin ajan.
@@ -387,7 +393,13 @@ class Dsp {
     ++n_;
     for (int i = 0; i < kChannels; ++i) front(ch_[i], kpa[i], raw.mv[i]);
     for (int i = 0; i < kChannels; ++i) {
-      if (ch_[i].ready) detect(i);
+      Chan& c = ch_[i];
+      const float o = ch_[(i + 1) % kChannels].y > ch_[(i + 2) % kChannels].y ? ch_[(i + 1) % kChannels].y : ch_[(i + 2) % kChannels].y;
+      if (c.primed && c.y > -kVentKpa && c.y - o > kVentKpa) {
+        c.settle = static_cast<uint32_t>(kRing);
+        c.ready = false;
+      }
+      if (c.ready) detect(i);
     }
   }
 
@@ -697,6 +709,7 @@ class Dsp {
       c.own_d1 = c.own_d2 = 0.0f;
       c.chain = false;
       c.last_period = 0.0f;
+      if (!ch_[0].pub.has_pulse && !ch_[1].pub.has_pulse && !ch_[2].pub.has_pulse) order_ = 0;
     }
 
     c.x = x;
@@ -710,6 +723,7 @@ class Dsp {
       // tahansa vaiheeseen, mutta lukitus vaatii kolme samankokoista omaa pulssia.
       if (--c.settle == 0) c.armed = true;
       c.wait_rise = false;
+      c.chain = false;
       segReset(c.prev, c.y);
       segReset(c.cur, c.y);
       c.run_hi = c.run_lo = c.y;
@@ -965,9 +979,11 @@ class Dsp {
   // tunnetaan, jokaisen kanavan on osuttava juuri omaan paikkaansa - 2T-välissä
   // yksittäinen säilynyt merkki osuu toisen kanavan paikalle. Palauttaa
   // vahvistavien määrän tai -1; nl = elävät muut kanavat.
-  int confirm(int i, float a_new, float a_old, float period, int& nl) {
+  int confirm(int i, float a_new, float a_old, float period, int& nl, float& dev) {
     int np = 0, sum = 0;
     nl = 0;
+    dev = 0.0f;
+    const float lr = ch_[i].last_period > 0.0f ? period / ch_[i].last_period : 1.0f;
     for (int j = 0; j < kChannels; ++j) {
       if (j == i || !live(i, j)) continue;
       ++nl;
@@ -984,6 +1000,8 @@ class Dsp {
       if (n == 0) continue;
       const bool first = std::fabs(u - 1.0f / 3.0f) <= kSlotTol;
       if (n > 1 || !(first || std::fabs(u - 2.0f / 3.0f) <= kSlotTol)) return -1;
+      const float d = std::fabs(u - (first ? 1.0f / 3.0f : 2.0f / 3.0f) - (1.0f - lr) / 9.0f);
+      if (d > dev) dev = d;
       // Ääni +1: j seuraa i:tä (j = i + 1 mod 3) 1/3:n kohdalla.
       sum += (((j - i + kChannels) % kChannels == 1) == first) ? 1 : -1;
       ++np;
@@ -1006,7 +1024,8 @@ class Dsp {
     const bool three = similar(depth, c.own_d1) && similar(c.own_d1, c.own_d2) && similar(depth, c.own_d2);
     if (!c.pub.has_pulse && !three) return false;
     int nl = 0;
-    const int np = confirm(i, a_new, a_old, period, nl);
+    float dev = 0.0f;
+    const int np = confirm(i, a_new, a_old, period, nl, dev);
     if (np < 0) return false;
     if (nl == 0) {
       // Varatila: jakso edellisen oman välin (ja lukittuna viitteen) +-
@@ -1021,11 +1040,14 @@ class Dsp {
     // säilynyt merkki voi osua kiihdytyksen vinouttamana 0,1:n sisään;
     // kutistuva pulssi paljastaa tilanteen.
     if (np == 1 && c.pub.has_pulse && !similar(depth, c.own_d1)) return false;
+    const float since = static_cast<float>(c.since_cycle);
+    const bool slow = c.ref_period > 0.0f && period > kBothRatio * c.ref_period;
+    const bool susp = slow || (c.ref_period > 0.0f && since > kBothRatio * c.ref_period);
+    if (np == 1 && kBothRatio * period >= c.last_period && (slow || !susp) && dev > kSlotTolSingle) return false;
     // Pitkä sykli tai pitkä tauko edellisestä hyväksytystä (viite vanhentunut,
     // esim. kaikki kanavat ohittivat pulsseja kaasunlisäyksessä): kaikki
     // elävät todistajat.
-    const float since = static_cast<float>(c.since_cycle);
-    return np >= nl || !(c.ref_period > 0.0f && (period > since ? period : since) > kBothRatio * c.ref_period);
+    return np >= nl || !susp;
   }
 
   // Oma pulssi: sykli edellisestä omasta keskikohdasta tähän, kun accept

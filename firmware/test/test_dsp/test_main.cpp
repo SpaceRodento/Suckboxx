@@ -1021,26 +1021,30 @@ double markerDelay(long t_from, long t_to) {
 // Ajon viimeiset 150 ms jätetään pois: Dsp kirjaa syklin ~18 ms imun
 // keskikohdan jälkeen, mutta kaksosen kuoppa valmistuu vasta imun lopussa
 // (600 rpm: 25 ms), joten viimeisen imun totuus voi puuttua.
-Strict strictCheck(long t_from, long cal_from, long cal_to, long t_until, double step_t) {
+// swap_t >= 0: letkut 2 ja 3 vaihdettu tästä hetkestä (kanavat 1 <-> 2 eri
+// sylintereihin); vaihdon ylittävää sykliä ei tarkisteta (puolet kummastakin).
+Strict strictCheck(long t_from, long cal_from, long cal_to, long t_until, double step_t, double swap_t) {
   Strict s;
   const double delay = markerDelay(cal_from, cal_to);
   for (int i = 0; i < g_cycle_count; ++i) {
     const CycleRecord& rc = g_cycles[i];
     if (rc.t < t_from || rc.t > t_until) continue;
-    ++s.records;
     const double te = static_cast<double>(rc.end_int) + static_cast<double>(rc.end_frac) - 1.0 - delay;
     const double ts = te - static_cast<double>(rc.period);
+    if (swap_t >= 0.0 && ts < swap_t && te >= swap_t) continue;
+    const int cyl = swap_t >= 0.0 && ts >= swap_t && rc.ch > 0 ? 3 - rc.ch : rc.ch;
+    ++s.records;
     int ce = -1, ke = -1, cs = -1, ks = -1;
     g_truth.nearest(te, ce, ke);
     g_truth.nearest(ts, cs, ks);
-    if (ce != rc.ch || cs != rc.ch || ke - ks != 1) {
+    if (ce != cyl || cs != cyl || ke - ks != 1) {
       ++s.wrong;
       continue;
     }
-    const double pm = g_truth.mid[rc.ch][ke] - g_truth.mid[rc.ch][ks];
+    const double pm = g_truth.mid[cyl][ke] - g_truth.mid[cyl][ks];
     const double e = std::fabs(static_cast<double>(rc.period) - pm) / pm;
-    const double end_e = 2.0 * g_truth.mid[rc.ch][ke] - g_truth.start[rc.ch][ke];  // imun loppu
-    const bool straddle = step_t >= 0.0 && step_t >= g_truth.start[rc.ch][ks] - 2.0 && step_t <= end_e + 2.0;
+    const double end_e = 2.0 * g_truth.mid[cyl][ke] - g_truth.start[cyl][ke];  // imun loppu
+    const bool straddle = step_t >= 0.0 && step_t >= g_truth.start[cyl][ks] - 2.0 && step_t <= end_e + 2.0;
     if (straddle) {
       if (e > s.worst_straddle) s.worst_straddle = e;
     } else if (e > s.worst) {
@@ -1067,6 +1071,8 @@ struct SimRun {
   float ch_rpm_err = 0.0f;     // jokaisen kanavan rpm vs toteutunut 8, t >= check_from
   float ch_mean_err = 0.0f;    // jokaisen kanavan mean_kpa vs totuus, t >= check_from
   float rpm_ratio = 0.0f;      // suurin kanavan rpm / nimellis-rpm (t >= 2000)
+  float p2p_lo = 1.0e9f;       // pienin ja suurin kanavan p2p_kpa hetkellä p2p_at
+  float p2p_hi = -1.0e9f;
 };
 
 struct SimOpts {
@@ -1085,6 +1091,8 @@ struct SimOpts {
   long est_from = -1;       // RpmEstimate vs nimellis tästä hetkestä (-1 = ei)
   long est_at = -1;         // RpmEstimate vs nimellis juuri tällä hetkellä (-1 = ei)
   bool first_disp = false;  // kanavan ensimmäinen uuden käynnin näyttöarvo (t0:n jälkeen)
+  long swap_t = -1;         // letkut 2 ja 3 vaihdetaan tällä hetkellä (kanavat 1 <-> 2, -1 = ei)
+  long p2p_at = -1;         // kanavien p2p_kpa talteen tällä hetkellä (-1 = ei)
 };
 
 bool finiteState(const ChannelState& s) {
@@ -1167,6 +1175,11 @@ SimRun runSim(sbx::SimParams p, const SimOpts& o, F sched) {
         f.mv[c] = static_cast<uint16_t>(mv < 0.0 ? 0.0 : (mv > 3300.0 ? 3300.0 : mv + 0.5));
       }
     }
+    if (o.swap_t >= 0 && t >= o.swap_t) {
+      const uint16_t m = f.mv[1];
+      f.mv[1] = f.mv[2];
+      f.mv[2] = m;
+    }
     float kpa[kChannels];
     for (int c = 0; c < kChannels; ++c) kpa[c] = (static_cast<float>(f.mv[c]) - sp.v_zero_mv) / sp.mv_per_kpa;
     g_capture_t = t;
@@ -1188,6 +1201,14 @@ SimRun runSim(sbx::SimParams p, const SimOpts& o, F sched) {
       if (e > r.est_err) r.est_err = e;
     }
     if (t == o.est_at) r.est_at_err = std::fabs(est.rpm - p.rpm) / p.rpm;
+    if (t == o.p2p_at) {
+      for (int c = 0; c < kChannels; ++c) {
+        if (skip & (1 << c)) continue;
+        const float v = dsp.channel(c).p2p_kpa;
+        if (v < r.p2p_lo) r.p2p_lo = v;
+        if (v > r.p2p_hi) r.p2p_hi = v;
+      }
+    }
     if (o.first_disp && t > o.t0) {
       for (int c = 0; c < kChannels; ++c) {
         const float cr = dsp.channel(c).rpm;
@@ -1250,7 +1271,7 @@ SimRun runSim(sbx::SimParams p, const SimOpts& o, F sched) {
   // jälkeen kirjatuista sykleistä (kaikki kirjatut tarkistetaan silti).
   const long cal_from = o.off_t1 >= 0 && o.off_t1 < o.watch_from ? o.off_t2 + 600 : o.watch_from;
   const long cal_to = o.off_t1 >= 0 && o.off_t1 < o.watch_from ? o.off_t2 + 2000 : o.t0;
-  const Strict st = strictCheck(o.watch_from, cal_from, cal_to, o.total - 150, o.step_t);
+  const Strict st = strictCheck(o.watch_from, cal_from, cal_to, o.total - 150, o.step_t, static_cast<double>(o.swap_t));
   r.wrong = st.wrong;
   r.worst_cycle = st.worst;
   r.worst_straddle = st.worst_straddle;
@@ -1283,6 +1304,8 @@ void worstOf(SimRun& w, const SimRun& r) {
   if (r.ch_rpm_err > w.ch_rpm_err) w.ch_rpm_err = r.ch_rpm_err;
   if (r.ch_mean_err > w.ch_mean_err) w.ch_mean_err = r.ch_mean_err;
   if (r.rpm_ratio > w.rpm_ratio) w.rpm_ratio = r.rpm_ratio;
+  if (r.p2p_lo < w.p2p_lo) w.p2p_lo = r.p2p_lo;
+  if (r.p2p_hi > w.p2p_hi) w.p2p_hi = r.p2p_hi;
 }
 
 // Lineaarinen muutos (r0, b0, d0) -> (r1, b1, d1) hetkestä t0 ramp ms:ssa
@@ -1318,27 +1341,30 @@ struct Blip {
   }
 };
 
-// Pikablipit: reps kertaa 850 -> rpm1 (rise ms), pito hold, paluu fall,
-// alipaine -55 -> -25 kPa ja syvyys 20 -> 12 samassa tahdissa.
+// Pikablipit: reps kertaa idle -> rpm1 (rise ms), pito hold, paluu fall ja
+// tauko gap, alipaine -55 -> -25 kPa ja syvyys 20 -> d1 samassa tahdissa.
 struct Blips {
   float rpm1;
   long t0, rise, hold, fall;
   int reps;
+  float idle = 850.0f;
+  float d1 = 12.0f;
+  long gap = 0;
   bool operator()(long t, sbx::SimParams& p) const {
-    const long len = rise + hold + fall;
-    if (t < t0 || t > t0 + reps * len) return false;
+    const long len = rise + hold + fall + gap;
+    if (t < t0 || t > t0 + reps * len - gap) return false;
     const long u = (t - t0) % len;
     float a = 1.0f;
-    if (t == t0 + reps * len) {
+    if (t == t0 + reps * len - gap || u >= rise + hold + fall) {
       a = 0.0f;
     } else if (u <= rise) {
       a = static_cast<float>(u) / static_cast<float>(rise);
     } else if (u > rise + hold) {
       a = 1.0f - static_cast<float>(u - rise - hold) / static_cast<float>(fall);
     }
-    p.rpm = 850.0f + (rpm1 - 850.0f) * a;
+    p.rpm = idle + (rpm1 - idle) * a;
     p.base_kpa = -55.0f + 30.0f * a;
-    p.depth_kpa = 20.0f - 8.0f * a;
+    p.depth_kpa = 20.0f + (d1 - 20.0f) * a;
     return true;
   }
 };
@@ -1692,22 +1718,35 @@ void test_ownership_fallback_hoses_off() {
   TEST_ASSERT_FALSE_MESSAGE(one_off.dropped, "has_pulse putosi");
   TEST_ASSERT_EQUAL_INT(0, one_off.wrong);
 
-  // Varatilan blip: kaksi letkua irti.
+  // Varatilan blip: kaksi letkua irti. Lukitus saa blipissä katketa, mutta
+  // RpmEstimaten on oltava oikein 1 s blipin jälkeen. has_pulsen
+  // aikakatkaisu tyhjentää omien pulssien historian; muuten haku jatkoi
+  // aikakatkaisua edeltävistä pulsseista, lukittui kesken hidastuvan blipin
+  // (viite 76 ms), eikä varatilan +-kFallbackWindow seurannut loppua: has_pulse
+  // putosi uudelleen ja RpmEstimate oli 1 s blipin jälkeen 0 (viimeiset
+  // kaksi ajoa, xtalk 0,3).
   SimRun blip;
-  for (int xi = 0; xi < 2; ++xi) {
-    for (int ph = 0; ph < 3; ++ph) {
+  float blip_est = 0.0f;
+  for (int run = 0; run < 8; ++run) {
+    {
+      const int ph = run % 3;
       sbx::SimParams p;
-      p.xtalk = xi ? 0.3f : 0.0f;
-      p.seed = static_cast<uint32_t>(1 + ph);
+      p.xtalk = run >= 3 ? 0.3f : 0.0f;
+      p.seed = static_cast<uint32_t>(run < 6 ? 1 + ph : 2);
       SimOpts o;
-      o.t0 = 2500 + 47 * ph;
+      o.t0 = run < 6 ? 2500 + 47 * ph : (run == 6 ? 2594 : 2735);
       o.t_end = o.t0 + 1300;
       o.total = o.t_end + 2000;
       o.hose_mask = 6;
       o.check_from = o.t_end + 1500;
-      worstOf(blip, runSim(p, o, Blip{2500.0f, o.t0, 300}));
+      o.est_at = o.t_end + 1000;
+      const SimRun r = runSim(p, o, Blip{2500.0f, o.t0, 300});
+      worstOf(blip, r);
+      if (r.est_at_err > blip_est) blip_est = r.est_at_err;
     }
   }
+  msg("varatilan blip: RpmEstimate 1 s blipin jälkeen %.2f %%", static_cast<double>(blip_est * 100.0f));
+  TEST_ASSERT_LESS_THAN_FLOAT(0.03f, blip_est);
   // Varatilan kaasun katkaisu 3000 -> 850 rpm, -15 -> -55 kPa 300 ms:ssa:
   // pulssi kasvaa, ja uuden käynnin vuotopulssi on vanhan oman kokoinen vain,
   // jos rajapulssien samankokoisuutta ei vaadita (tapaukset, joissa se
@@ -1822,7 +1861,11 @@ void test_engine_start_and_restart_never_lock_on_leaks() {
                         // Lyhyt pysähdys (600 ms < pulse_timeout_s): has_pulse ei putoa
                         // eikä historia tyhjene; kaikki vaikenivat, joten kaikki vertaavat
                         // yhä toisiinsa, eikä käynnistysaskel ole kenenkään oma pulssi.
-                        {600.0f, 0.0f, 1.0f, true, 600, 5, 2621}};
+                        {600.0f, 0.0f, 1.0f, true, 600, 5, 2621},
+                        // 3000 rpm xtalk 0,5 (D: <= 3,5 jaksoa + 40 ms = 180 ms): lukitus
+                        // vaatii elävät todistajat, joilla ei vielä ole has_pulsea - jos
+                        // liveys vaatisi lukituksen, siemen 1 lukittuisi 221 ms:ssa.
+                        {3000.0f, 0.5f, 1.0f, false, 0, 0, 0}};
   for (const Case& k : cases) {
     SimRun worst;
     for (int run = 0; run < 6; ++run) {
@@ -1890,26 +1933,34 @@ void test_dead_channel_during_blip() {
   // kanavan nousu (letku irti -> ilmanpaine) ole pudotus. Raja: B:n raja +
   // 150 ms (xtalk 0,5: 450 + 150).
   struct Case {
-    int mode;     // 0 = anturi alas 400 ms, 1 = letku irti koko ajan, 2 = letku irrotetaan
+    int mode;     // 0 = anturi alas (dur ms), 1 = letku irti koko ajan, 2 = letku irrotetaan
     float rpm1, xt;
     long rise;
     long pull;    // tila 0/2: vian alku lisäyksen alusta (ms)
     int rep[4][2];  // toistetapaukset (siemen, vaihe /12), siemen 0 = ei
+    long dur;     // tila 0: anturivian kesto
+    int lim;      // terveiden välin raja (ms), 0 = B:n raja + 150 ms
   };
   const Case cases[] = {
-      {0, 3000.0f, 0.0f, 150, 0, {{0, 0}}},
+      {0, 3000.0f, 0.0f, 150, 0, {{0, 0}}, 400, 0},
+      // Liveyttä ja asettumista mittaavat tapaukset (mitattu 412 ja 273 ms):
+      // asettumaton kanava syvyysviitteenä (peerDepth) nosti ensimmäisen 533
+      // ms:iin, 8 näytteen asettuminen anturivian jälkeen jälkimmäisen 328
+      // ms:iin (palautumisen ylitys näytti pudotukselta).
+      {0, 3000.0f, 0.5f, 150, 0, {{0, 0}}, 400, 470},
+      {0, 2500.0f, 0.0f, 300, 100, {{0, 0}}, 100, 300},
       // 482 ms, kun asettumaton (vikaantunut) kanava oli vertailukanava:
-      {0, 3000.0f, 0.3f, 300, 0, {{3, 8}, {0, 0}}},
-      {0, 2000.0f, 0.0f, 300, 0, {{0, 0}}},
-      {1, 2500.0f, 0.3f, 150, 0, {{0, 0}}},
-      {1, 3000.0f, 0.5f, 150, 0, {{0, 0}}},
-      {1, 2500.0f, 0.5f, 150, 0, {{0, 0}}},
+      {0, 3000.0f, 0.3f, 300, 0, {{3, 8}, {0, 0}}, 400, 0},
+      {0, 2000.0f, 0.0f, 300, 0, {{0, 0}}, 400, 0},
+      {1, 2500.0f, 0.3f, 150, 0, {{0, 0}}, 0, 0},
+      {1, 3000.0f, 0.5f, 150, 0, {{0, 0}}, 0, 0},
+      {1, 2500.0f, 0.5f, 150, 0, {{0, 0}}, 0, 0},
       // 4T ennen tauko-ehtoa ja 805 ms:n väli, kun irrotettu letku todisti
       // pisimmän jakson ajan:
-      {2, 3000.0f, 0.5f, 150, 0, {{5, 1}, {6, 6}, {6, 4}, {7, 8}}},
+      {2, 3000.0f, 0.5f, 150, 0, {{5, 1}, {6, 6}, {6, 4}, {7, 8}}, 0, 0},
       // 502-634 ms, kun pudotus mitattiin keskikohdan yli (letkun nousu) tai
       // irrotettu letku todisti pisimmän jakson ajan:
-      {2, 3000.0f, 0.3f, 300, 150, {{8, 1}, {1, 7}, {0, 0}}},
+      {2, 3000.0f, 0.3f, 300, 150, {{8, 1}, {1, 7}, {0, 0}}, 0, 0},
   };
   for (const Case& k : cases) {
     SimRun worst;
@@ -1926,14 +1977,14 @@ void test_dead_channel_during_blip() {
       if (k.mode == 0) {
         o.sens_ch = static_cast<int>(p.seed) % 3;
         o.sens_t1 = o.t0 + k.pull;
-        o.sens_t2 = o.sens_t1 + 400;
+        o.sens_t2 = o.sens_t1 + k.dur;
       } else {
         o.hose_mask = 1 << (static_cast<int>(p.seed) % 3);
         o.hose_t = k.mode == 2 ? o.t0 + k.pull : 0;
       }
       worstOf(worst, runSim(p, o, Blip{k.rpm1, o.t0, k.rise}));
     }
-    const char* fmt[3] = {"anturi alas 400 ms, blip 850 -> %.0f rpm nousu %.0f ms, xtalk %.1f: väärät %.0f, väli %.0f ms",
+    const char* fmt[3] = {"anturi alas, blip 850 -> %.0f rpm nousu %.0f ms, xtalk %.1f: väärät %.0f, väli %.0f ms",
                           "letku irti alusta, blip 850 -> %.0f rpm nousu %.0f ms, xtalk %.1f: väärät %.0f, väli %.0f ms",
                           "letku irti lisäyksessä, blip 850 -> %.0f rpm nousu %.0f ms, xtalk %.1f: väärät %.0f, väli %.0f ms"};
     msg(fmt[k.mode], static_cast<double>(k.rpm1), static_cast<double>(k.rise), static_cast<double>(k.xt),
@@ -1942,18 +1993,239 @@ void test_dead_channel_during_blip() {
     TEST_ASSERT_TRUE(worst.finite);
     TEST_ASSERT_FALSE_MESSAGE(worst.dropped, "has_pulse putosi elävältä kanavalta");
     if (k.mode != 1) {
-      const int lim = (k.rise >= 300 ? 300 : (k.xt > 0.4f ? 450 : 400)) + 150;
+      const int lim = k.lim > 0 ? k.lim : (k.rise >= 300 ? 300 : (k.xt > 0.4f ? 450 : 400)) + 150;
       TEST_ASSERT_LESS_OR_EQUAL(lim, static_cast<int>(worst.max_gap));
     }
   }
+}
+
+void test_reconnected_hose_is_not_a_witness() {
+  // Letku irti 50-400 ms ja takaisin (F1). Irrotettu kanava on ilmanpaineessa,
+  // ja takaisin kytkettäessä sen signaali putoaa koko alipaineen verran
+  // (joutokäynnillä 55 kPa, blipin huipulla 25 kPa). 5a45dc7 piti tätä
+  // tasoaskelta omana pulssina: kanava kirjasi vuotosyklin ja todisti terveen
+  // kanavan 2T-välin (tarkistajan toistot alla). Nyt kanava tunnistetaan
+  // irrotetuksi tasostaan (ilmanpaineessa ja muiden yläpuolella) ja asettuu
+  // takaisin kytkettäessä kuten anturivian jälkeen: askel ei ole oma pulssi
+  // eikä todistaja. Väärää sykliä ei saa kirjata millään kanavalla (myöskään
+  // takaisin kytketyllä); terveiden väli <= B:n raja + 150 ms.
+  struct Case {
+    float idle, rpm1;
+    int reps;      // 0 = Blip (pito 300, paluu 700), muuten pikablipit 150/0/300
+    float xt;
+    uint32_t seed;
+    long t0, off, dur;  // letku irti [t0 + off, t0 + off + dur)
+    int ch;
+  };
+  const Case cases[] = {
+      {950.0f, 2500.0f, 2, 0.0f, 1, 2523, 120, 400, 0},  // toisto 1: 2T kanavalla 2 (t0 + 617)
+      {850.0f, 3000.0f, 0, 0.0f, 3, 2571, -60, 50, 0},   // toisto 2: vuotosykli ja 2T
+      {850.0f, 3000.0f, 1, 0.0f, 1, 2512, -60, 50, 0},   {850.0f, 3000.0f, 1, 0.5f, 2, 2547, 120, 150, 2},
+      {950.0f, 2500.0f, 2, 0.3f, 3, 2531, -60, 50, 0},   {950.0f, 2500.0f, 2, 0.5f, 4, 2562, -60, 50, 1},
+      {850.0f, 3000.0f, 1, 0.3f, 5, 2539, 0, 400, 1},    {950.0f, 3000.0f, 0, 0.3f, 6, 2519, -60, 50, 2},
+  };
+  SimRun worst, worst5;
+  for (const Case& k : cases) {
+    sbx::SimParams p;
+    p.rpm = k.idle;
+    p.xtalk = k.xt;
+    p.seed = k.seed;
+    SimOpts o;
+    o.t0 = k.t0;
+    o.t_end = o.t0 + (k.reps == 0 ? 1150 : 450 * k.reps);
+    o.total = o.t_end + 1500;
+    o.hose_mask = 1 << k.ch;
+    o.hose_t = o.t0 + k.off;
+    o.hose_t2 = o.hose_t + k.dur;
+    const SimRun r = k.reps == 0 ? runSim(p, o, Blip{k.rpm1, o.t0, 150})
+                                 : runSim(p, o, Blips{k.rpm1, o.t0, 150, 0, 300, k.reps, k.idle});
+    worstOf(k.xt > 0.4f ? worst5 : worst, r);
+  }
+  msg("letku irti 50-400 ms blipin ympärillä: väärät %.0f, terveiden väli %.0f ms (xtalk 0,5: väärät %.0f, väli %.0f ms)",
+      static_cast<double>(worst.wrong), static_cast<double>(worst.max_gap), static_cast<double>(worst5.wrong),
+      static_cast<double>(worst5.max_gap));
+  TEST_ASSERT_EQUAL_INT(0, worst.wrong + worst5.wrong);
+  TEST_ASSERT_TRUE(worst.finite && worst5.finite);
+  TEST_ASSERT_FALSE_MESSAGE(worst.dropped || worst5.dropped, "has_pulse putosi terveeltä kanavalta");
+  TEST_ASSERT_LESS_OR_EQUAL(450 + 150, static_cast<int>(worst.max_gap));
+  TEST_ASSERT_LESS_OR_EQUAL(750 + 150, static_cast<int>(worst5.max_gap));
+}
+
+void test_single_witness_needs_rhythm() {
+  // Yksi todistaja (F2): toinen kanava kuollut (letku irti) tai vaiennut
+  // (heikko sylinteri, ohitettu pulssi). nT-välissä todistajan paikat
+  // (k + 1/3) / n ja (k + 2/3) / n osuvat 1/3:n tai 2/3:n lähelle (4T
+  // täsmälleen), joten yksi paikallaan oleva merkki ei riitä. Kierrosnopeuden
+  // muutos siirtää todistajan paikkaa ennustettavasti: hidastuessa kampi
+  // kulkee syklin alun nopeammin, joten paikka aikaistuu (1 - jakso /
+  // edellinen) / 9. Yhden todistajan syklissä paikan on osuttava tähän
+  // korjattuun kohtaan 0,08:n sisään. Toistot (5a45dc7 kirjasi 2T-5T:n):
+  //  - letku irti, pikablip 850 -> 3000, xtalk 0,5: 5T-6T (262-338 ms);
+  //  - heikko sylinteri 0,5 x, pikablip 850 -> 2000: 2T kanavalla 1, todistaja
+  //    u = 0,234 (kiihdytys siirsi 1/6:n 1/3:n toleranssiin);
+  //  - jitter 3 %, pikablip 850 -> 2500 (syvyys 20), xtalk 0,3: sama 2T.
+  // Tarkistus ei koske sykliä, joka on pitkä vain tauon vuoksi (jakso
+  // tavallinen, edellinen hylätty): siinä nopeuden muutos edellisestä omasta
+  // välistä ei kerro todistajan paikkaa, ja xtalk 0,5:n tuplablipissä (letku
+  // irti) has_pulse putosi (viimeinen tapaus: 1,3 s:n väli).
+  struct Case {
+    float rpm1, xt, jitter, d1;
+    uint32_t seed;
+    long t0;
+    int reps, hose_ch, weak_ch;
+    float idle;
+    long gap;
+  };
+  const Case cases[] = {
+      {3000.0f, 0.5f, 0.01f, 12.0f, 8, 2583, 1, 2, -1, 850.0f, 0},
+      {3000.0f, 0.5f, 0.01f, 12.0f, 8, 2630, 1, 0, -1, 850.0f, 0},
+      {3000.0f, 0.5f, 0.01f, 12.0f, 5, 2558, 1, 1, -1, 850.0f, 0},
+      {2000.0f, 0.0f, 0.01f, 12.0f, 1, 2537, 1, -1, 2, 850.0f, 0},
+      {2000.0f, 0.3f, 0.01f, 12.0f, 1, 2537, 2, -1, 2, 850.0f, 0},
+      {2500.0f, 0.3f, 0.03f, 20.0f, 6, 2561, 1, -1, -1, 850.0f, 0},
+      {2500.0f, 0.3f, 0.03f, 20.0f, 6, 2561, 2, -1, -1, 850.0f, 0},
+      {3000.0f, 0.5f, 0.01f, 12.0f, 1, 2512, 2, 2, -1, 950.0f, 100},
+  };
+  SimRun worst;
+  for (const Case& k : cases) {
+    sbx::SimParams p;
+    p.xtalk = k.xt;
+    p.rpm_jitter = k.jitter;
+    p.seed = k.seed;
+    SimOpts o;
+    o.t0 = k.t0;
+    p.rpm = k.idle;
+    o.t_end = o.t0 + (450 + k.gap) * k.reps - k.gap;
+    o.total = o.t_end + 1500;
+    if (k.hose_ch >= 0) o.hose_mask = 1 << k.hose_ch;
+    if (k.weak_ch >= 0) {
+      o.weak_ch = k.weak_ch;
+      o.weak_scale = 0.5f;
+    }
+    const long hold = k.gap > 0 ? 1 : 0;  // tarkistajan tuplablippi: 150/1/299, tauko 100
+    worstOf(worst, runSim(p, o, Blips{k.rpm1, o.t0, 150, hold, 300 - hold, k.reps, k.idle, k.d1, k.gap}));
+  }
+  msg("yksi todistaja pikablipeissä (letku irti, heikko sylinteri, jitter 3 %%): väärät %.0f, terveiden väli %.0f ms",
+      static_cast<double>(worst.wrong), static_cast<double>(worst.max_gap));
+  TEST_ASSERT_EQUAL_INT(0, worst.wrong);
+  TEST_ASSERT_TRUE(worst.finite);
+  TEST_ASSERT_FALSE_MESSAGE(worst.dropped, "has_pulse putosi terveeltä kanavalta");
+}
+
+void test_hose_swap_relearns_firing_order() {
+  // Sytytysjärjestys ja letkujen kytkentä opitaan äänestämällä (order_,
+  // kyllästys kOrderMax). Letkut 2 ja 3 vaihdetaan (F3):
+  //  - käynnin aikana: väärä järjestys hylkää syklit, kunnes äänet kääntyvät
+  //    (~1,5 sykliä); ilman kyllästystä kääntyminen kesti sekunteja ja
+  //    has_pulse putosi (850 rpm: 3 s:n väli);
+  //  - pysähdyksen aikana: kun yhdelläkään kanavalla ei ole has_pulsea,
+  //    opittu järjestys unohdetaan, joten uusi käynti lukittuu D:n rajassa
+  //    (ilman nollausta 850 rpm: 613 ms, 600 rpm: 856 ms).
+  //    Vaihdon ylittävää sykliä ei tarkisteta (puolet kummastakin kytkennästä).
+  SimRun run, restart;
+  for (int i = 0; i < 8; ++i) {
+    const float rpm = i < 4 ? 850.0f : 600.0f;
+    const long T = static_cast<long>(periodMs(rpm));
+    sbx::SimParams p;
+    p.rpm = rpm;
+    p.xtalk = (i & 1) ? 0.5f : 0.0f;
+    p.seed = static_cast<uint32_t>(1 + i);
+    SimOpts o;
+    o.t0 = 3000 + T * (i % 4) / 4;
+    o.t_end = o.t0;
+    o.total = o.t0 + 2500;
+    o.swap_t = o.t0;
+    const SimRun a = runSim(p, o, [](long, sbx::SimParams&) { return false; });
+    worstOf(run, a);
+    TEST_ASSERT_LESS_OR_EQUAL(static_cast<int>(4.0f * periodMs(rpm)), static_cast<int>(a.max_gap));
+    SimOpts q;
+    q.off_t1 = 2400 + T * (i % 4) / 4;
+    q.off_t2 = q.off_t1 + 1300;
+    q.swap_t = q.off_t1 + 600;
+    q.watch_from = q.off_t1 + 200;
+    q.t0 = q.t_end = q.off_t2;
+    q.total = q.off_t2 + 2000;
+    const SimRun r = runSim(p, q, [](long, sbx::SimParams&) { return false; });
+    worstOf(restart, r);
+    TEST_ASSERT_LESS_OR_EQUAL(static_cast<int>(3.5f * periodMs(rpm)) + 40, static_cast<int>(r.lock_ms));
+  }
+  msg("letkujen vaihto käynnissä: väärät %.0f, pisin väli %.0f ms; pysähdyksessä: väärät %.0f, lukitus %.0f ms",
+      static_cast<double>(run.wrong), static_cast<double>(run.max_gap), static_cast<double>(restart.wrong),
+      static_cast<double>(restart.lock_ms));
+  TEST_ASSERT_EQUAL_INT(0, run.wrong);
+  TEST_ASSERT_EQUAL_INT(0, restart.wrong);
+  TEST_ASSERT_FALSE_MESSAGE(run.dropped, "has_pulse putosi letkujen vaihdossa");
+  TEST_ASSERT_GREATER_OR_EQUAL(0, restart.lock_ms);
+}
+
+void test_short_fault_does_not_bias_channel_mean() {
+  // Lyhyt anturivika (mV alueen ulkopuolella) tai letku irti 40 ms kahden
+  // oman pulssin välissä: kanava asettuu uudelleen kuten käynnistyksessä,
+  // myös D1-integraalin ketju katkeaa. Muuten vian ylittävä sykli (ei
+  // ohitettua pulssia, todistajat paikoillaan) hyväksyttiin, ja sen
+  // integraaliin tuli 40 ms -108 kPa:ta tai ilmanpainetta: kanavan näyttö oli
+  // 8 syklin ajan ~2 kPa pielessä (status: väärä synkronointituomio).
+  float worst = 0.0f;
+  for (int kind = 0; kind < 2; ++kind) {
+    for (int ph = 0; ph < 6; ++ph) {
+      SynthParams p = idleParams();
+      g_rig.begin(p);
+      g_rig.run(2.5f);
+      const long t1 = 2500 + static_cast<long>(periodMs(850.0f) * static_cast<float>(ph) / 6.0f);
+      const float truth = p.base_kpa + p.sync_err_kpa[1];
+      for (long t = 2500; t < 5500; ++t) {
+        const bool f = t >= t1 && t < t1 + 40;
+        if (kind == 1 && (t == t1 || t == t1 + 40)) {
+          p.hose_off[1] = f;
+          g_rig.syn.setParams(p);
+        }
+        g_rig.syn.next(g_rig.kpa, g_rig.raw);
+        if (kind == 0 && f) {
+          g_rig.raw.mv[1] = 0;
+          g_rig.kpa[1] = -p.v_zero_mv / p.mv_per_kpa;
+        }
+        g_rig.dsp.push(g_rig.kpa, g_rig.raw);
+        const ChannelState& c = g_rig.dsp.channel(1);
+        if (t > t1 && c.has_pulse && std::fabs(c.mean_kpa - truth) > worst) worst = std::fabs(c.mean_kpa - truth);
+      }
+    }
+  }
+  msg("anturivika tai letku irti 40 ms: vikaantuneen kanavan näytön suurin virhe %.2f kPa", static_cast<double>(worst));
+  TEST_ASSERT_LESS_THAN_FLOAT(0.3f, worst);
 }
 
 void test_hose_pulled_at_vacuum_step() {
   // Letku irti 400 ms alipaineen askeleen (13 kPa ylös, 600 rpm) kohdalla:
   // askel maksaa pulssin, ja takaisin kytketyn letkun 55 kPa:n lasku osui
   // seuraavan oman pulssin ikkunaan ja esti sen. Kaksi peräkkäistä menetettyä
-  // pulssia pudotti terveen kanavan has_pulsen (1,4 s:n väli). Vaiennut
-  // kanava ei ole vertailukanava, joten väli on askeleen oma (<= 4 jaksoa).
+  // pulssia pudotti terveen kanavan has_pulsen (1,4 s:n väli). Irrotettu
+  // kanava on heti kuollut (ilmanpaineessa) ja asettuu takaisin kytkettäessä,
+  // joten väli on askeleen oma (<= 4,1 jaksoa).
+  // 850 rpm, -55 -> -47 kPa, letku 3 irti 150 ms askeleesta + 120 ms
+  // (tarkistajan toisto): 5a45dc7 piti irrotettua kanavaa elävänä, koska
+  // terveen kanavan oma historia oli askeleen jäljiltä vanha, ja sen
+  // takaisinkytkennän lasku esti seuraavan oman pulssin (5 jaksoa, 707 ms).
+  {
+    SimRun w850;
+    for (int run = 0; run < 4; ++run) {
+      sbx::SimParams p;
+      p.seed = static_cast<uint32_t>(2 + run);
+      SimOpts o;
+      o.t0 = run == 0 ? 2540 : 2500 + 37 * run;
+      o.t_end = o.t0;
+      o.total = o.t0 + 2000;
+      o.step_t = static_cast<double>(o.t0);
+      o.hose_mask = 4;
+      o.hose_t = o.t0 + 120;
+      o.hose_t2 = o.hose_t + 150;
+      worstOf(w850, runSim(p, o, Ramp{850.0f, 850.0f, -55.0f, -47.0f, 20.0f, 20.0f, o.t0, 0}));
+    }
+    msg("letku irti 150 ms askeleessa (850 rpm): väärät %.0f, muiden pisin väli %.0f ms", static_cast<double>(w850.wrong),
+        static_cast<double>(w850.max_gap));
+    TEST_ASSERT_EQUAL_INT(0, w850.wrong);
+    TEST_ASSERT_FALSE(w850.dropped);
+    TEST_ASSERT_LESS_OR_EQUAL(static_cast<int>(4.1f * periodMs(850.0f)), static_cast<int>(w850.max_gap));
+  }
   SimRun worst;
   for (int run = 0; run < 6; ++run) {
     sbx::SimParams p;
@@ -2394,6 +2666,37 @@ void test_p2p_not_inflated_by_vacuum_step() {
         static_cast<double>(steady), static_cast<double>(hi));
     TEST_ASSERT_LESS_THAN_FLOAT(1.1f * steady, hi);
   }
+  // EngineSim: 1,5 s kaasun katkaisun (3000 -> 850 rpm, -15 -> -55 kPa, 300
+  // ms), rpm-askeleen ja alipaineen askeleen jälkeen p2p on tasaisen käynnin
+  // arvossa +-2 kPa molempiin suuntiin. Nousu mitataan edellisen oman pulssin
+  // pohjasta; jos pohjaa ei päivitettäisi, p2p jäisi vanhan käynnin pohjaan
+  // (katkaisun jälkeen -32 kPa, rpm-askeleen jälkeen 10 kPa).
+  SimOpts so;
+  so.t0 = so.t_end = 2500;
+  so.total = 3500;
+  so.p2p_at = 3400;
+  const SimRun st = runSim(sbx::SimParams(), so, [](long, sbx::SimParams&) { return false; });
+  const float ref = 0.5f * (st.p2p_lo + st.p2p_hi);
+  SimRun after;
+  for (int run = 0; run < 6; ++run) {
+    sbx::SimParams p;
+    p.seed = static_cast<uint32_t>(1 + run);
+    p.xtalk = (run & 1) ? 0.3f : 0.0f;
+    const int kind = run / 2;
+    p.rpm = kind == 2 ? 850.0f : 3000.0f;
+    p.base_kpa = kind == 0 ? -15.0f : (kind == 1 ? -55.0f : -30.0f);
+    p.depth_kpa = kind == 0 ? 10.0f : 20.0f;
+    SimOpts o;
+    o.t0 = 2500 + 7 * run;
+    o.t_end = o.t0 + (kind == 0 ? 300 : 0);
+    o.total = o.t_end + 1600;
+    o.p2p_at = o.t_end + 1500;
+    worstOf(after, runSim(p, o, Ramp{p.rpm, 850.0f, p.base_kpa, -55.0f, p.depth_kpa, 20.0f, o.t0, o.t_end - o.t0}));
+  }
+  msg("p2p 1,5 s katkaisun ja askelten jälkeen %.2f...%.2f kPa, tasaisesti %.2f kPa", static_cast<double>(after.p2p_lo),
+      static_cast<double>(after.p2p_hi), static_cast<double>(ref));
+  TEST_ASSERT_FLOAT_WITHIN(2.0f, ref, after.p2p_lo);
+  TEST_ASSERT_FLOAT_WITHIN(2.0f, ref, after.p2p_hi);
 }
 
 void test_hyst_min_sets_pulse_detection_floor() {
@@ -2682,7 +2985,11 @@ int main() {
   RUN_TEST(test_ownership_fallback_hoses_off);
   RUN_TEST(test_engine_start_and_restart_never_lock_on_leaks);
   RUN_TEST(test_dead_channel_during_blip);
+  RUN_TEST(test_reconnected_hose_is_not_a_witness);
+  RUN_TEST(test_short_fault_does_not_bias_channel_mean);
   RUN_TEST(test_hose_pulled_at_vacuum_step);
+  RUN_TEST(test_single_witness_needs_rhythm);
+  RUN_TEST(test_hose_swap_relearns_firing_order);
   RUN_TEST(test_weak_cylinder_quick_blips);
   RUN_TEST(test_display_right_after_rpm_jump);
   RUN_TEST(test_pulse_timeout_when_signal_goes_flat);
