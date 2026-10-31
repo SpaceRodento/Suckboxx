@@ -246,9 +246,26 @@ class Dsp {
   // 1/6 sivussa. 0,125 päästi kiihdytyksessä 3T-välin (sivussa 0,12); letkujen
   // viive-ero (R1: < 0,1 ms) syö tästä 6000 rpm:llä 0,005 / ms.
   static constexpr float kSlotTol = 0.1f;
+  // Pitkä sykli (yli kBothRatio x viite), jonka voi vahvistaa vain yksi elävä
+  // kanava (toinen letku irti tai anturi vikatilassa): merkin on osuttava
+  // tämän sisään. Nopeassa kaasunlisäyksessä kaikki kanavat ohittavat
+  // pulsseja, ja 2T-välin (hidas + nopea jakso, suhde r < 2,3) säilynyt merkki
+  // on >= 0,1 paikastaan; oikea pudotus pitää sen < 0,03:ssa.
+  static constexpr float kSlotTolSingle = 0.05f;
   // Kanavan muistamat omat keskikohdat (lomitustarkistus muille kanaville):
   // kolme riittää toteamaan, osuuko väliin kaksi.
   static constexpr int kOwnHist = 3;
+  // Sytytysjärjestyksen äänten kyllästys (ks. confirm): yksi täysi sykli
+  // kaikilta kanavilta (6 ääntä) kyllästää, ja yksittäinen 2T-välin väärä ääni
+  // ei käännä opittua järjestystä. Letkujen vaihto käydessä kääntää sen
+  // ~1,5 syklissä.
+  static constexpr int kOrderMax = 6;
+  // Kaikkien elävien kanavien on vahvistettava sykli, jonka jakso on yli tämän
+  // kertaa viite: oikea rpm:n pudotus kaasun katkaisussa on ~1,35 x/sykli
+  // (3000 -> 850 / 300 ms), ohitettu pulssi 2 x ja kiihdytyksessä ~1,5 x.
+  // Hetkellisessä pudotuksessa (yli 2,3 x) yksittäisen merkin paikka voi osua
+  // 2T-välissäkin oikeaan kohtaan.
+  static constexpr float kBothRatio = 1.4f;
   // Näytön keskiarvo aloitetaan alusta, jos uusi jakso on yli 1,5 x (tai alle
   // kMinPeriodRatio x) näytettävien syklien keskijakso: kierrosluku muuttui
   // kerralla, eikä vanhan käynnin syklejä ole syytä näyttää vielä sekunnin ajan.
@@ -309,6 +326,7 @@ class Dsp {
   // configure() ajetaan ESP32:lla web-taskista (POST /api/config).
   void reset() {
     n_ = 0;
+    order_ = 0;
     for (int i = 0; i < kChannels; ++i) clearChan(ch_[i]);
   }
 
@@ -430,6 +448,7 @@ class Dsp {
     float own_frac[kOwnHist] = {};
     int own_n = 0;
     float own_d1 = 0.0f, own_d2 = 0.0f;  // kahden edellisen oman pulssin syvyys
+    float own_lo = 0.0f;         // edellisen oman pulssin pohja (p2p:n nousu)
     float acc = 0.0f;            // suodattamaton integraali viimeisimmästä omasta keskikohdasta
     bool chain = false;          // acc on voimassa (keskikohta oli puskurissa)
     float last_period = 0.0f;    // edellinen oma-oma-väli (pienen pulssin rajaehto)
@@ -518,7 +537,7 @@ class Dsp {
     c.hf_int = 0;
     c.hf_frac = 0.0f;
     c.own_n = 0;
-    c.own_d1 = c.own_d2 = 0.0f;
+    c.own_d1 = c.own_d2 = c.own_lo = 0.0f;
     c.acc = 0.0f;
     c.chain = false;
     c.last_period = c.ref_period = 0.0f;
@@ -569,6 +588,11 @@ class Dsp {
     // fault_hold_s alueen ulkopuolella; yksikin hyvä näyte nollaa laskurin.
     if (mv < sp_.fault_lo_mv || mv > sp_.fault_hi_mv) {
       if (c.fault_run < fault_hold_n_) ++c.fault_run;
+      // Anturi alueen ulkopuolella: kanava on heti kuollut (ei vertailukanava,
+      // ei omia pulsseja) ja asettuu palattuaan kuten käynnistyksessä. Suotimen
+      // kymmenien kPa:n askel ja sen ylitys (~11 %) ovat poissa renkaasta
+      // kRing näytteen jälkeen; muuten ylityksen lasku näyttäisi pulssilta.
+      c.settle = static_cast<uint32_t>(kRing);
     } else {
       c.fault_run = 0;
     }
@@ -617,6 +641,12 @@ class Dsp {
       c.per_count = 0;
       c.sd_rpm = 0.0f;
       c.ref_period = 0.0f;
+      // Myös haun historia: pysähdystä edeltävät syvyydet ja keskikohdat
+      // eivät saa kelpuuttaa uuden käynnin ensimmäistä pulssia kolmikkoon.
+      c.own_n = 0;
+      c.own_d1 = c.own_d2 = 0.0f;
+      c.chain = false;
+      c.last_period = 0.0f;
     }
 
     c.x = x;
@@ -629,6 +659,7 @@ class Dsp {
       // Viritetty heti asettumisen jälkeen: ensimmäinen raja voi osua mihin
       // tahansa vaiheeseen, mutta lukitus vaatii kolme samankokoista omaa pulssia.
       if (--c.settle == 0) c.armed = true;
+      c.wait_rise = false;
       segReset(c.prev, c.y);
       segReset(c.cur, c.y);
       c.run_hi = c.run_lo = c.y;
@@ -759,20 +790,21 @@ class Dsp {
     c.wait_rise = true;
   }
 
-  // Kanavan k pudotus ikkunassa: suurin arvo [hf - L, hr]:ssä (ennen pulssia)
-  // miinus pienin arvo keskikohdan +- s:ssä. Iät näytteinä nyt-hetkestä.
+  // Kanavan k pudotus ikkunassa: suurin arvo iissä [top_new, top_old] (ennen
+  // keskikohtaa) miinus pienin keskikohdan ympärillä [lo_new, lo_old]. Iät
+  // näytteinä nyt-hetkestä, rajattuina renkaaseen ennen kokonaislukumuunnosta
+  // (ikuisesti odottanut nouseva reuna ei saa vuotaa int-alueen yli).
   float fallOf(const Chan& k, float top_old, float top_new, float lo_old, float lo_new) const {
+    const float last = static_cast<float>(kRing - 1);
     float hi = -1.0e30f, lo = 1.0e30f;
-    int a0 = static_cast<int>(top_new + 0.999f);
-    int a1 = static_cast<int>(top_old);
-    if (a1 > kRing - 1) a1 = kRing - 1;
+    const int a0 = static_cast<int>((top_new < last ? top_new : last) + 0.999f);
+    const int a1 = static_cast<int>(top_old < last ? top_old : last);
     for (int a = a0; a <= a1; ++a) {
       const float v = k.ring[(n_ - static_cast<uint32_t>(a)) % kRing];
       if (v > hi) hi = v;
     }
-    int b0 = static_cast<int>(lo_new + 0.999f);
-    int b1 = static_cast<int>(lo_old);
-    if (b1 > kRing - 1) b1 = kRing - 1;
+    const int b1 = static_cast<int>(lo_old < last ? lo_old : last);
+    int b0 = static_cast<int>((lo_new < last ? lo_new : last) + 0.999f);
     if (b0 > b1) b0 = b1;
     for (int a = b0; a <= b1; ++a) {
       const float v = k.ring[(n_ - static_cast<uint32_t>(a)) % kRing];
@@ -781,18 +813,16 @@ class Dsp {
     return hi > lo ? hi - lo : 0.0f;
   }
 
-  // Toinen kanava kantaa tietoa, kun se seuraa omia pulssejaan: has_pulse,
-  // anturi kunnossa ja oma pulssi pisimmän hyväksyttävän jakson sisällä. Ei
-  // amplitudi- eikä viitevertailua: rpm-pudotuksen jälkeen muiden kanavien A ja
-  // jakso ovat vielä vanhan käynnin. Ilman tuoreusehtoa irrotettu letku estäisi
-  // muiden kanavien syklit lomitusehdolla koko pulse_timeout_s:n ajan.
-  bool informative(int j) const {
+  // Toinen kanava on elävä vertailukanava, kun se on asettunut (anturi
+  // alueella, ks. front: ei fault_hold_s:n odotusta) ja sillä on oma pulssi pisimmän
+  // hyväksyttävän jakson sisällä. Lukitusta (has_pulse) ei vaadita: omat
+  // pulssit tunnistetaan fysikaalisesti (isOwn) myös haun aikana.
+  bool live(int j) const {
     const Chan& o = ch_[j];
-    return o.pub.has_pulse && !o.pub.sensor_fault && o.own_n > 0 &&
-           age(o.own_int[0], o.own_frac[0]) < max_period_;
+    return o.settle == 0 && o.own_n > 0 && age(o.own_int[0], o.own_frac[0]) < max_period_;
   }
 
-  // Suurin muiden tietoa kantavien kanavien oma pulssisyvyys, joka on mitattu
+  // Suurin muiden elävien kanavien oma pulssisyvyys, joka on mitattu
   // tämän kanavan viimeisimmän oman pulssin jälkeen (0 = ei yhtään).
   float peerDepth(int i) const {
     const Chan& c = ch_[i];
@@ -800,7 +830,7 @@ class Dsp {
     float best = 0.0f;
     for (int j = 0; j < kChannels; ++j) {
       const Chan& o = ch_[j];
-      if (j == i || o.own_n == 0 || !informative(j)) continue;
+      if (j == i || !live(j)) continue;
       if (age(o.own_int[0], o.own_frac[0]) < mine && o.own_d1 > best) best = o.own_d1;
     }
     return best;
@@ -812,29 +842,26 @@ class Dsp {
   // muut kanavat näkevät vain vuodon (xtalk x). Suhde ei riipu sylinterien
   // pulssien keskinäisestä koosta. Alipaineen askel pudottaa kaikkia yhtä
   // paljon, joten sekään ei ole oma pulssi. Pudotus = suurin arvo ikkunassa
-  // [hf - leveys, hr] (pulssia ennen) miinus pienin keskikohdan +-
-  // kOwnHalfWindow:ssa, sama ikkuna kaikille kanaville (sama suodin = sama viive).
-  // info kertoo, kantoiko jokin muu kanava tietoa (ks. informative).
-  bool isOwn(int i, float m_age, float width, bool& info) const {
+  // [hf - leveys, keskikohta] miinus pienin keskikohdan +- kOwnHalfWindow:ssa,
+  // sama ikkuna kaikille kanaville (sama suodin = sama viive). Ikkuna päättyy
+  // keskikohtaan: toisen kanavan nousu (anturi palaa, alipaine laskee) ei ole
+  // pudotus. Vertailu tehdään aina kaikkiin kanaviin, joiden mV on alueella -
+  // myös lukitsemattomiin: fysikaalinen tieto on olemassa käynnistyksestä
+  // lähtien. Tasainen kanava (letku irti) putoaa ~0, joten se ei estä mitään.
+  bool isOwn(int i, float m_age, float width) const {
     const float s = kOwnHalfWindow;
-    float top_new = m_age - 0.5f * width;
-    if (top_new < 0.0f) top_new = 0.0f;
+    const float top_old = m_age + 1.5f * width;
     float lo_new = m_age - s;
     if (lo_new < 0.0f) lo_new = 0.0f;
-    const float top_old = m_age + 1.5f * width;
     const float lo_old = m_age + s;
-    const float fi = fallOf(ch_[i], top_old, top_new, lo_old, lo_new);
+    const float fi = fallOf(ch_[i], top_old, m_age, lo_old, lo_new);
     float fo = 0.0f;
-    info = false;
     for (int j = 0; j < kChannels; ++j) {
-      if (j == i || ch_[j].pub.sensor_fault) continue;
-      const float f = fallOf(ch_[j], top_old, top_new, lo_old, lo_new);
+      if (j == i || ch_[j].settle > 0) continue;
+      const float f = fallOf(ch_[j], top_old, m_age, lo_old, lo_new);
       if (f > fo) fo = f;
-      if (informative(j)) info = true;
     }
-    // Ilman tietoa kantavia kanavia jokainen pulssi on ehdokas: syklin
-    // hyväksyntä (ownPulse) vaatii silloin samankokoiset rajapulssit.
-    return !info || (fi > 0.0f && fi - fo >= kOwnMargin * fi);
+    return fi > 0.0f && fi - fo >= kOwnMargin * fi;
   }
 
   // Pulssi mitattu: keskikohta, omistajuus ja oman pulssin sykli.
@@ -846,9 +873,7 @@ class Dsp {
     const float whole = std::floor(mf);
     const uint32_t mi = c.hf_int + static_cast<uint32_t>(whole);
     mf -= whole;
-    bool info = false;
-    const bool own = isOwn(i, age(mi, mf), width, info);
-    if (own) ownPulse(i, mi, mf, info);
+    if (isOwn(i, age(mi, mf), width)) ownPulse(i, mi, mf);
   }
 
   // Integraali keskikohdasta m = mi + mf nykyhetkeen (lineaarisesti
@@ -862,74 +887,102 @@ class Dsp {
     return t;
   }
 
-  // Lomitus: jokaisen tietoa kantavan toisen kanavan omia keskikohtia on
-  // välillä (ikä a_new, ikä a_old) täsmälleen yksi, ja ne ovat sylinterien
-  // vuorossa: 1/3:n ja 2/3:n kohdalla jaksoa (yksi vahvistava kanava: jommassa
-  // kummassa). Ohitetun pulssin 2T-välissä jokin merkki on aina 1/6 jaksoa
-  // sivussa paikastaan - myös kun kaikki kanavat ohittivat saman kierroksen ja
-  // jokaisen ikkunaan osui yksi merkki kultakin.
-  bool interleaved(int i, float a_new, float a_old, float period) const {
-    float u[kChannels - 1];
-    int nm = 0;
+  // Lomitus ja sytytysjärjestys. Muiden elävien kanavien omat keskikohdat
+  // välillä (ikä a_new, ikä a_old): kanava, jolla niitä on yksi, vahvistaa
+  // syklin, jos se on omalla paikallaan; kaksi tai paikan ohi = hylkäys
+  // (ohitettu pulssi, 2T); nolla = ei ääntä (kuollut kanava ei estä muita).
+  // Paikka: imujärjestys on kiinteä (sylinterit + letkujen kytkentä), joten
+  // kanavaa i seuraava sylinteri on aina 1/3:n ja edeltävä 2/3:n kohdalla.
+  // Järjestys opitaan äänestämällä (order_) kaikista vahvistuksista; kun se
+  // tunnetaan, jokaisen kanavan on osuttava juuri omaan paikkaansa - 2T-välissä
+  // yksittäinen säilynyt merkki osuu toisen kanavan paikalle. Palauttaa
+  // vahvistavien määrän tai -1; nl = elävät muut kanavat.
+  int confirm(int i, float a_new, float a_old, float period, int& nl, float& dev) {
+    int np = 0, sum = 0;
+    nl = 0;
+    dev = 0.0f;
     for (int j = 0; j < kChannels; ++j) {
-      if (j == i || !informative(j)) continue;
+      if (j == i || !live(j)) continue;
+      ++nl;
       const Chan& o = ch_[j];
       int n = 0;
+      float u = 0.0f;
       for (int k = 0; k < o.own_n; ++k) {
         const float a = age(o.own_int[k], o.own_frac[k]);
         if (a > a_new && a < a_old) {
           ++n;
-          u[nm] = (a_old - a) / period;
+          u = (a_old - a) / period;
         }
       }
-      if (n != 1) return false;
-      ++nm;
+      if (n == 0) continue;
+      const float d1 = std::fabs(u - 1.0f / 3.0f), d2 = std::fabs(u - 2.0f / 3.0f);
+      const bool first = d1 < d2;
+      const float d = first ? d1 : d2;
+      if (n > 1 || d > kSlotTol) return -1;
+      if (d > dev) dev = d;
+      // Ääni +1: j seuraa i:tä (j = i + 1 mod 3) 1/3:n kohdalla.
+      sum += (((j - i + kChannels) % kChannels == 1) == first) ? 1 : -1;
+      ++np;
     }
-    if (nm == 2) {
-      const float lo = u[0] < u[1] ? u[0] : u[1];
-      const float hi = u[0] < u[1] ? u[1] : u[0];
-      return std::fabs(lo - 1.0f / 3.0f) <= kSlotTol && std::fabs(hi - 2.0f / 3.0f) <= kSlotTol;
-    }
-    return nm == 0 || std::fabs(u[0] - 1.0f / 3.0f) <= kSlotTol || std::fabs(u[0] - 2.0f / 3.0f) <= kSlotTol;
+    if (np == 0) return 0;
+    if (sum != np && sum != -np) return -1;  // kanavat eri mieltä järjestyksestä
+    const bool against = order_ != 0 && (order_ > 0) != (sum > 0);
+    order_ += sum;
+    if (order_ > kOrderMax) order_ = kOrderMax;
+    if (order_ < -kOrderMax) order_ = -kOrderMax;
+    return against ? -1 : np;
   }
 
-  // Oma pulssi: sykli edellisestä omasta keskikohdasta tähän.
-  //  - Lukitus haussa: kolme peräkkäistä samankokoista omaa pulssia.
-  //  - Lomitus: imut kiertävät kaikki sylinterit, joten jokaisen tietoa
-  //    kantavan kanavan omia pulsseja on syklin sisällä täsmälleen yksi. Kaksi
-  //    = tämän kanavan pulssi jäi välistä (2T); nolla = toinen kanava ei
-  //    vahvista väliä. Kaikkien on vahvistettava: nopeassa alipainerampissa
-  //    kaikki kanavat ohittavat pulsseja yhtä aikaa, ja yksi vanha merkki
-  //    "vahvisti" 3T-välin. Kierrosluvun muutos ei vaikuta lomitukseen, joten
-  //    uusi jakso kelpaa heti ilman viitettä.
-  //  - Varatila (muut kanavat eivät kanna tietoa): saman kokoiset rajapulssit
-  //    ja jakso viitteen +- kFallbackWindow.
-  void ownPulse(int i, uint32_t mi, float mf, bool info) {
+  // Syklin hyväksyntä (ks. ownPulse).
+  bool accept(int i, float period, float depth, float a_new, float a_old) {
+    Chan& c = ch_[i];
+    if (!(period >= min_period_ && period <= max_period_ && ampOk(depth, period, c.last_period))) return false;
+    if (!c.pub.has_pulse && !(similar(depth, c.own_d1) && similar(c.own_d1, c.own_d2))) return false;
+    int nl = 0;
+    float dev = 0.0f;
+    const int np = confirm(i, a_new, a_old, period, nl, dev);
+    if (np < 0) return false;
+    if (nl == 0) {
+      return !c.pub.has_pulse || (similar(depth, c.own_d1) && period <= (1.0f + kFallbackWindow) * c.ref_period &&
+                                  period >= (1.0f - kFallbackWindow) * c.ref_period);
+    }
+    if (np == 0) return false;
+    // Yksi todistaja: rajapulssien on oltava samankokoiset kuten varatilassa.
+    // Nopeassa kaasunlisäyksessä pulssi kutistuu ~2 x syklissä, kanavat
+    // ohittavat pulsseja, ja 2T-välin säilynyt merkki voi osua kiihdytyksen
+    // vinouttamana toleranssin sisään; kutistuva pulssi paljastaa tilanteen.
+    if (np == 1 && c.pub.has_pulse && !similar(depth, c.own_d1)) return false;
+    if (!(c.ref_period > 0.0f && period > kBothRatio * c.ref_period)) return true;
+    return np == 2 || (nl == 1 && dev <= kSlotTolSingle);
+  }
+
+  // Oma pulssi: sykli edellisestä omasta keskikohdasta tähän, kun
+  //  - jakso on rpm-alueella ja pulssi läpäisee amplitudiehdon (ampOk);
+  //  - haussa (ei has_pulse) kolme peräkkäistä omaa pulssia ovat samankokoisia;
+  //  - muut elävät kanavat vahvistavat (confirm): vähintään yksi, ja kaikki
+  //    elävät, jos jakso on yli kBothRatio x viite (rpm:n pudotus tai ohitettu
+  //    pulssi: yksittäisen merkin paikka ei silloin enää riitä);
+  //  - varatila (ei eläviä muita kanavia, esim. kaksi letkua irti):
+  //    rajapulssit samankokoiset ja jakso viitteen +- kFallbackWindow.
+  void ownPulse(int i, uint32_t mi, float mf) {
     Chan& c = ch_[i];
     const bool cut = n_ - mi < static_cast<uint32_t>(kRing - 1);
     const float tail = cut ? tailIntegral(c, mi, mf) : 0.0f;
     float period = 0.0f;
     if (c.own_n > 0) period = static_cast<float>(mi - c.own_int[0]) + (mf - c.own_frac[0]);
     const float depth = c.pulse_depth;
-    if (c.chain && cut && c.own_n > 0) {
-      bool ok = period >= min_period_ && period <= max_period_ && ampOk(depth, period, c.last_period);
-      if (ok && !c.pub.has_pulse) ok = similar(depth, c.own_d1) && similar(c.own_d1, c.own_d2);
-      if (ok && info) {
-        ok = interleaved(i, age(mi, mf), age(c.own_int[0], c.own_frac[0]), period);
-      } else if (ok && c.pub.has_pulse) {
-        ok = similar(depth, c.own_d1) && period <= (1.0f + kFallbackWindow) * c.ref_period &&
-             period >= (1.0f - kFallbackWindow) * c.ref_period;
-      }
-      if (ok) {
-        Cyc cy;
-        cy.integral = c.acc - tail;
-        cy.period = period;
-        cy.cmin = c.run_lo;
-        cy.p2p = depth;
-        cy.end_int = mi;
-        cy.end_frac = mf;
-        recordCycle(c, cy);
-      }
+    if (c.chain && cut && c.own_n > 0 && accept(i, period, depth, age(mi, mf), age(c.own_int[0], c.own_frac[0]))) {
+      // Huippu-huippu (docs §4.2): pulssin nousu edellisen oman pulssin
+      // pohjasta, lukittuna min(nousu, lasku) - painehyppy kasvattaa vain toista.
+      const float rise = c.fire_top - c.own_lo;
+      Cyc cy;
+      cy.integral = c.acc - tail;
+      cy.period = period;
+      cy.cmin = c.run_lo;
+      cy.p2p = (c.pub.has_pulse && depth < rise) ? depth : rise;
+      cy.end_int = mi;
+      cy.end_frac = mf;
+      recordCycle(c, cy);
     }
     c.acc = tail;
     c.chain = cut;
@@ -943,6 +996,7 @@ class Dsp {
     if (c.own_n < kOwnHist) ++c.own_n;
     c.own_d2 = c.own_d1;
     c.own_d1 = depth;
+    c.own_lo = c.run_lo;
   }
 
   // Pulssin amplitudiehto (kohinasuoja). Raja 3 x hyst_min_kpa koskee
@@ -989,7 +1043,7 @@ class Dsp {
     ++c.pub.cycles;
     c.pub.has_pulse = true;
     c.since_cycle = 0;
-    if (!jumped) publishAverages(c);
+    publishAverages(c);
     c.sd_rpm = rpmSpread(c);
   }
 
@@ -1010,6 +1064,9 @@ class Dsp {
   // integraali N kokonaisen syklin yli.
   void publishAverages(Chan& c) const {
     const int n = c.cyc_count < avg_n_ ? c.cyc_count : avg_n_;
+    // Hypännyt sykli tyhjensi ikkunan: näyttö pysyy edellisissä arvoissa
+    // (0 / 0 olisi NaN).
+    if (n <= 0) return;
     float s_int = 0.0f, s_per = 0.0f, s_min = 0.0f, s_p2p = 0.0f;
     for (int k = 0; k < n; ++k) {
       const int i = (c.cyc_head - 1 - k + kMaxAvgCycles) % kMaxAvgCycles;
@@ -1061,6 +1118,9 @@ class Dsp {
   uint32_t fault_hold_n_ = 1;
   float min_pulse_p2p_ = 0.0f;
   uint32_t n_ = 0;  // kuluvan näytteen indeksi (yhteinen kaikille kanaville)
+  // Sytytysjärjestys: > 0 = imut kanavajärjestyksessä 1 -> 2 -> 3, < 0 =
+  // 1 -> 3 -> 2, 0 = ei vielä tiedossa (äänet, ks. confirm).
+  int order_ = 0;
   Chan ch_[kChannels];
 };
 
