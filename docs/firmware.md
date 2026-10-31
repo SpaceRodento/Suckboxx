@@ -545,7 +545,24 @@ Sim-avaimet: `engine_on` (0/1), `rpm`, `jitter`, `drift`, `base`, `err1`, `err2`
 - **GCC 8.4:** `tools/check_core_gcc84.sh [x.h …]` kääntää jokaisen core-headerin yksinään
   ESP32:n omalla kääntäjällä samoilla varoituksilla. Native-g++ on uudempi eikä huomaa
   §1:n kohdan 6 rajoituksia (esim. liukulukujen `std::to_chars`). Vaatii PlatformIOn
-  ESP32-työkaluketjun, eli toimii kehittäjän koneella.
+  ESP32-työkaluketjun, eli toimii kehittäjän koneella (Git Bash tai WSL) ja CI:ssä.
 - **UI:** `python3 tools/mock_server.py` → selain `http://localhost:8000`.
-- **ESP32-käännös** tehdään kehittäjän koneella (`pio run`). Pilviympäristössä
-  PlatformIO-rekisteri ei ole saatavilla.
+- **ESP32-käännös** tehdään kehittäjän koneella (`pio run`) ja CI:ssä. Pilviympäristössä
+  PlatformIO-rekisteri ei ole saatavilla, joten pilvityön ESP32-käännös ja GCC 8.4
+  -tarkistus todennetaan CI:stä.
+- **CI** ([.github/workflows/ci.yml](../.github/workflows/ci.yml), GitHub Actions) ajaa
+  edellä olevat jokaisesta pushista haaroihin `master`, `dev/**` ja `wp/**` sekä
+  masteriin tehdyistä PR:istä:
+
+  | job | ajaa |
+  |---|---|
+  | `native` | `tools/run_native_tests.sh` |
+  | `pio-native` | `pio test -d firmware -e native` (PlatformIO 6.1.19) |
+  | `esp32` (matriisi) | `pio run -d firmware -e <env>` jokaiselle ESP32-ympäristölle, RAM ja flash ajon yhteenvetoon; `check_core_gcc84.sh` kerran |
+  | `web` (Python 3.10 ja 3.14) | `embed_web.py --check`, `mock_server.py --check-config`, `py_compile` kaikille `tools/**/*.py` |
+
+  Uudet `firmware/test/test_*/`-kansiot ja Python-työkalut tulevat mukaan ilman
+  muutoksia; uusi ESP32-`[env:...]` lisätään `esp32`-jobin matriisiin. Runner on
+  `ubuntu-26.04`, jossa on sama g++ 15.2 ja Python 3.14 kuin WSL:ssä, joten jokaisen
+  run-askeleen voi toistaa sellaisenaan WSL:ssä. Python 3.10 vastaa Windowsin Pythonia,
+  jolla oraakkelit ajetaan.
