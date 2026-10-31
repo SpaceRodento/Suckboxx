@@ -655,10 +655,12 @@ def noise_hf(mv: np.ndarray, fs: float, lo_hz: float, cycles: list[dict]) -> dic
         sig_b = np.array([robust_sigma(hp[idx_a[bins_a == b]]) if np.sum(bins_a == b) >= 30
                           else np.nan for b in range(NOISE_BINS)])
         order = np.argsort(np.where(np.isfinite(sig_b), sig_b, np.inf))
-        quiet = order[:max(1, NOISE_BINS // 3)]
-        sb = float(np.median(sig_b[quiet]))
-        qmask = np.isin(bins_a, quiet)
-        q_idx = idx_a[qmask]
+        ref = float(np.median(sig_b[order[:max(1, NOISE_BINS // 3)]]))
+        # Hiljaisiksi kaikki lokerot lähellä hiljaisinta kolmannesta, ja σ yhdistetyistä
+        # näytteistä: pelkkä hiljaisimpien lokeroiden valinta vinouttaisi alaspäin.
+        quiet = np.flatnonzero(np.isfinite(sig_b) & (sig_b <= 1.25 * ref))
+        q_idx = idx_a[np.isin(bins_a, quiet)]
+        sb = robust_sigma(hp[q_idx])
     else:
         sb = robust_sigma(hp)
         q_idx = np.arange(len(mv))
@@ -1082,7 +1084,52 @@ def fit_recording(path: str | Path, start: float | None = None, end: float | Non
             and out["mode"] == "running":
         out["warnings"].append("Nauhoituksessa ei ole nollausta (zero_valid=0): base ja err "
                                "sisältävät anturien offsetit (±2 kPa, R4). Käytä --zero-from lepo.csv.")
+    truth = compare_truth(meta, out)
+    if truth:
+        out["truth"] = truth
     return out
+
+
+# SimParams-oletukset, joita /api/sim ei aseta (engine_sim.h): tools/replay --sim
+# -viennissä ne ovat aina nämä.
+SIM_FIXED = {"res_hz": 112.0, "res_decay_s": 0.02, "intake_frac": 0.25}
+
+
+def compare_truth(meta: dict, out: dict) -> list[dict] | None:
+    """tools/replay --sim kirjoittaa otsakkeeseen sim=<GET /api/sim -JSON>.
+    Vertailu kanavatasoina (base + errN), koska jako base/err on sopimus."""
+    if "sim" not in meta:
+        return None
+    try:
+        t = json.loads(meta["sim"])
+    except ValueError:
+        return None
+    p = out["params"]
+    rows = []
+
+    def add(key, est, true):
+        if est is None or true is None:
+            return
+        rows.append({"key": key, "est": float(est), "true": float(true),
+                     "diff": float(est) - float(true)})
+
+    if out["mode"] == "running":
+        for k in ("rpm", "jitter", "depth", "res", "xtalk", "peak", "noise"):
+            add(k, p.get(k), t.get(k))
+        for c in range(CH):
+            if f"err{c + 1}" in p and "base" in t:
+                add(f"taso{c + 1}", p["base"] + p[f"err{c + 1}"], t["base"] + t.get(f"err{c + 1}", 0.0))
+        if meta.get("generator", "").startswith("tools/replay"):
+            ex = out["extra"]
+            for c, hz in enumerate(ex.get("res_hz") or []):
+                add(f"res_hz{c + 1}", hz, SIM_FIXED["res_hz"] if t.get("res", 0) > 0 else None)
+            add("res_decay_s", ex.get("res_decay_s"), SIM_FIXED["res_decay_s"])
+            add("intake_frac", ex.get("intake_frac"), SIM_FIXED["intake_frac"])
+    else:
+        add("noise", p.get("noise"), t.get("noise"))
+    for c in range(CH):
+        add(f"fault{c + 1}", p.get(f"fault{c + 1}", 0.0), t.get(f"fault{c + 1}"))
+    return rows
 
 
 def fi(v, nd=2, sign=False) -> str:
@@ -1198,6 +1245,13 @@ def text_report(o: dict) -> str:
             if "spread_8_p50_kpa" in dl:
                 L.append(f"  spread (D2): mediaani {fi(dl['spread_8_p50_kpa'], 2)}, "
                          f"p95 {fi(dl['spread_8_p95_kpa'], 2)} kPa (rajat 1,5 / 3,0)")
+    if o.get("truth"):
+        L.append("")
+        L.append("Otsakkeen totuus (sim=, tools/replay --sim): arvio / totuus / ero")
+        for t in o["truth"]:
+            nd = 4 if t["key"] in ("jitter", "res_decay_s") else (3 if t["key"] in ("xtalk", "intake_frac") else 2)
+            L.append(f"  {t['key']:<12}{fi(t['est'], nd):>10}{fi(t['true'], nd):>10}"
+                     f"{fi(t['diff'], nd, True):>10}")
     if o["warnings"]:
         L.append("")
         L.append("Huomiot:")

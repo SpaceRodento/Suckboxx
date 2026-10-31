@@ -402,6 +402,39 @@ class SimFitTest(unittest.TestCase):
         self.assertEqual(o["params"].get("fault2"), 2.0)
         self.assertIn("fault2=2", o["form"])
 
+    # --- C++ EngineSim (tools/replay --sim) -----------------------------
+
+    def test_engine_sim_export_golden(self):
+        """Ristiintodennus oikealla EngineSimillä ilman käännöstä: WP-8:n
+        golden-nauhoitukset on kirjoitettu `tools/replay --sim`:llä, ja otsakkeen
+        sim= on totuus (GET /api/sim). 8 s ≈ 60 sykliä/kanava, joten toleranssit
+        ovat väljempiä kuin 30 s:n synteettisissä testeissä."""
+        rec_dir = HERE.parent / "firmware" / "test" / "data" / "recordings"
+        files = sorted(rec_dir.glob("sim_*.csv"))
+        if not files:
+            self.skipTest("golden-nauhoitukset puuttuvat (WP-8)")
+        tol = {"rpm": 9.0, "jitter": 0.003, "depth": 1.0, "res": 0.75, "xtalk": 0.02,
+               "peak": 0.5, "noise": 0.4, "res_decay_s": 0.006, "intake_frac": 0.02}
+        for f in files:
+            with self.subTest(f.name):
+                o = sim_fit.fit_recording(f)
+                self.assertTrue(o.get("truth"), "otsakkeesta puuttuu sim=")
+                seen = set()
+                for t in o["truth"]:
+                    k = t["key"]
+                    seen.add(k)
+                    if k.startswith("taso"):
+                        lim = 0.15                  # D1: kanavan keskiarvo
+                    elif k.startswith("res_hz"):
+                        lim = 0.03 * t["true"]
+                    elif k.startswith("fault"):
+                        lim = 0.0
+                    else:
+                        lim = tol[k]
+                    self.assertLessEqual(abs(t["diff"]), lim,
+                                         f"{f.name} {k}: {t['est']:.4f} vs {t['true']:.4f}")
+                self.assertTrue({"rpm", "depth", "noise", "taso1"} <= seen, seen)
+
     # --- lomake ja CLI --------------------------------------------------
 
     def test_form_keys_and_ranges(self):
