@@ -1,0 +1,27 @@
+# Synteettinen (EngineSim, ei oikeaa dataa): joutokäynti 900 rpm synkassa.
+# Totuus: kanavien keskiarvot -55,0 / -54,7 / -55,4 kPa, eli d = 0 / -0,3 / +0,4 kPa
+# ja spread 0,7 kPa. Luotu 31.10.2026 (WP-8):
+#   tools/replay/build/replay --sim rpm=900 err2=0.3 err3=-0.4 noise=4 --seconds 8 \
+#     --seed 1 --out firmware/test/data/recordings/sim_idle_synced.csv
+# noise=4 mV: penkkitestin kohina puhelin yhdistettynä 3,8–4,1 mV RMS (jatko.md, 31.10.2026).
+# Otsakkeessa zero_valid=1 ja gain_valid=0 (replay --sim -oletus, docs/firmware.md §6.1).
+# Toisto alkaa kylmästä Processorista käyvän moottorin keskeltä.
+
+lock_min_s=3.0            # D12 / rivi 3: vakaa käynti >= stable_hold_s (3 s) ennen tuomiota
+lock_max_s=6.0            # rivi 2 -> 3: lukitus + rpm-historia + 3 s + vara (test_integration test_row2)
+never_states=fault_sensor,fault_hose,fault_master   # §8: ehjät kanavat; käynnistys ei välähdä vikaa (rivi 6)
+
+from_s=lock
+allowed_states=synced     # rivi 3, D2: spread 0,7 <= 1,5 kPa; pysyy vihreänä eikä välky (test_row3)
+final_state=synced
+headline=Synkronoitu      # rivi 3 (status.h, test_row3)
+advice_prefix=Valmis: ero # rivi 3 (test_row3)
+rpm=900                   # rivi 3: rpm näytetään; tarkkuus 1 % (test_row3_idle_synced)
+rpm_tol=9
+spread_median_min=0.55    # D1/D2: totuus 0,7 kPa ± 0,15 (test_integration assertVerdict)
+spread_median_max=0.85
+spread_p95_max=1.5        # D2: vihreän raja
+# worst_ch ei ole väite: |d| 0,3 ja 0,4 kPa eroavat vähemmän kuin d:n toleranssi ±0,15,
+# eikä vihreä tila nimeä kanavaa (rivi 3).
+flags_never=uncal_zero,sat   # D11: nollaus voimassa; rivi 10: huiput <= 1419 mV, sat_mv 2680
+flags_always=uncal_gain   # rivi 11 / D11: vahvistus puuttuu -> vain varoitus, vihreä sallittu
