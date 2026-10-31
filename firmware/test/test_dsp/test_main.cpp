@@ -2222,10 +2222,10 @@ void test_hose_swap_relearns_firing_order() {
   TEST_ASSERT_FALSE_MESSAGE(run.dropped, "has_pulse putosi letkujen vaihdossa");
   TEST_ASSERT_GREATER_OR_EQUAL(0, restart.lock_ms);
   // Järjestys unohdetaan vain, kun yhdelläkään kanavalla ei ole has_pulsea.
-  // Letku 1 irti ja tuplapikablippi 850 -> 3000 xtalk 0,5:llä: terveen
-  // kanavan has_pulse voi pudota (FaultHose, ks. dsp.h), mutta toinen pulssii
-  // yhä. Jos järjestys unohdettaisiin jo yhden kanavan aikakatkaisussa, se
-  // opittaisiin uudelleen ohitetun pulssin 2T-välistä (tarkistajan toisto).
+  // Jos se unohdettaisiin jo yhden kanavan aikakatkaisussa, se opittaisiin
+  // uudelleen ohitetun pulssin 2T-välistä. Letku 1 irti ja tuplapikablippi
+  // 850 -> 3000 xtalk 0,5:llä (tarkistajan toisto; kierroksella 6 terveen
+  // kanavan has_pulse putosi tässä, nyt ei).
   sbx::SimParams p;
   p.xtalk = 0.5f;
   p.seed = 1;
@@ -2235,8 +2235,21 @@ void test_hose_swap_relearns_firing_order() {
   o.total = o.t_end + 1500;
   o.hose_mask = 1;
   const SimRun one = runSim(p, o, Blips{3000.0f, o.t0, 150, 0, 300, 2, 850.0f, 12.0f, 100});
-  msg("letku 1 irti, tuplablippi xtalk 0,5 (terveen aikakatkaisu): väärät %.0f", static_cast<double>(one.wrong));
+  msg("letku 1 irti, tuplablippi xtalk 0,5: väärät %.0f", static_cast<double>(one.wrong));
   TEST_ASSERT_EQUAL_INT(0, one.wrong);
+  // Letku 1 irrotetaan joutokäynnillä 0,8 s ennen pikablippiä 850 -> 3000
+  // (xtalk 0,5): sen kanavan has_pulse aikakatkeaa kesken blipin, kun muut
+  // vielä pulssivat. Jos järjestys unohdettaisiin silloin, blipin ohitetun
+  // pulssin 2T opettaisi sen väärin (kaksi väärää sykliä).
+  o.t0 = 2603;
+  o.t_end = o.t0 + 450;
+  o.total = o.t_end + 2500;
+  o.hose_t = o.t0 - 800;
+  const SimRun pulled = runSim(p, o, Blips{3000.0f, o.t0, 150, 0, 300, 1});
+  msg("letku 1 irrotettu joutokäynnillä, pikablippi xtalk 0,5: väärät %.0f, pisin väli %.0f ms",
+      static_cast<double>(pulled.wrong), static_cast<double>(pulled.max_gap));
+  TEST_ASSERT_EQUAL_INT(0, pulled.wrong);
+  TEST_ASSERT_FALSE(pulled.dropped);
 }
 
 void test_short_fault_does_not_bias_channel_mean() {
@@ -2341,10 +2354,9 @@ void test_short_fault_keeps_healthy_channels() {
   // 1,4 s:n välit, 600 rpm:llä 7 jaksoa). Nyt kanava on elävä vasta
   // asettumisen jälkeisestä omasta pulssista, ja asettumisen jälkeinen
   // suotimen ylitys (~1 kPa) ei ole oma pulssi (kOwnFloor). Jos vika jättää
-  // terveen kanavan tauon jälkeen yhden todistajan varaan ja vikaantunut
-  // kanava asettui syklin aikana, kasvava rajapulssi (1...2 x) ei hylkää
-  // sykliä. Rajat: alipaineen askel 4,1 jaksoa, blipit B:n raja + 150 ms
-  // (xtalk 0,5: 750 + 150).
+  // terveen kanavan tauon jälkeen yhden todistajan varaan, kasvava
+  // rajapulssi (1...2 x) ei hylkää sykliä. Rajat: alipaineen askel 4,1
+  // jaksoa, blipit B:n raja + 150 ms (xtalk 0,5: 750 + 150).
   struct Case {
     int kind;      // 0 = alipaineen askel -37 -> -55 kPa, 1 = tuplablip
     float rpm;     // askeleen kierrosluku tai blipin huippu (joutokäynti 850)
@@ -2384,7 +2396,7 @@ void test_short_fault_keeps_healthy_channels() {
       //    has_pulse putosi; kOwnFloor 0,3: sama (anturi ylös 250 ms).
       {1, 3000.0f, 0.5f, 2, 2516, 100, 2, 0, 450, 250, 950.0f},
       {1, 3000.0f, 0.5f, 2, 2516, 100, 2, 1, 300, 250, 950.0f},
-      // Rajapulssien samankokoisuuden poikkeus (asettunut kanava) vain
+      // Rajapulssien samankokoisuuden poikkeus (tauon jälkeen) vain
       // kasvavalle pulssille (1...2 x): ilman rajausta 2T kutistuvalla
       // pulssilla (29,3 -> 4,2 kPa, toisen blipin alku) ja pienestä pulssista
       // alkaneena (2,4 -> 12,2 kPa).
@@ -2393,6 +2405,15 @@ void test_short_fault_keeps_healthy_channels() {
       // Pitkä sykli (slow) ei ole tauko: jos sen paikka tarkistettaisiin
       // tauon säännöillä (ilman rytmiä ei paikkaa), 4T kelpaisi (190 ms).
       {1, 3000.0f, 0.5f, 1, 2598, 0, 2, 0, 450, 250},
+      // A:n vaimennus tuoreimmasta jaksosta, kun muut kanavat pulssivat: jos
+      // odotus laskettaisiin vanhasta viitteestä, terveen kanavan pienet
+      // pulssit jäisivät toisen blipin aikana tunnistamatta (1400 ms, has_pulse
+      // putosi).
+      {1, 3000.0f, 0.5f, 1, 2622, 100, 0, 1, 200, 250},
+      // Letku irti 400 ms toisen blipin ajan (950 -> 3000, xtalk 0,5): kanava
+      // on kuollut koko syklin ajan, terveen pulssi kasvaa takaisin (1304 ms ja
+      // has_pulse putosi, kun poikkeus vaati vian jälkeisen asettumisen).
+      {1, 3000.0f, 0.5f, 1, 2586, 100, 0, 2, 300, 400, 950.0f},
   };
   SimRun worst;
   for (const Case& k : cases) {

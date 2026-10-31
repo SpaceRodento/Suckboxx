@@ -69,10 +69,10 @@
 //    kanavan paikalle); nolla ei äänestä - kuollut tai heikko kanava ei estä
 //    muita.
 //  - vähintään yksi todistaja. Yhden todistajan syklissä rajapulssit
-//    samankokoiset (kaasunlisäyksen 2T: kutistuva pulssi). Poikkeus: tauon
-//    jälkeinen sykli, jonka aikana toinen kanava asettui vian jälkeen (sen
-//    paikka jäi tyhjäksi vian takia), saa kasvavan rajapulssin (1...2 x;
-//    kaasunlisäyksen lopussa pulssit kasvavat takaisin). Lisäksi
+//    samankokoiset (kaasunlisäyksen 2T: kutistuva pulssi); tauon jälkeen
+//    rajapulssi saa kasvaa 1...2 x (kaasunlisäyksen lopussa pulssit kasvavat
+//    takaisin juuri silloin, kun vika tai irti oleva letku jättää yhden
+//    todistajan). Lisäksi
 //    todistajan paikka nopeuden muutoksella korjattuna (s + (1 - jakso /
 //    edellinen oma väli) / 9) kSlotTolSingle:n sisällä: nT-välissä
 //    yksittäinen merkki osuu paikalleen (k + 1/3) / n:ssä tai (k + 2/3) /
@@ -1206,17 +1206,6 @@ class Dsp {
     return n;
   }
 
-  // Asettuiko jokin muu kanava vian jälkeen tämän syklin aikana (ikä
-  // a_old)? Sen paikka jäi silloin tyhjäksi vian takia, ei ohitetun pulssin
-  // takia. (Jos se ehti jo pulssia syklin aikana, se todisti; jos myöhemmin,
-  // se on elävä eikä tauon jälkeinen sykli kelpaa ilman sitä.)
-  bool resettled(int i, float a_old) const {
-    for (int j = 0; j < kChannels; ++j) {
-      if (j != i && static_cast<float>(n_ - ch_[j].live_from) < a_old) return true;
-    }
-    return false;
-  }
-
   // Syklin hyväksyntä (ks. ownPulse).
   bool accept(int i, float period, float depth, float a_new, float a_old) {
     Chan& c = ch_[i];
@@ -1247,16 +1236,17 @@ class Dsp {
     // samankokoiset kuten varatilassa. Nopeassa kaasunlisäyksessä pulssi
     // kutistuu ~2 x syklissä, kanavat ohittavat pulsseja, ja 2T-välin
     // säilynyt merkki voi osua kiihdytyksen vinouttamana 0,1:n sisään;
-    // kutistuva pulssi paljastaa tilanteen. Poikkeus: tauon jälkeinen sykli,
-    // jonka aikana toinen kanava asettui vian jälkeen (resettled - sen paikka
-    // jäi tyhjäksi vian takia) ja jonka rajapulssi kasvoi enintään kaksi
-    // kEnvStableFrac-askelta (1...2,04 x). Kaasunlisäyksen lopussa pulssit
-    // kasvavat (12,96 -> 20,38 kPa) juuri silloin, kun lyhytkin vika jättää
-    // terveen kanavan yhden todistajan varaan (xtalk 0,5:n tuplablipissä
-    // has_pulse putosi, 1,4 s:n väli). Ilman rajausta poikkeus päästi 2T:n läpi
-    // pitkässä syklissä (skew-korjaus selitti sen hidastumisena), kutistuvalla
-    // pulssilla (29,3 -> 4,2 kPa) ja pienestä pulssista alkaneena (2,4 -> 12,2).
-    if (np == 1 && c.pub.has_pulse && !similar(depth, c.own_d1) && !(susp && !slow && similar(kEnvStableFrac * depth, c.own_d1) && resettled(i, a_old))) return false;
+    // kutistuva pulssi paljastaa tilanteen. Poikkeus: tauon jälkeen (toinen
+    // muu kanava ei ole elävä, muuten kaikkia eläviä vaaditaan alla) rajapulssi
+    // saa kasvaa enintään kaksi kEnvStableFrac-askelta (1...2,04 x).
+    // Kaasunlisäyksen lopussa pulssit kasvavat (12,96 -> 20,38 kPa) juuri
+    // silloin, kun lyhytkin vika tai irti oleva letku jättää terveen kanavan
+    // yhden todistajan varaan (xtalk 0,5:n tuplablipissä has_pulse putosi,
+    // 1,4 s:n väli). Ilman rajausta poikkeus päästi 2T:n läpi pitkässä
+    // syklissä (skew-korjaus selitti sen hidastumisena), kutistuvalla
+    // pulssilla (29,3 -> 4,2 kPa) ja pienestä pulssista alkaneena (2,4 ->
+    // 12,2 kPa).
+    if (np == 1 && c.pub.has_pulse && !similar(depth, c.own_d1) && !(susp && !slow && similar(kEnvStableFrac * depth, c.own_d1))) return false;
     // Yksi todistaja ei riitä pelkällä paikallaan: sen on osuttava
     // nopeusmuutoksella korjattuun paikkaan (kSlotTolSingle, tauon jälkeen
     // myös vastapaikkaan, ks. slotDev).
