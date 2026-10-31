@@ -72,6 +72,11 @@ struct StatusParams {
   float drift_rpm = 50.0f;       // rivi 5: muutos yli tämän ...
   float drift_window_s = 2.0f;   // ... tämän ikkunan aikana
   bool auto_zero = true;         // rivi 1: automaattinen nollakalibrointi
+  // WP-9 (31.10.2026): EHDOTUKSIA omistajalle, eivät ole päätöslokissa.
+  // Perustelut ja mittaukset status.h:ssa ja calibration.h:ssa.
+  float hose_hyst_kpa = 0.2f;    // rivi 6: letkuvika poistuu vasta, kun |taso| >= hose_off_kpa + tämä
+  float drift_tau_s = 0.5f;      // rivi 5: rpm-arvion suodatus ennen ikkunavertailua, 0 = ei suodatusta
+  float zero_settle_kpa = 0.1f;  // rivi 1 ja nollaus: tason vaihteluväli 1 s:n aikana alle tämän
 };
 
 enum class SourceKind : uint8_t { Sim = 0, Adc = 1, Hx710b = 2 };

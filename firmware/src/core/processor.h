@@ -152,8 +152,9 @@ class Processor {
     in_.gain_valid = cal_.gain_valid;
     in_.now_s = now_s;
     status_ = sm_.update(in_);
-    // Rivi 1: StatusMachine pyytää kerran per NoSignal-jakso, kun tasot ovat
-    // olleet nollan tuntumassa ja paikallaan off_hold_s. Ajetaan myös
+    // Rivi 1: StatusMachine pyytää kerran per NoSignal-jakso, kun NoSignal on
+    // kestänyt off_hold_s ja tasot ovat nollan tuntumassa ja paikallaan
+    // (sama vakausportti kuin zeroNow:ssa). Ajetaan myös
     // vahvistusmittauksen aikana: pyyntö edellyttää ilmanpainetta, jolloin
     // mittaus päättyisi kuitenkin TooSmalliin, eikä reunaliipattu pyyntö
     // toistu ennen seuraavaa käyntiä.
@@ -165,15 +166,13 @@ class Processor {
   }
 
   // POST /api/cal/zero: vaatii ilmanpaineen (|nimellinen taso| <= off_kpa
-  // jokaisessa kanavassa, D10). Viesti calStatus().msg:iin.
+  // jokaisessa kanavassa, D10) ja tason vakauden (WP-9: vaihteluväli
+  // viimeisen 1 s:n aikana < zero_settle_kpa, muuten NotSettled). Sama portti
+  // kuin automaattisessa nollauksessa, joten juuri sammutetun moottorin vielä
+  // vuotava alipaine ei kirjaudu offsetiksi. Viesti calStatus().msg:iin.
   // Sallittu myös vahvistusmittauksen aikana: oikeassa mittauksessa T-haarassa
   // on alipainetta (-> NotAtmosphere, ei muutosta), ja jos alipaine on
   // päästetty, nollaus on aito ja mittaus päättyy TooSmalliin tai NotStableen.
-  // AVOIN: manuaalinen nollaus ei vaadi tason pysyneen paikallaan (vrt.
-  // StatusMachine::kAutoZeroBandKpa). Juuri sammutetun moottorin loukkuun
-  // jäänyt, vielä vuotava alipaine (esim. -3 kPa) kirjautuisi offsetiksi.
-  // Suositus: sama kaistaehto kuin automaattisessa nollauksessa ja oma
-  // CalResult (calibration.h) tekstille "odota että lukemat tasaantuvat".
   CalResult zeroNow() {
     const CalResult r = zeroFromLevels();
     cal_status_.msg = calResultText(r);
@@ -372,20 +371,27 @@ class Processor {
   void commitCal(const Calibration& c) {
     cal_ = c;
     dsp_.reset();
+    sm_.resetSettle();  // taso alkaa alusta uudella kalibroinnilla
     samples_ = 0;
   }
 
   // Nimelliset tasot kääntämällä kalibrointi DSP:n tasosta (EMA on lineaarinen,
   // ja DSP nollataan aina kalibroinnin muuttuessa, joten taso on yhdellä
   // kalibroinnilla mitattu): nimellinen = (taso - offset) / gain.
+  // Vakausportti: StatusMachinen ikkuna viimeisimmästä tickistä, kalibroidulla
+  // asteikolla kuten automaattisen nollauksen pyynnössä, jotta pyyntö ja sen
+  // toteutus eivät voi olla eri mieltä rajalla (gain 0,85-1,15 muuttaisi rajaa).
   CalResult zeroFromLevels() {
     if (samples_ == 0) return CalResult::NotAtmosphere;  // ei mittausta nollauksen jälkeen
     float nominal[kChannels];
+    float range[kChannels];
     for (int i = 0; i < kChannels; ++i) {
       nominal[i] = (dsp_.channel(i).level_kpa - cal_.offset_kpa[i]) / cal_.gain[i];
+      range[i] = sm_.settle().range(i);
     }
     Calibration c = cal_;
-    const CalResult r = computeZero(nominal, cfg_.status.off_kpa, c);
+    const CalResult r =
+        computeZero(nominal, range, cfg_.status.off_kpa, cfg_.status.zero_settle_kpa, c);
     if (r == CalResult::Ok) commitCal(c);
     return r;
   }

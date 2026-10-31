@@ -70,6 +70,15 @@ inline constexpr char kGroupSystem[] = "Järjestelmä";
 //   - sync_rpm_*: D12 500–3000; alaraja 100 (sammuva kone), yläraja sama kuin
 //     syklintunnistuksen katto.
 //   - unstable_cv: rivi 2:n 15 %. 1 % on jo tavallisen joutokäynnin hajonta.
+//   - hose_hyst_kpa 0…5 (WP-9): 0 = ei hystereesiä (WP-4:n käytös). Yli 5 kPa
+//     poistumisraja olisi jo off_kpa:n (D10) tuntumassa.
+//   - drift_tau_s 0…5 s (WP-9): 0 = suodattamaton vertailu. Aikavakio pidentää
+//     tunnistusviivettä ~aikavakion verran, joten yli 5 s (> 2 x ikkuna) ei
+//     enää kerro säädönaikaisesta ajautumisesta.
+//   - zero_settle_kpa 0,05…2 (WP-9): alaraja ADC-kohinan yläpuolella (taso-EMA:n
+//     1 s:n vaihteluväli enintään 0,04 kPa 4 mV RMS:n kohinalla, calibration.h);
+//     yli 2 kPa portti ei enää erota vuotavaa alipainetta (taso-EMA laskee
+//     off_kpa:sta nollaan ~1-2 s:ssa).
 //  Signaali (DspParams)
 //   - lp_cutoff_hz: vähintään 5 Hz, jotta 600 rpm:n pulssitaajuus (rpm/120 = 5 Hz)
 //     ei vaimene. Yläraja fs/4 = 250 Hz on vain digitaalisuotimen järkevä katto:
@@ -109,6 +118,8 @@ inline constexpr char kGroupSystem[] = "Järjestelmä";
     kGroupSync, "s", "Ei signaalia: kesto ennen nollausta")                                 \
   F(HoseOffKpa, status.hose_off_kpa, "hose_off_kpa", Float, 0.2f, 20.0f,                    \
     kGroupSync, "kPa", "Letkuvika: kanavan taso alle")                                      \
+  F(HoseHystKpa, status.hose_hyst_kpa, "hose_hyst_kpa", Float, 0.0f, 5.0f,                  \
+    kGroupSync, "kPa", "Letkuvika: poistumisen hystereesi")                                 \
   F(UnstableCv, status.unstable_cv, "unstable_cv", Float, 0.01f, 1.0f,                      \
     kGroupSync, "", "Epävakaa käynti: rpm-hajonta yli (osuus)")                             \
   F(StableHoldS, status.stable_hold_s, "stable_hold_s", Float, 0.0f, 30.0f,                 \
@@ -121,8 +132,12 @@ inline constexpr char kGroupSystem[] = "Järjestelmä";
     kGroupSync, "rpm", "Kierrosluku ajautuu: muutos yli")                                   \
   F(DriftWindowS, status.drift_window_s, "drift_window_s", Float, 0.5f, 30.0f,              \
     kGroupSync, "s", "Kierrosluku ajautuu: aikaikkuna")                                     \
+  F(DriftTauS, status.drift_tau_s, "drift_tau_s", Float, 0.0f, 5.0f,                        \
+    kGroupSync, "s", "Kierrosluku ajautuu: suodatuksen aikavakio")                          \
   F(AutoZero, status.auto_zero, "auto_zero", Bool, 0.0f, 1.0f,                              \
     kGroupSync, "", "Automaattinen nollaus moottorin ollessa sammuksissa")                  \
+  F(ZeroSettleKpa, status.zero_settle_kpa, "zero_settle_kpa", Float, 0.05f, 2.0f,           \
+    kGroupSync, "kPa", "Nollaus: tason vaihtelu 1 s:n aikana enintään")                     \
   F(LpCutoffHz, dsp.lp_cutoff_hz, "lp_cutoff_hz", Float, 5.0f, 250.0f,                      \
     kGroupSignal, "Hz", "Alipäästösuodattimen rajataajuus")                                 \
   F(LevelTauS, dsp.level_tau_s, "level_tau_s", Float, 0.05f, 10.0f,                         \
@@ -513,9 +528,9 @@ inline size_t configToJson(const Config& c, char* buf, size_t n) {
 }
 
 // Puskuri configToJson:lle (GET /api/config, ei näytepolulla). Pahin tapaus
-// (kaikki liukuluvut 6 merkitsevällä numerolla) on 4963 tavua 32 kentällä,
-// mitattu test_config:ssa; 6144 jättää varaa ~7 uudelle kentälle (~150 t/kenttä).
-// Testi kaatuu, jos vara putoaa alle 512 tavun.
+// (kaikki liukuluvut 6 merkitsevällä numerolla) on 5470 tavua 35 kentällä
+// (WP-9, 31.10.2026), mitattu test_config:ssa; 6144 jättää varaa ~4 uudelle
+// kentälle (~170 t/kenttä). Testi kaatuu, jos vara putoaa alle 512 tavun.
 constexpr size_t kConfigJsonSize = 6144;
 
 }  // namespace sbx

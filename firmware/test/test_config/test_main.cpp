@@ -95,6 +95,9 @@ static const Expect kExpect[] = {
     {"drift_rpm", 40.0f, [](const Config& c) { return c.status.drift_rpm; }},
     {"drift_window_s", 3.0f, [](const Config& c) { return c.status.drift_window_s; }},
     {"auto_zero", 0.0f, [](const Config& c) { return c.status.auto_zero ? 1.0f : 0.0f; }},
+    {"hose_hyst_kpa", 0.5f, [](const Config& c) { return c.status.hose_hyst_kpa; }},
+    {"drift_tau_s", 1.0f, [](const Config& c) { return c.status.drift_tau_s; }},
+    {"zero_settle_kpa", 0.2f, [](const Config& c) { return c.status.zero_settle_kpa; }},
     {"source", 1.0f, [](const Config& c) { return static_cast<float>(static_cast<uint8_t>(c.source)); }},
     {"push_rate_hz", 10.0f, [](const Config& c) { return static_cast<float>(c.push_rate_hz); }},
 };
@@ -107,7 +110,7 @@ void test_registry_covers_every_struct_member() {
   constexpr size_t n_sensor = aggregateFields<sbx::SensorParams>();
   constexpr size_t n_dsp = aggregateFields<sbx::DspParams>();
   constexpr size_t n_status = aggregateFields<sbx::StatusParams>();
-  static_assert(n_sensor == 8 && n_dsp == 9 && n_status == 13,
+  static_assert(n_sensor == 8 && n_dsp == 9 && n_status == 16,
                 "types.h muuttui: lisää uusi kenttä SBX_CONFIG_FIELDS-listaan ja tähän testiin");
   TEST_ASSERT_EQUAL_INT(static_cast<int>(n_sensor), fieldsInGroup(sbx::kGroupSensor));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(n_dsp), fieldsInGroup(sbx::kGroupSignal));
@@ -214,6 +217,36 @@ void test_ranges_match_physics_and_dsp_capacity() {
   // ja ilmanpaine (2700 mV) eivät ole vikoja millään sallitulla rajalla.
   TEST_ASSERT_LESS_THAN_FLOAT(825.0f, lo.max);
   TEST_ASSERT_GREATER_THAN_FLOAT(2700.0f - 200.0f - 0.5f, hi.min);
+}
+
+void test_wp9_proposed_fields_registered() {
+  // WP-9 (31.10.2026): kolme uutta kynnystä ovat S5a:n mukaan huoltosivulla
+  // säädettäviä. Oletukset ovat EHDOTUKSIA omistajalle (eivät päätöslokissa),
+  // mittausperusteet status.h:ssa ja calibration.h:ssa. Testi lukitsee ne,
+  // jotta muutos on tietoinen.
+  auto range = [](const char* key, float lo, float hi) {
+    const int i = sbx::configFindField(key);
+    TEST_ASSERT_TRUE_MESSAGE(i >= 0, key);
+    const FieldInfo& f = sbx::configField(i);
+    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(lo, f.min, key);
+    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(hi, f.max, key);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(sbx::kGroupSync, f.group, key);
+  };
+  // 0 = ominaisuus pois eli WP-4:n käytös (valittavissa, jos ehdotus hylätään).
+  range("hose_hyst_kpa", 0.0f, 5.0f);
+  range("drift_tau_s", 0.0f, 5.0f);
+  // Alaraja ADC-kohinan yläpuolella: 0 tekisi nollauksesta mahdottoman.
+  range("zero_settle_kpa", 0.05f, 2.0f);
+  const Config c;
+  TEST_ASSERT_EQUAL_FLOAT(0.2f, c.status.hose_hyst_kpa);
+  TEST_ASSERT_EQUAL_FLOAT(0.5f, c.status.drift_tau_s);
+  TEST_ASSERT_EQUAL_FLOAT(0.1f, c.status.zero_settle_kpa);
+  Config off;
+  TEST_ASSERT_EQUAL_INT(R(SetResult::Ok), R(sbx::configSetText(off, "hose_hyst_kpa", "0")));
+  TEST_ASSERT_EQUAL_INT(R(SetResult::Ok), R(sbx::configSetText(off, "drift_tau_s", "0")));
+  TEST_ASSERT_EQUAL_INT(R(SetResult::OutOfRange), R(sbx::configSetText(off, "zero_settle_kpa", "0")));
+  char err[160];
+  TEST_ASSERT_TRUE_MESSAGE(sbx::configValidate(off, err, sizeof(err)), err);
 }
 
 // --- oletukset ja get/set ----------------------------------------------------
@@ -690,6 +723,7 @@ int main() {
   RUN_TEST(test_every_key_maps_to_its_own_member);
   RUN_TEST(test_keys_labels_groups_ranges_wellformed);
   RUN_TEST(test_ranges_match_physics_and_dsp_capacity);
+  RUN_TEST(test_wp9_proposed_fields_registered);
   RUN_TEST(test_defaults_in_range_and_valid);
   RUN_TEST(test_get_set_round_trip_every_field);
   RUN_TEST(test_set_rejects_and_leaves_value_untouched);
