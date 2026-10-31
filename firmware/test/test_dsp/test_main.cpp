@@ -1084,8 +1084,9 @@ struct SimOpts {
   long hose_t2 = -1;        // letkut takaisin tällä hetkellä (-1 = ei)
   long off_t1 = -1, off_t2 = -1;  // moottori seis [off_t1, off_t2): 0 = kylmäkäynnistys
   long watch_from = 2000;   // tiukka tarkistus ja välit tästä hetkestä
-  int sens_ch = -1;         // anturi alas (SensorLow) kanavalla sens_ch [sens_t1, sens_t2)
+  int sens_ch = -1;         // anturivika kanavalla sens_ch [sens_t1, sens_t2)
   long sens_t1 = 0, sens_t2 = 0;
+  sbx::SimFault sens_kind = sbx::SimFault::SensorLow;
   int weak_ch = -1;         // heikko sylinteri: sen pulssi (oma ja vuoto) x weak_scale
   float weak_scale = 1.0f;
   long est_from = -1;       // RpmEstimate vs nimellis tästä hetkestä (-1 = ei)
@@ -1147,7 +1148,7 @@ SimRun runSim(sbx::SimParams p, const SimOpts& o, F sched) {
       reconf = true;
     }
     if (o.sens_ch >= 0 && (t == o.sens_t1 || t == o.sens_t2)) {
-      p.fault[o.sens_ch] = t == o.sens_t1 ? sbx::SimFault::SensorLow : sbx::SimFault::None;
+      p.fault[o.sens_ch] = t == o.sens_t1 ? o.sens_kind : sbx::SimFault::None;
       reconf = true;
     }
     if (reconf) {
@@ -1407,7 +1408,11 @@ void test_rpm_step_down_keeps_lock() {
         worst.worst_cycle * 100.0, worst.worst_straddle * 100.0, static_cast<double>(worst.disp_err * 100.0f));
     TEST_ASSERT_FALSE_MESSAGE(worst.dropped, "has_pulse putosi");
     TEST_ASSERT_EQUAL_INT(0, worst.wrong);
-    TEST_ASSERT_LESS_OR_EQUAL(static_cast<int>(4.0f * periodMs(850.0f)) + 60, static_cast<int>(worst.max_gap));
+    // A:n raja on 4T + 60 ms; uusi jakso hyväksytään kuitenkin jo kahden uuden
+    // jakson päästä (askeleen ylittävä sykli + yksi): yhden todistajan
+    // nopeuskorjattu paikka koskee vain yhden todistajan syklejä - kahden
+    // todistajan syklissä askeleen vinouttama paikka (0,08-0,1) on sallittu.
+    TEST_ASSERT_LESS_OR_EQUAL(static_cast<int>(2.0f * periodMs(850.0f)) + 30, static_cast<int>(worst.max_gap));
     TEST_ASSERT_LESS_THAN_FLOAT(0.03f, static_cast<float>(worst.worst_cycle));
     TEST_ASSERT_LESS_THAN_FLOAT(0.13f, static_cast<float>(worst.worst_straddle));
     TEST_ASSERT_LESS_THAN_FLOAT(0.03f, worst.disp_err);
@@ -2083,17 +2088,25 @@ void test_single_witness_needs_rhythm() {
     long t0;
     int reps, hose_ch, weak_ch;
     float idle;
-    long gap;
+    long gap, hold;
   };
   const Case cases[] = {
-      {3000.0f, 0.5f, 0.01f, 12.0f, 8, 2583, 1, 2, -1, 850.0f, 0},
-      {3000.0f, 0.5f, 0.01f, 12.0f, 8, 2630, 1, 0, -1, 850.0f, 0},
-      {3000.0f, 0.5f, 0.01f, 12.0f, 5, 2558, 1, 1, -1, 850.0f, 0},
-      {2000.0f, 0.0f, 0.01f, 12.0f, 1, 2537, 1, -1, 2, 850.0f, 0},
-      {2000.0f, 0.3f, 0.01f, 12.0f, 1, 2537, 2, -1, 2, 850.0f, 0},
-      {2500.0f, 0.3f, 0.03f, 20.0f, 6, 2561, 1, -1, -1, 850.0f, 0},
-      {2500.0f, 0.3f, 0.03f, 20.0f, 6, 2561, 2, -1, -1, 850.0f, 0},
-      {3000.0f, 0.5f, 0.01f, 12.0f, 1, 2512, 2, 2, -1, 950.0f, 100},
+      {3000.0f, 0.5f, 0.01f, 12.0f, 8, 2583, 1, 2, -1, 850.0f, 0, 0},
+      {3000.0f, 0.5f, 0.01f, 12.0f, 8, 2630, 1, 0, -1, 850.0f, 0, 0},
+      {3000.0f, 0.5f, 0.01f, 12.0f, 5, 2558, 1, 1, -1, 850.0f, 0, 0},
+      {2000.0f, 0.0f, 0.01f, 12.0f, 1, 2537, 1, -1, 2, 850.0f, 0, 0},
+      {2000.0f, 0.3f, 0.01f, 12.0f, 1, 2537, 2, -1, 2, 850.0f, 0, 0},
+      {2500.0f, 0.3f, 0.03f, 20.0f, 6, 2561, 1, -1, -1, 850.0f, 0, 0},
+      {2500.0f, 0.3f, 0.03f, 20.0f, 6, 2561, 2, -1, -1, 850.0f, 0, 0},
+      {3000.0f, 0.5f, 0.01f, 12.0f, 1, 2512, 2, 2, -1, 950.0f, 100, 1},  // tarkistajan tuplablippi 150/1/299
+      // Letku 3 irti, tuplablippi 850 -> 3000: kanava 2 kirjasi vuodosta alkavan
+      // syklin (tauko-poikkeus, todistaja 2/3:n toleranssissa), mutta alkupulssi
+      // osui todistajan syklissä 0,46:een (vastapaikka 1/3).
+      {3000.0f, 0.5f, 0.01f, 12.0f, 6, 2537, 2, 2, -1, 850.0f, 0, 0},
+      // Heikko sylinteri, tuplapikablippi: tauko edellisestä hyväksytystä ja
+      // vaiennut heikko kanava -> kaikki elävät todistajat (ilman tauko-ehtoa 2T).
+      {3000.0f, 0.3f, 0.01f, 20.0f, 7, 2575, 2, -1, 0, 850.0f, 0, 0},
+      {3000.0f, 0.3f, 0.01f, 12.0f, 8, 2524, 2, -1, 2, 850.0f, 0, 0},
   };
   SimRun worst;
   for (const Case& k : cases) {
@@ -2111,8 +2124,7 @@ void test_single_witness_needs_rhythm() {
       o.weak_ch = k.weak_ch;
       o.weak_scale = 0.5f;
     }
-    const long hold = k.gap > 0 ? 1 : 0;  // tarkistajan tuplablippi: 150/1/299, tauko 100
-    worstOf(worst, runSim(p, o, Blips{k.rpm1, o.t0, 150, hold, 300 - hold, k.reps, k.idle, k.d1, k.gap}));
+    worstOf(worst, runSim(p, o, Blips{k.rpm1, o.t0, 150, k.hold, 300 - k.hold, k.reps, k.idle, k.d1, k.gap}));
   }
   msg("yksi todistaja pikablipeissä (letku irti, heikko sylinteri, jitter 3 %%): väärät %.0f, terveiden väli %.0f ms",
       static_cast<double>(worst.wrong), static_cast<double>(worst.max_gap));
@@ -2165,6 +2177,22 @@ void test_hose_swap_relearns_firing_order() {
   TEST_ASSERT_EQUAL_INT(0, restart.wrong);
   TEST_ASSERT_FALSE_MESSAGE(run.dropped, "has_pulse putosi letkujen vaihdossa");
   TEST_ASSERT_GREATER_OR_EQUAL(0, restart.lock_ms);
+  // Järjestys unohdetaan vain, kun yhdelläkään kanavalla ei ole has_pulsea.
+  // Letku 1 irti ja tuplapikablippi 850 -> 3000 xtalk 0,5:llä: terveen
+  // kanavan has_pulse voi pudota (FaultHose, ks. dsp.h), mutta toinen pulssii
+  // yhä. Jos järjestys unohdettaisiin jo yhden kanavan aikakatkaisussa, se
+  // opittaisiin uudelleen ohitetun pulssin 2T-välistä (tarkistajan toisto).
+  sbx::SimParams p;
+  p.xtalk = 0.5f;
+  p.seed = 1;
+  SimOpts o;
+  o.t0 = 2608;
+  o.t_end = o.t0 + 2 * 450 + 100;
+  o.total = o.t_end + 1500;
+  o.hose_mask = 1;
+  const SimRun one = runSim(p, o, Blips{3000.0f, o.t0, 150, 0, 300, 2, 850.0f, 12.0f, 100});
+  msg("letku 1 irti, tuplablippi xtalk 0,5 (terveen aikakatkaisu): väärät %.0f", static_cast<double>(one.wrong));
+  TEST_ASSERT_EQUAL_INT(0, one.wrong);
 }
 
 void test_short_fault_does_not_bias_channel_mean() {
@@ -2256,6 +2284,85 @@ void test_hose_pulled_at_vacuum_step() {
   TEST_ASSERT_TRUE(worst.finite);
   TEST_ASSERT_FALSE_MESSAGE(worst.dropped, "has_pulse putosi elävältä kanavalta");
   TEST_ASSERT_LESS_OR_EQUAL(static_cast<int>(4.1f * periodMs(600.0f)), static_cast<int>(worst.max_gap));
+}
+
+void test_short_fault_keeps_healthy_channels() {
+  // Lyhyt vika yhdellä kanavalla (anturi alas tai ylös tai letku irti 20-400
+  // ms ja takaisin) alipaineen askeleessa tai tuplablipissä (F1). Vikaantunut
+  // kanava asettuu uudelleen, mutta sen ennen vikaa mitattu oma pulssi oli
+  // vielä tuore: kanava laskettiin eläväksi todistajaksi, vaikka se ei ollut
+  // koko syklin ajan elossa ja jätti siksi oman paikkansa tyhjäksi. Pitkän
+  // tauon jälkeen "kaikki elävät todistajat" -sääntö hylkäsi silloin terveiden
+  // oikeat syklit has_pulsen aikakatkaisuun asti (tarkistajan toistot alla:
+  // 1,4 s:n välit, 600 rpm:llä 7 jaksoa). Nyt kanava on elävä vasta
+  // asettumisen jälkeisestä omasta pulssista, ja asettumisen jälkeinen
+  // suotimen ylitys (~1 kPa) ei ole oma pulssi (kOwnFloor). Rajat: alipaineen
+  // askel 4,1 jaksoa, blipit B:n raja + 150 ms (xtalk 0,5: 750 + 150).
+  struct Case {
+    int kind;      // 0 = alipaineen askel -37 -> -55 kPa, 1 = tuplablip
+    float rpm;     // askeleen kierrosluku tai blipin huippu (joutokäynti 850)
+    float xt;
+    uint32_t seed;
+    long t0;
+    long gap;      // tuplablipin tauko
+    int ch;        // vikaantuva kanava
+    int fault;     // 0 = anturi alas, 1 = anturi ylös, 2 = letku irti
+    long off, dur;  // vika [t0 + off, t0 + off + dur)
+  };
+  const Case cases[] = {
+      {0, 600.0f, 0.0f, 4, 2576, 0, 0, 0, 300, 150},   // 1404 ms (7 jaksoa)
+      {0, 600.0f, 0.0f, 4, 2576, 0, 0, 2, 300, 150},
+      {0, 600.0f, 0.0f, 4, 2576, 0, 0, 2, 30, 400},    // asettumisen ylitys omana pulssina: 1404 ms
+      {0, 850.0f, 0.0f, 2, 2556, 0, 1, 0, 200, 80},    // 707 ms (5 jaksoa)
+      {0, 850.0f, 0.3f, 2, 2556, 0, 1, 2, 200, 80},
+      {1, 1500.0f, 0.0f, 1, 2598, 0, 2, 1, 300, 50},   // 702 ms
+      {1, 1500.0f, 0.3f, 1, 2598, 0, 2, 2, 300, 50},
+      {1, 3000.0f, 0.5f, 3, 2572, 100, 0, 2, 300, 80},  // 1394 ms
+      {1, 3000.0f, 0.5f, 3, 2572, 100, 0, 0, 300, 100},
+      {1, 3000.0f, 0.5f, 1, 2622, 100, 0, 0, 450, 20},  // 1400 ms
+  };
+  SimRun worst;
+  for (const Case& k : cases) {
+    sbx::SimParams p;
+    p.xtalk = k.xt;
+    p.seed = k.seed;
+    SimOpts o;
+    o.t0 = k.t0;
+    if (k.fault == 2) {
+      o.hose_mask = 1 << k.ch;
+      o.hose_t = o.t0 + k.off;
+      o.hose_t2 = o.hose_t + k.dur;
+    } else {
+      o.sens_ch = k.ch;
+      o.sens_kind = k.fault == 0 ? sbx::SimFault::SensorLow : sbx::SimFault::SensorHigh;
+      o.sens_t1 = o.t0 + k.off;
+      o.sens_t2 = o.sens_t1 + k.dur;
+    }
+    SimRun r;
+    int lim = 0;
+    if (k.kind == 0) {
+      p.rpm = k.rpm;
+      p.base_kpa = -37.0f;
+      o.t_end = o.t0;
+      o.total = o.t0 + 2500;
+      o.step_t = static_cast<double>(o.t0);
+      r = runSim(p, o, Ramp{k.rpm, k.rpm, -37.0f, -55.0f, 20.0f, 20.0f, o.t0, 0});
+      lim = static_cast<int>(4.1f * periodMs(k.rpm));
+    } else {
+      o.t_end = o.t0 + 2 * (450 + k.gap) - k.gap;
+      o.total = o.t_end + 2000;
+      r = runSim(p, o, Blips{k.rpm, o.t0, 150, 0, 300, 2, 850.0f, 12.0f, k.gap});
+      lim = (k.xt > 0.4f ? 750 : 450) + 150;
+    }
+    worstOf(worst, r);
+    msg("vika %.0f kanavalla %.0f (%.0f ms, alku %+.0f ms), %.0f rpm, xtalk %.1f: terveiden väli %.0f ms",
+        static_cast<double>(k.fault), static_cast<double>(k.ch), static_cast<double>(k.dur), static_cast<double>(k.off),
+        static_cast<double>(k.rpm), static_cast<double>(k.xt), static_cast<double>(r.max_gap));
+    TEST_ASSERT_FALSE_MESSAGE(r.dropped, "has_pulse putosi terveeltä kanavalta");
+    TEST_ASSERT_LESS_OR_EQUAL(lim, static_cast<int>(r.max_gap));
+  }
+  TEST_ASSERT_EQUAL_INT(0, worst.wrong);
+  TEST_ASSERT_TRUE(worst.finite);
 }
 
 void test_weak_cylinder_quick_blips() {
@@ -3002,6 +3109,7 @@ int main() {
   RUN_TEST(test_reconnected_hose_is_not_a_witness);
   RUN_TEST(test_short_fault_does_not_bias_channel_mean);
   RUN_TEST(test_hose_pulled_at_vacuum_step);
+  RUN_TEST(test_short_fault_keeps_healthy_channels);
   RUN_TEST(test_single_witness_needs_rhythm);
   RUN_TEST(test_hose_swap_relearns_firing_order);
   RUN_TEST(test_weak_cylinder_quick_blips);

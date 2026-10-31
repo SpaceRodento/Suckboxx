@@ -296,14 +296,14 @@ class Dsp {
   // pulssi on vain 6,7 ms päässä: leveämpi ikkuna (0,25 x pulssin leveys)
   // kasvatti naapurin pudotusta ja hukkasi pieniä omia pulsseja (821 vs 892/1001).
   static constexpr float kOwnHalfWindow = 1.0f;
-  // Oman pulssin pudotus vähintään tämä osuus kanavan edellisestä omasta
-  // syvyydestä. Asettumisen (vika, takaisin kytketty letku) jälkeen
-  // amplitudiarvio on nolla ja Schmitt laukeaa jo 0,15 kPa:n heilahduksesta:
-  // juuri ohitetun oman pulssin palautumisen ylitys (~1 kPa, 2-5 % syvyydestä)
-  // oli muiden ollessa tasaisia "oma pulssi" väärällä paikalla ja esti terveiden
-  // syklit (600 rpm:n alipaineaskel, letku irti: 1,4 s:n väli). Kaasunlisäyksen
-  // kutistuva pulssi on >= 0,25 x edellinen, heikko sylinteri vertautuu omaan
-  // syvyyteensä.
+  // Vian jälkeen asettuneen kanavan ensimmäisen oman pulssin pudotus
+  // vähintään tämä osuus sen ennen vikaa mitatusta omasta syvyydestä.
+  // Asettumisen jälkeen amplitudiarvio on nolla ja Schmitt laukeaa jo 0,15
+  // kPa:n heilahduksesta: asettumisen aikana ohitetun oman pulssin
+  // palautumisen ylitys (~1 kPa, 5 % syvyydestä) oli muiden ollessa tasaisia
+  // "oma pulssi" väärällä paikalla ja esti terveiden syklit (600 rpm:n
+  // alipaineaskel, letku irti: 1,4 s:n väli). Vain ensimmäinen: kaasunlisäyksen
+  // kutistuva pulssi on suodatettuna jopa 0,08 x edellinen oma.
   static constexpr float kOwnFloor = 0.1f;
   // Varatilassa (ei eläviä todistajia) jakso hyväksytään vain edellisen oman
   // välin ja viitteen +- tämän sisällä. Yhdeltä kanavalta ei voi erottaa
@@ -817,9 +817,15 @@ class Dsp {
 
     const bool lock = c.pub.has_pulse;
     float amp = amplitude(c, lock);
+    const float peer = peerDepth(i);
     if (lock) {
       // Odotettu raja myöhässä: A vaimenee (kaasu auki -> pulssi kutistuu).
-      const float p = freshPeriod(c);
+      // Odotus tuoreimmasta jaksosta (ks. freshPeriod), kun muut kanavat
+      // pulssivat (peer > 0): omistajuus vertaa niihin, joten oma väli on
+      // todellinen. Varatilassa (ei muita) oma "pulssi" voi olla vuoto (T/3),
+      // ja nopea vaimennus lukitsi kanavan vuotojen rytmiin (kaksi letkua
+      // irti, alipaineen askel: 1,4 s:n väli).
+      const float p = peer > 0.0f ? freshPeriod(c) : c.ref_period;
       if (static_cast<float>(c.since_boundary) > kDecayStart * p) {
         if (p != c.decay_for) {
           c.decay_for = p;
@@ -835,7 +841,6 @@ class Dsp {
     // oman jälkeen, A laskee niistä suurimpaan. Tämän kanavan vuotopulssit
     // tulevat juuri niistä sylintereistä (<= xtalk x niiden syvyys), joten ne
     // jäävät yhä laukaisutason (A + h) / 2 alle.
-    const float peer = peerDepth(i);
     if (peer > 0.0f && peer < amp) amp = peer;
     float h = dp_.hyst_frac * amp;
     if (h < dp_.hyst_min_kpa) h = dp_.hyst_min_kpa;
@@ -1007,17 +1012,19 @@ class Dsp {
   // muiden omia pulsseja (alipaineen askeleen kanssa has_pulse putosi).
   // Kun kumpikaan muu ei ole elävä (käynnistys, moottori sammui), vertailu
   // tehdään kaikkiin: muuten ensimmäisenä pulssiva kanava omistaisi vuodot.
-  // Pudotuksen on myös oltava vähintään kOwnFloor kanavan edellisestä omasta
-  // syvyydestä (asettumisen jälkeinen suotimen ylitys ei ole pulssi).
+  // Vian jälkeen asettuneen kanavan ensimmäisen oman pulssin on lisäksi
+  // oltava vähintään kOwnFloor sen edellisestä omasta syvyydestä.
   bool isOwn(int i, float m_age, float width) const {
-    const float fi = fallOf(ch_[i], m_age, width);
+    const Chan& c = ch_[i];
+    const float fi = fallOf(c, m_age, width);
+    const bool first = c.own_n == 0 || age(c.own_int[0], c.own_frac[0]) >= static_cast<float>(n_ - c.live_from);
     float fo = 0.0f;
     for (int j = 0; j < kChannels; ++j) {
       if (j == i || (!live(i, j) && live(i, kChannels - i - j))) continue;
       const float f = fallOf(ch_[j], m_age, width);
       if (f > fo) fo = f;
     }
-    return fi > kOwnFloor * ch_[i].own_d1 && fi - fo >= kOwnMargin * fi;
+    return fi > (first ? kOwnFloor * c.own_d1 : 0.0f) && fi - fo >= kOwnMargin * fi;
   }
 
   // Pulssi mitattu: keskikohta, omistajuus ja oman pulssin sykli.
@@ -1058,23 +1065,21 @@ class Dsp {
   // (muuten lyhytkin vika kaasunlisäyksen lopussa jätti terveen kanavan
   // yhden todistajan varaan juuri, kun pulssit kasvavat).
   //
-  // Paikka on molemminpuolinen: jos todistajan edellinen oma väli on noin
-  // syklin mittainen, tämän syklin alkupulssin on osuttava todistajan
-  // syklissä omalle paikalleen (1 - todistajan paikka) +- kSlotTol. Yksi
-  // letku irti ja xtalk 0,5: oma pulssi ja kuolleen sylinterin vuoto
-  // sulautuvat yhdeksi leveäksi kuopaksi, jonka keskikohta on vuodon kohdalla;
-  // sykli vuodosta omaan pulssiin (2/3 T) sai todistajan 2/3:n paikan
-  // toleranssiin, mutta alkupulssi osui todistajan syklissä 0,46:een.
+  // mdev = vastapaikan poikkeama: paikka on molemminpuolinen, joten jos
+  // todistajan edellinen oma väli on syklin mittainen (+-kSmallPulseRatio),
+  // tämän syklin alkupulssin pitäisi osua todistajan syklissä paikalle
+  // 1 - (todistajan paikka). Käytetään yhden todistajan syklissä, jota
+  // nopeuskorjaus ei koske (ks. accept).
   //
   // dev = vahvistavan todistajan suurin poikkeama nopeuden muutoksella
   // korjatusta paikasta. Kun kierrosnopeus muuttuu tasaisesti, jakso /
   // edellinen oma väli = lr ja kulmanopeus syklin alussa ~(1 + (lr - 1) / 2)
   // x keskimääräinen; kampi saavuttaa 1/3:n ja 2/3:n aikaisemmin
   // (hidastuessa) siirtymällä (1 - lr) / 2 x s(1 - s) = (1 - lr) / 9.
-  int confirm(int i, float a_new, float a_old, float period, int& nl, float& dev) {
+  int confirm(int i, float a_new, float a_old, float period, int& nl, float& dev, float& mdev) {
     int np = 0, sum = 0;
     nl = 0;
-    dev = 0.0f;
+    dev = mdev = 0.0f;
     const float lr = ch_[i].last_period > 0.0f ? period / ch_[i].last_period : 1.0f;
     for (int j = 0; j < kChannels; ++j) {
       if (j == i) continue;
@@ -1096,8 +1101,9 @@ class Dsp {
       const bool first = std::fabs(u - 1.0f / 3.0f) <= kSlotTol;
       if (n > 1 || !(first || std::fabs(u - 2.0f / 3.0f) <= kSlotTol)) return -1;
       const float w = back + u * period;  // todistajan väli
-      if (back > 0.0f && similar(w, period) && std::fabs(back / w - (first ? 2.0f / 3.0f : 1.0f / 3.0f)) > kSlotTol) {
-        return -1;
+      if (back > 0.0f && w <= kSmallPulseRatio * period && kSmallPulseRatio * w >= period) {
+        const float m = std::fabs(back / w - (first ? 2.0f / 3.0f : 1.0f / 3.0f));
+        if (m > mdev) mdev = m;
       }
       const float d = std::fabs(u - (first ? 1.0f / 3.0f : 2.0f / 3.0f) - (1.0f - lr) / 9.0f);
       if (d > dev) dev = d;
@@ -1123,8 +1129,8 @@ class Dsp {
     const bool three = similar(depth, c.own_d1) && similar(c.own_d1, c.own_d2) && similar(depth, c.own_d2);
     if (!c.pub.has_pulse && !three) return false;
     int nl = 0;
-    float dev = 0.0f;
-    const int np = confirm(i, a_new, a_old, period, nl, dev);
+    float dev = 0.0f, mdev = 0.0f;
+    const int np = confirm(i, a_new, a_old, period, nl, dev, mdev);
     if (np < 0) return false;
     if (nl == 0) {
       // Varatila: jakso edellisen oman välin (ja lukittuna viitteen) +-
@@ -1140,14 +1146,17 @@ class Dsp {
     // kutistuva pulssi paljastaa tilanteen.
     if (np == 1 && c.pub.has_pulse && !similar(depth, c.own_d1)) return false;
     // Yksi todistaja ei riitä pelkällä paikallaan: sen on osuttava
-    // nopeusmuutoksella korjattuun paikkaan (kSlotTolSingle). Ei koske
-    // sykliä, joka on epäilyttävä vain tauon vuoksi (jakso tavallinen,
-    // edellinen hylätty): edellinen oma väli ei silloin ennusta paikkaa
-    // (xtalk 0,5:n tuplablipissä letku irti has_pulse putosi).
+    // nopeusmuutoksella korjattuun paikkaan (kSlotTolSingle). Sykli, joka on
+    // epäilyttävä vain tauon vuoksi (jakso tavallinen, edellinen hylätty),
+    // tarkistetaan toisin: edellinen oma väli ei silloin ennusta paikkaa
+    // (ohitettu pulssi; xtalk 0,5:n tuplablipissä letku irti has_pulse putosi),
+    // joten paikka tarkistetaan todistajan puolelta (mdev <= kSlotTol). Pitkä
+    // sykli verrataan tuoreimpaan jaksoon: 2T kaasunlisäyksen jälkeen on
+    // vanhaan viitteeseen nähden tavallinen, mutta 2 x edellinen oma väli.
     const float since = static_cast<float>(c.since_cycle);
     const bool slow = c.ref_period > 0.0f && period > kBothRatio * freshPeriod(c);
     const bool susp = slow || (c.ref_period > 0.0f && since > kBothRatio * c.ref_period);
-    if (np == 1 && (slow || !susp) && dev > kSlotTolSingle) return false;
+    if (np == 1 && (slow || !susp ? dev > kSlotTolSingle : mdev > kSlotTol)) return false;
     // Pitkä sykli tai pitkä tauko edellisestä hyväksytystä (viite vanhentunut,
     // esim. kaikki kanavat ohittivat pulsseja kaasunlisäyksessä): kaikki
     // elävät todistajat.
