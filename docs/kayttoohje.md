@@ -6,14 +6,17 @@ imualipaineen ja näyttää puhelimessa, **mitä kaasutinta pitää säätää j
 Ohje vastaa laiteohjelmistoa ja web-käyttöliittymää 31.10.2026. Näytön tekstit on kopioitu
 koodista (`firmware/src/core/status.h`, `web/index.html`). Jos ohje ja laite ovat eri mieltä,
 laite on oikeassa. Päätösten perustelut ovat [SUUNNITTELU.md](../SUUNNITTELU.md):ssä (tunnukset
-D1–D14, vaatimukset R1–R6, käytösmatriisi §8).
+D1–D16, vaatimukset R1–R6, käytösmatriisi §8). Hondan arvot lähteineen ovat tiedostossa
+[bf50a-huoltotiedot.md](bf50a-huoltotiedot.md) (verkosta 31.10.2026, ei korvaa Hondan
+korjaamokäsikirjaa).
 
 **Merkinnät**
 
 - `koodifontti` = teksti täsmälleen niin kuin laite sen näyttää
 - `N` ja `M` = sylinterin numero (1–3), `X` ja `Y` = laitteen näyttämä luku
-- **Huolto-ohjeesta** = arvo, jota tässä ohjeessa ei ole. Se katsotaan Hondan huolto-ohjeesta
-  eikä sitä arvata.
+- **(A)**, **(B)**, **(C)** = lähteen luotettavuus: Hondan aineisto, huoltolähde, foorumi
+- **Varmistettava** = arvo, jota lähteistä ei löytynyt tai joka on vain B- tai C-tasoa. Se
+  tarkistetaan Hondan käsikirjasta tai moottorilta eikä sitä arvata.
 
 **Sisältö**
 
@@ -40,6 +43,10 @@ Lue tämä ennen jokaista käyttökertaa. Lähde: [moottoriajo.md](moottoriajo.m
 > huuhtelukupit paikalleen ja vesi auki **ennen** käynnistystä, tai moottori vedessä. Tarkista
 > heti käynnistyksen jälkeen, että jäähdytysveden tarkkailusuihku virtaa. Jos se ei virtaa,
 > sammuta heti.
+>
+> **Huuhtelukupeilla vain vapaalla ja tyhjäkäynnillä** (A): Hondan mukaan tyhjäkäyntiä suuremmat
+> kierrokset voivat vaurioittaa vesipumppua ja ylikuumentaa moottorin. Korotetut kierrokset vain
+> testisäiliössä tai vesillä.
 
 > ⚠️ **Potkuri.** Vapaa-asento ennen käynnistystä ja koko työn ajan. Trailerilla potkuri on
 > vapaana, eikä sen lähellä saa olla ketään. Vesillä vene kiinni laiturissa. Sammutusnaru
@@ -70,34 +77,43 @@ kosketettaessa) tai jäähdytysvesi ei kierrä.
 
 ## 2. Huolto-ohjeesta tarkistettavat
 
-Näitä arvoja ei ole tässä repossa. Ne tarkistetaan Hondan huolto-ohjeesta ennen työtä.
+Hondan arvot on haettu verkosta 31.10.2026 ja kirjattu lähteineen tiedostoon
+[bf50a-huoltotiedot.md](bf50a-huoltotiedot.md) (D16). Ne eivät korvaa Hondan
+korjaamokäsikirjaa. Viimeisen sarakkeen kohdat tarkistetaan ennen työtä.
 
-| asia | mitä repossa on |
-|---|---|
-| Tyhjäkäyntikierrokset | omistajan tieto 850–950 rpm (D6), ei varmistettu |
-| Mikä kaasutin on kiinteä perus (= master) | laitteen oletus SYL 1 (D7), ei varmistettu |
-| Mikä sylinteri on SYL 1 | ei tietoa |
-| Kumpaan suuntaan synkronointiruuvi avaa läppää | ei tietoa: laite sanoo vain `AVAA` tai `SULJE` |
-| Synkronointitulpan kierre | todennäköisesti M6, varmistettava (kokeile M6×1,0- ja M5×0,8-muttereita) |
-| Synkronoidaanko joutokäynnillä vai korotetulla joutokäynnillä | laite antaa arvion välillä 500–3000 rpm (D12) |
-| Saako huuhtelukupeilla ajaa korotetuilla kierroksilla, ja kuinka kauan | ei tietoa; jos ohje kieltää, korotetut kierrokset vesillä |
-| Synkronoinnin toleranssi | laitteen oletus 1,5 / 3,0 kPa (D2), ks. [5.3](#53-värit-ja-toleranssi-d2) |
+| asia | lähteiden mukaan | varmistettava |
+|---|---|---|
+| Tyhjäkäyntikierrokset | **950 ± 50 rpm vapaalla** (A). Vaihteella Hondan arvoa ei löytynyt. | – |
+| Mikä kaasutin on kiinteä perus (= master) | **alin kaasutin No. 3** (A + B). Laitteen oletus on SYL 3 (D7/D16). | ettei alimmassa kaasuttimessa ole synkronointiruuvia; laitteelta, että master on SYL 3 ([§9](#9-master-sylinteri)) |
+| Mikä sylinteri on SYL 1 | No. 1 = ylin, No. 3 = alin kaasutin (päätelmä A + B -lähteistä: alin on perus ja perus on No. 3). Kytke SYL 1 ylimpään ja SYL 3 alimpaan. | osaluettelon "(CARBURETOR NO.)" |
+| Säätöjärjestys | ensin No. 2, sitten No. 1; 1/8 kierrosta kerrallaan ja kaasu auki ja kiinni jokaisen säädön jälkeen (A + B) | – |
+| Kumpaan suuntaan synkronointiruuvi avaa läppää | ei löytynyt: laite sanoo vain `AVAA` tai `SULJE` | käännä 1/8 kierrosta ja katso mittarista |
+| Synkronointitulppa | 5 × 10 mm:n ristipääruuvi ja 5 mm:n tiiviste (B), eli M5, ei M6 | kierteen nousu (oletus M5×0,8) ennen nippojen tilausta |
+| SE-letkut (rikastimen letkut kaasuttimien välillä) | puristetaan kiinni ennen mittausta (B) | sijainti ja puristuskohdat |
+| Synkronoidaanko joutokäynnillä vai korotetulla joutokäynnillä | tyhjäkäynnillä ja aina samoilla kierroksilla, lämmitys noin 10 min (A + B). Laite antaa arvion välillä 500–3000 rpm (D12). | – |
+| Saako huuhtelukupeilla ajaa korotetuilla kierroksilla | **ei**: kupeilla vain vapaalla ja tyhjäkäynnillä (A) | – |
+| Synkronoinnin toleranssi | Hondan raja 20 mmHg ≈ 2,67 kPa (B). Laitteen oletus 1,5 / 3,0 kPa (D2), ks. [5.3](#53-värit-ja-toleranssi-d2). | – |
 
 ---
 
 ## 3. Pikaohje
 
 1. Turvallisuus kunnossa (§1) ja ruuvien alkuasento merkitty.
-2. Moottori sammuksissa: tulpat irti, nipat tilalle, letkut SYL 1–3 kiinni.
+2. Moottori sammuksissa: tulpat irti, nipat tilalle, letkut kiinni (SYL 1 = ylin kaasutin,
+   SYL 3 = alin).
 3. Laitteeseen virta USB-virtapankista. Puhelin Wi-Fi-verkkoon `Suckboxx` (salasana
    `alipaine123`), selaimella `http://192.168.4.1/`.
-4. Tarkista, että yläreunassa **ei** lue `⚠ SIMULAATTORI – ei oikeaa dataa`.
+4. Tarkista, että yläreunassa **ei** lue `⚠ SIMULAATTORI – ei oikeaa dataa` ja että merkki
+   `MASTER` on **SYL 3:n** kortissa ([§9](#9-master-sylinteri)).
 5. Odota moottori sammuksissa noin 5 s, niin laite nollaa itsensä. Merkki `KALIBROIMATON`
    katoaa.
-6. Jäähdytysvesi päälle, vapaa-asento, sammutusnaru kiinni. Käynnistä ja lämmitä moottori.
+6. Jäähdytysvesi päälle, vapaa-asento, sammutusnaru kiinni. Käynnistä ja lämmitä moottori
+   (noin 10 min). Sammuta, purista SE-letkut kiinni ja käynnistä uudelleen
+   ([§6](#6-synkronointi-vaihe-vaiheelta)).
 7. Lue banneri. Jos siinä lukee `Synkronoitu`, olet valmis. Muuten banneri ja sylinterikortti
    kertovat, minkä kaasuttimen läppää avataan (`AVAA`) tai suljetaan (`SULJE`).
-8. Käännä ruuvia pieni askel kerrallaan, odota uutta tuomiota ja toista.
+8. Käännä ruuvia 1/8 kierrosta kerrallaan (ensin SYL 2, sitten SYL 1), avaa ja sulje kaasu, odota
+   uutta tuomiota ja toista.
 
 ---
 
@@ -107,7 +123,10 @@ Näitä arvoja ei ole tässä repossa. Ne tarkistetaan Hondan huolto-ohjeesta en
 
 - Käytä kolmea **identtistä** letkua: sama sisähalkaisija, sama pituus ±2 cm ja sama materiaali
   (R1). Pituusero näkyy kanavien välisenä erona, jota ohjelmisto ei voi korjata.
-- Merkitse letkut SYL 1 / SYL 2 / SYL 3 ja kytke ne oikeisiin sylintereihin.
+- Merkitse letkut SYL 1 / SYL 2 / SYL 3 ja kytke ne Hondan kaasutinnumeroiden mukaan: SYL 1 =
+  ylin kaasutin (No. 1), SYL 3 = alin (No. 3) (A + B, [§2](#2-huolto-ohjeesta-tarkistettavat)).
+- Synkronointitulppa on 5 × 10 mm:n ristipääruuvi ja 5 mm:n tiiviste (B). Nippa ja tiiviste
+  tilalle vain moottori sammuksissa.
 - Laite **liitäntöjä ylemmäs**, ja letkuun alaspäin osoittava lenkki ennen laitetta. Silloin
   kondenssi sekä polttoaine- ja öljysumu valuvat takaisin moottoriin eivätkä anturiin
   ([rauta.md](rauta.md) §4.4).
@@ -185,7 +204,7 @@ Näkymän osat ylhäältä alas:
 - Kun kierrosluku muuttuu säädön aikana, kaikkien sylinterien alipaine muuttuu yhdessä. Ero
   masteriin poistaa tämän yhteisen liikkeen, joten näet vain oman säätösi vaikutuksen.
 - Korttien alla oleva vihje muistuttaa tästä:
-  `Napauta sylinteriä vaihtaaksesi masterin · palkki ylös = imee enemmän`.
+  `Napauta sylinteriä kahdesti vaihtaaksesi masterin · palkki ylös = imee enemmän`.
 
 ### 5.2 Palkki ja asteikko
 
@@ -226,7 +245,9 @@ Vihreä tuomio vaatii lisäksi seuraavat ehdot:
 Rajat ovat lähtöarvoja. Ne säädetään huoltosivulla kentistä `Synkronoitu, kun ero enintään` ja
 `Lähellä, kun ero enintään`, ja lopulliset arvot päätetään oikealta moottorilta nauhoitetun
 datan perusteella (D2). Jos huolto-ohje antaa toleranssin elohopeamillimetreinä:
-1 kPa ≈ 7,5 mmHg, joten 1,5 kPa ≈ 11 mmHg ja 3,0 kPa ≈ 22,5 mmHg.
+1 kPa ≈ 7,5 mmHg, joten 1,5 kPa ≈ 11 mmHg ja 3,0 kPa ≈ 22,5 mmHg. Hondan raja BF50A:lle on
+20 mmHg ≈ 2,67 kPa (B): `Synkronoitu` täyttää sen aina, `Lähellä` vain alle 2,67 kPa:n
+erolla (D2, D16).
 
 ### 5.4 Kierrosluku
 
@@ -261,9 +282,12 @@ korttien pallojen värit. Painike `Asteikko: auto` vaihtaa kiinteään asteikkoo
 
 <img src="kuvat/kayttoohje-saato.png" width="270" alt="Tila Ei synkronissa: SYL 3 imee 4,0 kPa enemmän kuin master, kortissa AVAA">
 
-1. Moottori on lämmin ja käy tasaista joutokäyntiä huolto-ohjeen kierroksilla. Näkymässä ei ole
-   `VIKA`-banneria, merkkiä `KALIBROIMATON` eikä simulaattoripalkkia.
-2. Tarkista, että master on huolto-ohjeen mukainen kiinteä perus-kaasutin ([§9](#9-master-sylinteri)).
+1. Moottori on lämmin (noin 10 min) ja käy tasaista joutokäyntiä, **950 ± 50 rpm vapaalla** (A).
+   Synkronoi aina samoilla kierroksilla. Näkymässä ei ole `VIKA`-banneria, merkkiä
+   `KALIBROIMATON` eikä simulaattoripalkkia.
+2. Tarkista, että master on **SYL 3** eli alin kaasutin, joka on kiinteä perus
+   ([§9](#9-master-sylinteri)), ja että kaasuttimien väliset **SE-letkut** on puristettu kiinni
+   (B). Purista ne moottori sammuksissa, ja käynnistä sitten uudelleen.
 3. Odota tuomiota. Banneri `Odota, käynti tasaantuu` ja neuvo `Vakautta odotetaan: X / 3,0 s`
    laskevat vakaata aikaa.
 4. Lue banneri:
@@ -272,18 +296,25 @@ korttien pallojen värit. Painike `Asteikko: auto` vaihtaa kiinteään asteikkoo
      `SYL N: avaa läppää – imee X kPa enemmän kuin SYL M` tai
      `SYL N: sulje läppää – imee X kPa vähemmän kuin SYL M`.
      Saman sylinterin kortti saa korostetun kehyksen ja tekstin `AVAA` tai `SULJE`.
-5. Käännä **vain nimetyn** sylinterin synkronointiruuvia pieni askel kerrallaan (esimerkiksi
-   1/8 kierrosta, moottoriajo.md §4). `AVAA` tarkoittaa, että tämän kaasuttimen läppää avataan
-   hieman, ja `SULJE`, että sitä suljetaan. **Kumpaan suuntaan ruuvia käännetään, katso
-   huolto-ohjeesta.** Laite ei tiedä ruuvin kiertosuuntaa.
+5. Säädä **ensin SYL 2** (No. 2, perusta lähin) ja **sitten SYL 1** (No. 1), kuten Honda
+   neuvoo (A + B). Masterissa (SYL 3) ei ole synkronointiruuvia. Laite nimeää bannerissa
+   suurimman eron; jos se nimeää SYL 1:n, säädä silti ensin SYL 2:ta sen kortin luvun mukaan:
+   `+X kPa` (imee enemmän) → avaa, `−X kPa` (imee vähemmän) → sulje. `AVAA` tarkoittaa, että
+   tämän kaasuttimen läppää avataan hieman, ja `SULJE`, että sitä suljetaan.
+   Käännä **1/8 kierrosta kerrallaan**, ja avaa ja sulje kaasu muutaman kerran jokaisen säädön
+   jälkeen (A + B). **Kiertosuuntaa ei löytynyt lähteistä:** käännä ensimmäisellä kerralla
+   1/8 kierrosta ja katso, kumpaan suuntaan ero muuttuu. Laite ei tiedä ruuvin kiertosuuntaa.
 6. Odota noin 5 s. Säädön jälkeen voi hetken näkyä `Odota, käynti tasaantuu` (neuvona
    `Alipaine muuttuu kaikissa sylintereissä` tai vakausodotus) tai merkki
    `KIERROKSET MUUTTUVAT`. Lue sitten uusi tuomio.
 7. Toista, kunnes banneri on `Synkronoitu`. Laite neuvoo kerrallaan sitä sylinteriä, jonka ero
    masteriin on suurin. Kun se on korjattu, neuvo voi siirtyä toiseen sylinteriin.
-8. Tarkista lopuksi joutokäyntikierrokset huolto-ohjeesta, koska kaasuttimien säätö muuttaa
-   kierroslukua (SUUNNITTELU.md §3.4).
-9. Sammuta moottori. Irrota letkut ja kiinnitä tulpat vasta sen jälkeen.
+8. Tarkista lopuksi joutokäynti (950 ± 50 rpm vapaalla, A), koska kaasuttimien säätö muuttaa
+   kierroslukua (SUUNNITTELU.md §3.4). Hondan raja kaasuttimien erolle on 20 mmHg ≈ 2,67 kPa
+   (B): `Synkronoitu` (enintään 1,5 kPa) täyttää sen aina, `Lähellä` vain, jos `Ero (spread)`
+   on alle 2,67 kPa.
+9. Sammuta moottori. Poista SE-letkujen puristimet, irrota letkut ja kiinnitä tulpat ja
+   tiivisteet vasta sen jälkeen.
 
 ---
 
@@ -364,7 +395,7 @@ Neuvorivit:
 | `SYL N: sulje läppää – imee X kPa vähemmän kuin SYL M` | Sylinteri N imee vähemmän kuin master, joten sen läppä on liian auki. Kortissa lukee `SULJE`. |
 | `Valmis: ero X kPa (raja Y kPa)` | `Synkronoitu`. X on spread ja Y vihreä raja (oletus 1,5). |
 | `Nollaus puuttuu – sammuta moottori hetkeksi, laite nollaa itse` | `Lähellä – kalibroimaton`, kun ero olisi vihreän rajan sisällä. |
-| `Nollaus puuttuu – irrota letkut ja tee nollaus` | Sama tilanne, mutta automaattinen nollaus on kytketty pois huoltosivulta. **Älä irrota letkuja käyvästä moottorista** (§1): sammuta moottori ja paina `Huolto` → `Nollaa`. |
+| `Nollaus puuttuu – sammuta moottori ja paina Nollaa` | Sama tilanne, mutta automaattinen nollaus on kytketty pois huoltosivulta. Sammuta moottori ja paina `Huolto` → `Nollaa`. Letkut saavat olla kiinni, koska sammuneen moottorin imusarja on ilmanpaineessa ([10.1](#101-nollaus)). |
 | `Ero X kPa` | Harvinainen: laite ei pysty nimeämään sylinteriä. |
 
 <img src="kuvat/kayttoohje-kalibroimaton.png" width="270" alt="Merkit KALIBROIMATON ja VAHVISTUS KALIBROIMATTA sekä banneri Lähellä – kalibroimaton">
@@ -399,12 +430,17 @@ näkyy masterin omana peitteenä ja otsikkona
 
 ## 9. Master-sylinteri
 
-Master on sylinteri, johon muita verrataan (D7). Laitteen oletus on SYL 1.
+Master on sylinteri, johon muita verrataan (D7). Laitteen oletus on **SYL 3** (D16).
 
-- **Valitse masteriksi kaasutin, jota ei säädetä** (kiinteä perus). Mikä se on, katso
-  huolto-ohjeesta. Laite neuvoo aina säätämään jotain muuta kuin masteria, joten väärän masterin
-  kanssa se voi neuvoa säätämään kaasutinta, jota ei voi säätää.
+- **Valitse masteriksi kaasutin, jota ei säädetä** (kiinteä perus). BF50A:lla se on alin
+  kaasutin No. 3 eli SYL 3, jossa ei ole synkronointiruuvia (A + B,
+  [bf50a-huoltotiedot.md](bf50a-huoltotiedot.md)). Laite neuvoo aina säätämään jotain muuta
+  kuin masteria, joten väärän masterin kanssa se voi neuvoa säätämään kaasutinta, jota ei voi
+  säätää.
 - Valinta säilyy laitteen muistissa myös virran katkaisun yli.
+- **Tarkista master ennen säätöä.** Tallennetut asetukset ohittavat oletuksen: jos laitteeseen on
+  joskus tallennettu asetuksia, master voi olla yhä vanha oletus SYL 1. Varmista, että merkki
+  `MASTER` on SYL 3:n kortissa, ja vaihda tarvittaessa (alla).
 - **Vaihto kortista:** napauta uuden masterin korttia. Näkyviin tulee
   `Napauta SYL N uudelleen: vaihda masteriksi`. Kun napautat uudelleen 4 s:n sisällä, näkyy
   `Master: SYL N`. Kahden napautuksen vaatimus estää vahingossa tapahtuvan vaihdon kesken
@@ -453,9 +489,11 @@ Jäljelle jäävä herkkyysero korjataan vahvistuskalibroinnilla ([rauta.md](rau
 
 - **Nollaus katoaa,** kun laite käynnistyy uudelleen (esimerkiksi virta katkeaa tai
   signaalilähde vaihtuu) tai kun anturiasetuksia `v_zero_mv`, `mv_per_kpa`, `rail_comp` tai
-  `rail_nominal_mv` muutetaan. Moottorin sammutus ei poista nollausta, vaan uusii sen.
-- Huoltosivun lause `Nollaus on tehtävä joka käynnistyksen jälkeen` tarkoittaa **laitteen**
-  käynnistystä, ei moottorin.
+  `rail_nominal_mv` muutetaan. Moottorin sammutus ei poista nollausta, vaan uusii sen. Syy:
+  nollapistettä ei tallenneta laitteen muistiin, vaan se mitataan joka käynnistyksessä uudelleen
+  (D11). Huoltosivu sanoo saman: `Nollaus katoaa, kun laite käynnistyy uudelleen (esim. virta
+  katkeaa tai signaalilähde vaihtuu) tai anturiasetuksia muutetaan, ja ilman sitä vihreää ei
+  näytetä. Moottorin sammutus ei poista nollausta.`
 
 ### 10.2 Vahvistuskalibrointi (T-haara)
 
@@ -533,7 +571,9 @@ ovat kortit `Kalibrointi` ([§10](#10-kalibrointi)), `Raakadata`, `Asetukset` ja
 | `Anturi`-ryhmä | Muuta vain anturia vaihdettaessa. Väärä arvo vääristää kaikki lukemat, ja jännite- ja herkkyysasetusten muutos poistaa nollauksen. Anturivikarajat määräävät, milloin `VIKA: SYL N – anturivika` tulee. |
 | `Signaalilähde (0 = simulaattori, 1 = ADC, 2 = HX710B)` | Vaihto käynnistää laitteen uudelleen, ja nollaus katoaa. Oikeassa käytössä valitaan `ADC (XGZP)`. |
 
-`Palauta oletukset` palauttaa myös masteriksi SYL 1:n. Jos signaalilähde vaihtuu, laite
+`Palauta oletukset` palauttaa myös masteriksi SYL 3:n (D16). Tallennetut asetukset ohittavat
+oletukset myös laiteohjelmiston päivityksen jälkeen, joten uusi oletus tulee voimaan vasta, kun
+asetukset palautetaan tai asetus muutetaan käsin. Jos signaalilähde vaihtuu, laite
 varoittaa siitä ja käynnistyy uudelleen. Tarkista sen jälkeen, ettei simulaattoripalkki näy
 ([4.3](#43-simulaattori-pois)).
 
@@ -588,12 +628,14 @@ asennosta. Sitä ei korjata synkronointiruuvilla (D1).
 | `KALIBROIMATON` ei katoa, vaikka moottori on sammuksissa | Lukemat eivät asetu, tai jokin kanava ei näytä ilmanpainetta. | Paina `Huolto` → `Nollaa` ja lue viesti ([10.1](#101-nollaus)). |
 | `Ei alipainesignaalia`, vaikka moottori käy | Kaikki letkut ovat irti tai tukossa. | Tarkista letkut ja nipat. |
 | `Useita anturivikoja – tarkista anturien käyttöjännite` | Anturien yhteinen syöttö on vialla. | Tarkista anturien käyttöjännite ja johdot. |
+| Neuvo nimeää SYL 3:n (`SYL 3: avaa läppää …` tai `SYL 3: sulje läppää …`) | Master ei ole SYL 3, esimerkiksi tallennettu vanha oletus SYL 1. SYL 3:ssa ei ole synkronointiruuvia. | Vaihda master SYL 3:ksi ([§9](#9-master-sylinteri)). |
 | Vihreää ei tule, vaikka palkit näyttävät pieniltä | Nollaus puuttuu, tai spread (suurimman ja pienimmän eron väli) ylittää rajan. | Katso merkit ja `Diagnostiikka` → `Ero (spread)`. |
 | Mikä tahansa outo tai ohimenevä tila | — | Tallenna raakadata heti ([11.2](#112-raakadata)) ja kirjaa kellonaika. |
 
 ---
 
-**Lähteet:** SUUNNITTELU.md §5 (D1–D14), §6 (R1–R6) ja §8 (käytösmatriisi);
+**Lähteet:** SUUNNITTELU.md §5 (D1–D16), §6 (R1–R6) ja §8 (käytösmatriisi);
+[bf50a-huoltotiedot.md](bf50a-huoltotiedot.md) (Hondan arvot);
 `firmware/src/core/status.h` (otsikot ja neuvot), `calibration.h` ja `processor.h`
 (kalibroinnin viestit), `config.h` ja `types.h` (asetukset ja oletusarvot), `web/index.html`
 (käyttöliittymän tekstit); [firmware.md](firmware.md) §4.3, §4.7 ja §5;
