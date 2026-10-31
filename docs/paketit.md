@@ -3,20 +3,21 @@
 Lähtötila: master `2c63e86` (M1–M3, WP-7b, WP-2c, penkkitesti 31.10.2026). Native 12/12
 kokonaisuutta vihreänä. Avoimet kohdat ovat [jatko.md](jatko.md):n listasta "Avoimet".
 Integraatiohaara `dev/integraatio`; jokainen paketti omassa haarassaan `wp/<n>-<nimi>`, ja
-orkestroija yhdistää.
+orkestroija yhdistää. Tulokset ja luvut: [jatko.md](jatko.md) "Valmiit 31.10.2026". Seuraavat
+koneella tehtävät työt ovat yöjonossa [yoajo/JONO.md](yoajo/JONO.md).
 
 Painopiste: kaikki, mitä voi tehdä ilman moottoria, tehdään nyt, jotta ensimmäinen
 moottoriajo (M6) tuottaa käyttökelpoista dataa ja viritys (M7) on nopea.
 
-| # | paketti | jatko.md | vaatii | tiedostot (omistus) |
-|---|---|---|---|---|
-| WP-8 | Nauhoitusten toisto ja golden-vektorit | M7, R3 | — | `tools/replay/`, `firmware/test/test_replay/`, `firmware/test/support/recording.h`, `firmware/test/data/` |
-| WP-9 | Käytösmatriisin ja kalibroinnin jälkityöt | 7, 8 | — | `status.h` (vika-, drift- ja nollauslogiikka), `calibration.h`, `processor.h`, `config.h`, `types.h` (`StatusParams`) |
-| WP-10 | Rakenteellinen neuvo, kanavatila ja mockin pariteetti | 5, 6 | — | `snapshot.h`, `status.h` (vain `verdict`), `types.h` (`StatusResult`), `web/index.html`, `web_page.h`, `mock_server.py` |
-| WP-11 | CI (GitHub Actions) | 6 | — | `.github/workflows/` |
-| WP-12 | Moottoriajon kenttäpaketti | 1, 2 | — | `docs/moottoriajo.md`, `tools/sim_fit.py` |
-| WP-13 | HAL-huolto: ESPAsyncWebServer ja `myoh` | 9, 10 | ESP32-käännös; laitetesti ennen masteria | `src/hal/*`, `platformio.ini` |
-| WP-14 | Dokumentaation yhtenäistys | — | muiden paketit | `docs/roadmap.md`, `SUUNNITTELU.md` §11, `jatko.md` (orkestroija) |
+| # | paketti | jatko.md | vaatii | tiedostot (omistus) | tila 31.10.2026 |
+|---|---|---|---|---|---|
+| WP-8 | Nauhoitusten toisto ja golden-vektorit | M7, R3 | — | `tools/replay/`, `firmware/test/test_replay/`, `firmware/test/support/recording.h`, `firmware/test/data/` | ✅ yhdistetty |
+| WP-9 | Käytösmatriisin ja kalibroinnin jälkityöt | 7, 8 | — | `status.h` (vika-, drift- ja nollauslogiikka), `calibration.h`, `processor.h`, `config.h`, `types.h` (`StatusParams`) | ✅ yhdistetty; kynnykset omistajalle |
+| WP-10 | Rakenteellinen neuvo, kanavatila ja mockin pariteetti | 5, 6 | — | `snapshot.h`, `status.h` (vain `verdict`), `types.h` (`StatusResult`), `web/index.html`, `web_page.h`, `mock_server.py` | ✅ yhdistetty |
+| WP-11 | CI (GitHub Actions) | 6 | — | `.github/workflows/` | ✅ yhdistetty; ensimmäinen ajo pushin jälkeen |
+| WP-12 | Moottoriajon kenttäpaketti | 1, 2 | — | `docs/moottoriajo.md`, `tools/sim_fit.py` | ✅ yhdistetty |
+| WP-13 | HAL-huolto: ESPAsyncWebServer ja `myoh` | 9, 10 | ESP32-käännös; laitetesti ennen masteria | `src/hal/*`, `platformio.ini` | ✅ yhdistetty; laitetesti tekemättä |
+| WP-14 | Dokumentaation yhtenäistys | — | muiden paketit | `docs/roadmap.md`, `SUUNNITTELU.md` §11, `jatko.md` (orkestroija) | ✅ tämä dokumentaatio |
 
 ## WP-8 — Nauhoitusten toisto ja golden-vektorit
 

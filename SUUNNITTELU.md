@@ -313,7 +313,7 @@ käytösmatriisin rivi 12.
 ### D9 — Web-transport ✅ PÄÄTETTY 30.10.2026
 
 **Server-Sent Events (push, 15 Hz) + REST-komennot**, kirjastona `ESPAsyncWebServer`
-(esp32async 3.6.0) + `AsyncTCP` 3.3.2.
+(esp32async 3.12.1) + `AsyncTCP` 3.5.0 (WP-13, 31.10.2026; alun perin 3.6.0 + 3.3.2).
 
 *Perustelu:* bring-up-firmwaren 2 Hz:n kysely on liian hidas säätämiseen — ruuvin kääntäjä
 tarvitsee 10–20 Hz. Data kulkee lähes pelkästään laitteelta puhelimeen, joten WebSocketin
@@ -506,6 +506,7 @@ merkityksessä (nollan tunnistus vs. letkuvian tunnistus); ne saattavat tarvita 
 | 30.10.2026 | D6: Honda BF50A (~2004), 3 kaasutinta, synkronointitulpat valmiina, kierre todennäköisesti M6 (varmistettava). |
 | 30.10.2026 | D6: tyhjäkäynti 850–950 rpm (omistajan tieto, varmistettava huolto-ohjeesta). |
 | 30.10.2026 | D9–D14 päätetty (SSE-transport, rivit 1+8 yhdistetty, kalibroinnin portitus, rpm-ikkuna 500–3000, MVP = satunnainen työkalu + RPM, simulaattori ensin). Firmware-arkkitehtuuri [docs/firmware.md](docs/firmware.md). Roadmap §11. |
+| 31.10.2026 | WP-8…WP-13 haaraan `dev/integraatio` ([docs/paketit.md](docs/paketit.md)): nauhoitusten toisto ja golden-testit, käytösmatriisin jälkityöt (rivit 1, 5, 6; uudet kynnykset omistajan päätettävinä), snapshotin `act`/`cond`, CI, moottoriajon pöytäkirja ja `sim_fit.py`, web-kirjastojen nosto. Yöajon jono [docs/yoajo/](docs/yoajo/). |
 
 ---
 
@@ -529,11 +530,11 @@ Pivotit (dataloggeri, NMEA 2000, EFI) ovat tietoisesti ulkona.
 | # | vaihe | vaatii | tila |
 |---|---|---|---|
 | M0 | Päätökset D9–D14, arkkitehtuuri ([docs/firmware.md](docs/firmware.md)), testiympäristö | — | ✅ |
-| M1 | Simulaattori, DSP (syklit, D1-luvut, RPM), kalibrointi, konfiguraatio, rengaspuskuri, käytösmatriisi — kaikki native-testein | — | kesken, ks. [docs/jatko.md](docs/jatko.md) |
-| M2 | Web-UI + PC-mock-palvelin (sama API kuin laitteella) | — | kesken, ks. [docs/jatko.md](docs/jatko.md) |
-| M3 | Processor + integraatiotestit simulaattorilla (jokainen §8:n rivi testinä) + ESP32-liima (1 kHz näytteenotto, NVS, SSE) | ESP32 | |
-| M4 | Laitteella simulaattorilla: UI puhelimessa, suorituskyky (näytteenoton jitter, heap, Wi-Fi) | ESP32 | |
-| M5 | XGZP-anturit protolevylle (rauta.md §6.6), ADC-lähde, penkkitesti T-haaralla | anturit | |
-| M6 | Ensimmäinen moottorikäynti (Honda BF50A), raakadata talteen | adapterit (D6: kierre varmistettava) | |
-| M7 | Viritys nauhoitetulla datalla, nauhoitukset regressiotesteiksi, D2:n lopulliset luvut | data | |
+| M1 | Simulaattori, DSP (syklit, D1-luvut, RPM), kalibrointi, konfiguraatio, rengaspuskuri, käytösmatriisi — kaikki native-testein | — | ✅ (jälkityöt WP-9 31.10.2026) |
+| M2 | Web-UI + PC-mock-palvelin (sama API kuin laitteella) | — | ✅ (WP-10: `act`, `cond`, mockin pariteetti) |
+| M3 | Processor + integraatiotestit simulaattorilla (jokainen §8:n rivi testinä) + ESP32-liima (1 kHz näytteenotto, NVS, SSE) | ESP32 | ✅ |
+| M4 | Laitteella simulaattorilla: UI puhelimessa, suorituskyky (näytteenoton jitter, heap, Wi-Fi) | ESP32 | osittain: 1000,00 Hz ilman aukkoja; `dev/integraatio`n laitetesti tekemättä ([docs/jatko.md](docs/jatko.md)) |
+| M5 | XGZP-anturit protolevylle (rauta.md §6.6), ADC-lähde, penkkitesti T-haaralla | anturit | osittain: anturit protolevyllä, penkkitesti kahdella kanavalla 31.10.2026; T-haara ja käsipumppu puuttuvat |
+| M6 | Ensimmäinen moottorikäynti (Honda BF50A), raakadata talteen | adapterit (D6: kierre varmistettava) | pöytäkirja [docs/moottoriajo.md](docs/moottoriajo.md) (WP-12) |
+| M7 | Viritys nauhoitetulla datalla, nauhoitukset regressiotesteiksi, D2:n lopulliset luvut | data | työkalut valmiina: toisto ja golden-testit (WP-8), `sim_fit.py` (WP-12) |
 | M8 | Kotelo (R5), mahdollinen PCB, sateenkaarimaali | H1–H5 | |

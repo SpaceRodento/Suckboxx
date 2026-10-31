@@ -2,6 +2,22 @@
 
 > Tämän dokumentin tarkoitus on toimia projektin kehityssuunnitelmana ja toteutuksen tarkistuksenä. Dokumentti on rakennettu niin, että yksi työpaketti vastaa yhtä käytännön istuntoa tai yhden selkeän toteutusjakson kriteerejä. Tarkoitus on pitää projekti hallittavana ja varmistaa, että anturijärjestelmän toiminta on vahvistettu ennen kuin siirrytään laajempaan kehitykseen.
 
+## 0. Tila 31.10.2026
+
+Tämän dokumentin paketit P0–P6 ovat anturilähtöinen näkymä samaan työhön, jota
+[SUUNNITTELU.md](../SUUNNITTELU.md) §11 kuvaa vaiheina M0–M8. Toteutuksen tila on
+[jatko.md](jatko.md):ssä, ja 31.10.2026 alkaen tehdyt työpaketit [paketit.md](paketit.md):ssä.
+
+| Paketti | M-vaihe | Tila |
+|---|---|---|
+| P0 Legacy cleanup | M3 | Bring-up-firmware korvattu (WP-7). Pinnikartta 34/35/32 koodissa ja täällä. HX710B on yhä valinnainen penkkitestilähde (D14): säilytys tai poisto on omistajan päätös. |
+| P1 Sensor baseline | M5 | Osittain: lepotaso 2692–2699 mV, eFuse-karakterisointi, ylipaine +1,2 kPa (H1 lievempi), kahden kanavan yhtäpitävyys 0,012 kPa. Puuttuu: painepisteet −20…−75 kPa käsipumpulla ja SYL 3. |
+| P2 Bench harness | M5 | Valmis: `tools/serial_record.py` (1 kHz USB:n kautta), `tools/cycle_profile.py`, `tools/sim_fit.py` (lepotarkistus). `tools/sensor_bench_logger.py`:tä ei tehty; serial_record korvaa sen. |
+| P3 ADC path | M4–M5 | Osittain: S&H-ylikuuluminen mitattu ja kierretty lämmittelyluvulla, kohina 3,5 mV RMS, piikit ±80–90 mV ~1/s. Puuttuu: 100 nF ja kiskomonitori (rauta). |
+| P4 Signal conditioning | M1, M7 | DSP valmis simulaattorilla (WP-2, WP-2c); toisto ja golden-testit valmiina oikealle datalle (WP-8). Odottaa moottorinauhoituksia. |
+| P5 Calibration & health | M1–M3 | Valmis koodissa (WP-3, WP-4, WP-6, WP-7b, WP-9, WP-10). Vahvistuskalibrointi testaamatta raudalla. |
+| P6 Real engine | M6 | Pöytäkirja [moottoriajo.md](moottoriajo.md) (WP-12). Ei ajettu. |
+
 ## 1. Projektin tavoite
 
 Tavoite on varmistaa, että kolmen XGZP6847A100KPGN -anturit toimivat luotettavasti imusarjan alipaineen mittaamiseen, ja että niistä voidaan laskea käyttökelpoinen synkronointiluku ilman että laite toimii vain “jostain syystä”.
@@ -53,9 +69,9 @@ Siivota vanha HX710B-arkkitehtuuri pois ja ottaa käyttöön virallinen XGZP6847
 
 ### Tehtävät
 - Hylätään vanha HX710B-bring-up -arkkitehtuuri käytännössä, eikä se enää ole kehityksen perusta.
-- Varmistetaan, että virallinen pinni-kartta on:
+- Varmistetaan, että virallinen pinni-kartta on (protolevy, `firmware/src/hal/sampler.cpp` `kAdcCh`, penkkitesti 31.10.2026):
   - CH1 = GPIO34
-  - CH2 = GPIO39
+  - CH2 = GPIO35 *(korjattu 31.10.2026: tässä luki GPIO39, joka on suunnitelman kiskomonitori, docs/rauta.md §2.2)*
   - CH3 = GPIO32
 - Dokumentoidaan virallinen päätös siitä, miksi GPIO36 hylättiin: devkitin silkkipainatuksen "VP" ei ole toimiva D36-käyttö; käytännössä CH3 siirtyi GPIO32:een.
 - Lisätään järjestelmän validointi nykyiseen sensoriverkostoon: per-kanava jännite, per-kanava lineaarisuus, anturidatan vertailu.
