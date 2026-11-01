@@ -2122,6 +2122,7 @@ void test_single_witness_needs_rhythm() {
     int reps, hose_ch, weak_ch;
     float idle;
     long gap, hold;
+    float weak = 0.5f;
   };
   const Case cases[] = {
       {3000.0f, 0.5f, 0.01f, 12.0f, 8, 2583, 1, 2, -1, 850.0f, 0, 0},
@@ -2152,6 +2153,16 @@ void test_single_witness_needs_rhythm() {
       // ennusti kiihdytystä, vaikka moottori hidastui. Paikka 0,081 sivussa;
       // ilman |siirtymä|-väljyyttä sykli hylättiin ja has_pulse putosi (1252 ms).
       {3000.0f, 0.5f, 0.01f, 12.0f, 1, 2514, 2, 1, -1, 850.0f, 100, 0},
+      // Kierroksen 7 tarkistajan toistot. Tuorein jakso (freshPeriod) saa olla
+      // viitettä lyhyempi edellinen oma väli, ei pidempi: muuten hidastuva
+      // väli venyttää "pitkän syklin" rajaa ja heikon sylinterin (0,40-0,45 x)
+      // tuplapikablipissä kanava 3 kirjasi 2T:n (xtalk 0,15).
+      {3000.0f, 0.15f, 0.01f, 12.0f, 2, 2565, 2, -1, 0, 850.0f, 0, 0, 0.40f},
+      {3000.0f, 0.15f, 0.01f, 12.0f, 2, 2565, 2, -1, 0, 850.0f, 0, 0, 0.45f},
+      // Peilikaista on syklin mittainen +-kSmallPulseRatio, ei similar():
+      // väljemmällä kaistalla letku 1 irti, tuplapikablippi tauolla 850 -> 3000
+      // ja xtalk 0,5 pudotti terveen kanavan has_pulsen (1405 ms:n väli).
+      {3000.0f, 0.5f, 0.01f, 12.0f, 1, 2603, 2, 0, -1, 850.0f, 100, 0},
   };
   SimRun worst;
   for (const Case& k : cases) {
@@ -2167,7 +2178,7 @@ void test_single_witness_needs_rhythm() {
     if (k.hose_ch >= 0) o.hose_mask = 1 << k.hose_ch;
     if (k.weak_ch >= 0) {
       o.weak_ch = k.weak_ch;
-      o.weak_scale = 0.5f;
+      o.weak_scale = k.weak;
     }
     worstOf(worst, runSim(p, o, Blips{k.rpm1, o.t0, 150, k.hold, 300 - k.hold, k.reps, k.idle, k.d1, k.gap}));
   }

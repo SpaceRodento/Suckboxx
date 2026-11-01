@@ -127,9 +127,13 @@
 //    tauottomassa tuplablipissä 200 ms:n nousulla (0,4 x, xtalk 0,3:
 //    2/69120); 3 %:n jitter tauollisissa tupla- ja kolmoisblipeissä
 //    (7/12288); 100 ms:n nousun blipit (heikko sylinteri 74/41472, letku irti
-//    96/10368, xtalk 0/0,15 281/6912); yksi letku irti ja xtalk 0,5,
-//    tuplablippi 950 -> 3000 (nousu 200 ms, tauko 100 ms): 1/82944 ajoa
-//    kirjasi vuodosta alkavan syklin. Siinä ainoan todistajan edellinen oma
+//    96/10368, xtalk 0/0,15 281/6912); xtalk 0,5:llä yhden todistajan
+//    tauon jälkeinen vuotosykli: letku irti, tuplablippi 950 -> 3000 (nousu
+//    200 ms, tauko 100 ms) 1/82944 ja yksittäinen blippi (nousu 250 ms)
+//    2/82944, sekä kaikki letkut kiinni ja lyhyt (50-300 ms) vika toisella
+//    kanavalla samassa tuplablipissä (9 riviä 8 x 12 -ruudukossa); xtalk 0,5
+//    pikablippi (nousu ja lasku 200 ms), jonka alkuun päättyy 100 ms:n vika:
+//    yksi 5T kahden todistajan aliaksena 1/40320. Siinä ainoan todistajan edellinen oma
 //    pulssi oli 6,5 jaksoa aiemmin eikä edellinen oma väli ollut syklin
 //    mittainen, joten syklin alkua ei voi tarkistaa; tarkistus (hylkäys tai
 //    odotus todistajan seuraavaan pulssiin) maksoi kokeiluissa letku irti
@@ -145,12 +149,13 @@
 //    ms (xtalk 0,5: 529 ms), 300 ms <= 354 ms (xtalk 0,3: 394, 0,5: 434 ms),
 //    pikablip <= 462 ms (xtalk 0,5: 572 ms), tuplablip <= 553 ms (xtalk 0,5
 //    tauon kanssa: 890 ms) - paitsi xtalk 0,5:n tauottomassa tuplablipissä
-//    850 -> 3000: <= 992 ms, 49/51840 ajoa yli 900 ms:n (20-100 ms:n vika
-//    16/31104, 250-400 ms 33/20736). Siinä vika jättää terveen kanavan
+//    850 -> 3000: <= 992 ms, 49/8640 tämän solun ajoa yli 900 ms:n (20-100
+//    ms:n vika 16/5184, 250-400 ms 33/3456; 50 ms:n tauolla 12/40320, <= 989
+//    ms). Siinä vika jättää terveen kanavan
 //    tauon jälkeen yhden todistajan varaan toisen blipin alussa, jolloin
 //    pulssi kutistuu (22 -> 14 kPa) ja rajapulssien samankokoisuus hylkää
 //    oikean syklin; seuraavat ovat 2T:itä. Kutistuvan pulssin poikkeus (0,49
-//    ... 1 x) sulki nämä välit (<= 857 ms), mutta päästi yhden todistajan
+//    ... 1 x) jätti 8 x 12 -ruudukossa 2 ajoa yli rajan (<= 987 ms) ja päästi yhden todistajan
 //    2T:itä läpi (letku irti, 100 ms:n nousu: 23 -> 26 / 2592 ajoa; rytmi ja
 //    vastapaikka kunnossa), joten sitä ei käytetä. Alipaineen askeleessa <=
 //    4,05 jaksoa (askel 2 + vika 1); letku irrotetaan joutokäynnillä: muiden
@@ -223,7 +228,8 @@
 //    67 %), ja 1/48 ajossa kirjautuu yksi vuotosykli (6000 -> 1500, xtalk 0,3).
 //    Yhden letkun ollessa irti (yksi todistaja, kSlotTolSingle): 1 ms
 //    kaikkialla; 2 ms 3000 rpm:ään asti, 4500 rpm:llä 93 % sykleistä, 6000
-//    rpm:llä terve kanava ei lukitu (raja ~1,5 ms).
+//    rpm:llä terve kanava ei lukitu (1,75 ms: 9-13 % sykleistä, has_pulse
+//    putoaa 23/96 ajossa; raja ~1,5 ms).
 //  - Hetkellinen sammutus (simulaattori) katkaisee kesken olevan imun:
 //    600 rpm:llä 2/96 ajossa (heikon sylinterin kanssa <= 5/96) 5 % lyhyt
 //    sykli, jonka toisen merkin imua ei ole olemassa (sama 237da3a:ssa);

@@ -29,18 +29,18 @@ Jokainen paketti kulki: toteutus → vastakkainen katselmointi → korjaus → t
 | Paketti | Tiedostot | Tila |
 |---|---|---|
 | WP-1 simulaattori | `core/engine_sim.h`, `test_engine_sim` | ✅ korjattu ja tarkistettu |
-| WP-2 DSP | `core/dsp.h`, `test_dsp`, `test/support/synth_signal.h` | ✅ uudelleensuunniteltu (kanavien välinen omistajuus), 5 korjaus- ja tarkistuskierrosta; kierros 6 tarkistamatta, ks. alla |
+| WP-2 DSP | `core/dsp.h`, `test_dsp`, `test/support/synth_signal.h` | ✅ uudelleensuunniteltu (kanavien välinen omistajuus), 7 korjauskierrosta, viimeinen riippumattomasti tarkistettu; jäljellä vain hyväksytyt xtalk 0,5:n harvinaiset poikkeamat |
 | WP-3 sovelluslogiikka | `core/calibration.h`, `config.h`, `json_writer.h`, `raw_ring.h` + testit | ✅ korjattu ja tarkistettu |
 | WP-4 status | `core/status.h`, `test_status` | ✅ hyväksytty (vain minor-havaintoja) |
 | WP-5 UI | `web/index.html`, `src/web/web_page.h`, `tools/mock_server.py`, `tools/embed_web.py`, `tools/ui_screenshots.js` | ✅ korjattu ja tarkistettu (Playwright 126/126 lähde, 131/131 minimoitu) |
 
-`tools/run_native_tests.sh`: 8 testikokonaisuutta, **223 testiä, 0 virhettä** (test_dsp 51).
+`tools/run_native_tests.sh`: 8 testikokonaisuutta, **225 testiä, 0 virhettä** (test_dsp 53).
 
 ## Avoimet havainnot (prioriteettijärjestyksessä)
 
-### WP-2 DSP: uudelleensuunniteltu, kierros 6 tarkistamatta
+### WP-2 DSP: uudelleensuunniteltu ja tarkistettu
 
-Ensimmäisen korjauksen jälkeen syklintunnistus mitoitettiin uudelleen kuudella kierroksella
+Ensimmäisen korjauksen jälkeen syklintunnistus mitoitettiin uudelleen seitsemällä kierroksella
 (korjaaja → kaksi riippumatonta tarkistajaa, jotka mittasivat EngineSim-ketjulla tiukalla
 mittarilla: jokaisen kirjatun syklin molemmat merkit kohdistetaan simulaattorin imuihin).
 Ydin, joka ratkaisi vuotopulssien ja kierrosmuutosten ongelmat:
@@ -57,11 +57,11 @@ rpm-pudotuksissa, blipeissä, alipaineen askelissa ja rampeissa, käynnistyksiss
 uudelleenkäynnistyksissä (myös heikko sylinteri) ja letkun irrotuksessa/takaisinkytkennässä.
 Mitatut rajat ovat `dsp.h`:n otsikossa ja tiivistettynä docs/firmware.md §4.2:ssa.
 
-**Kierros 6 (commit "korjaajan viimeisin tila") jäi tarkistamatta:** korjaaja keskeytyi tilin
-käyttörajaan loppumittauksen aikana. Siinä korjattiin kierroksen 5 tarkistajien löydökset:
-hetken kuolleen kanavan veto (terveiden kanavien has_pulse saattoi pudota jopa 1,4 s lyhyen
-letkuvian jälkeen), yhden todistajan taukopoikkeus (vuotosykli yksi letku irti, xtalk 0,5) ja
-testit mutanteille A4/N12/N21. Testit menevät läpi (223/223), mutta riippumaton mittaus puuttuu.
+**Kierrokset 6-7:** hetken kuolleen kanavan veto, tauon jälkeisen yhden todistajan syklin
+paikkatarkistus ja lyhyen vian syvyyssääntö korjattu. Kierroksen 7 riippumaton tarkistus
+(~2,5 M ajoa, 150 mutanttia): 0 väärää sykliä ja 0 has_pulse-pudotusta kaikissa varsinaisissa
+perheissä; käynnistys, kohina, tarkkuus, pino (≤ 112 t) ja O(1) ennallaan. Kaksi viimeistä
+käytöstä muuttavaa mutanttia (R13, R6) tapettiin lisäämällä tarkistajan toistot testeiksi.
 
 Hyväksytyt poikkeamat (orkesteroijan päätös, dokumentoitu `dsp.h`:ssa):
 1. Yksittäisen syklin rpm-virhe nopeassa kaasun katkaisussa ≤ 10 % ja hetkellisen rpm-askeleen
@@ -73,9 +73,15 @@ Hyväksytyt poikkeamat (orkesteroijan päätös, dokumentoitu `dsp.h`:ssa):
    väärät syklit mahdollisia (tila on joka tapauksessa FaultHose).
 6. Harvinaiset yhdistelmät: tauolliset tupla-/kolmoisblipit heikon sylinterin tai 3 %:n
    jitterin kanssa, 100 ms:n nousun blipit, vika tuplablipin aikana.
+7. xtalk 0,5 (suunnitteluraja): tauottomassa tuplablipissä lyhyen vian jälkeen terveen
+   kanavan väli ≤ 992 ms (rajan 900 yli 49/8640 ajoa, ei pudotusta; edellinen versio 1404 ms
+   ja 20 pudotusta); yhden todistajan tauon jälkeinen vuotosykli muutamassa ajossa 83 000:sta
+   (letku irti tai lyhyt vika) ja yksi 5T 40 320:sta. Kokeillut korjaukset toivat muualle
+   enemmän haittaa. Lukumäärät `dsp.h`:n otsikossa.
+8. Säätöarvomutantit, joiden vaikutus pysyy rajoissa (mm. P2, P3, R10, X1, Y-sarja), on
+   hyväksytty säätöarvoina.
 
 Avoimet:
-- Riippumaton tarkistus kierrokselle 6 (kaksi tarkistajaa, ~1 h, suurehko tokenikulutus).
 - Yhden letkun ollessa irti letkujen viive-eron raja on ~1,5 ms 6000 rpm:llä (kaikilla
   letkuilla 2 ms). R1 (samat letkut) riittää.
 - Kun oikeaa moottoridataa on (M6), tarkista omistajuuden marginaali (`kOwnMargin` 25 %) ja
@@ -127,7 +133,7 @@ nollauksen (`CalResult::NoZero`). `fault_lo_mv` on 50…500 ja `fault_hi_mv` 250
   syklintunnistus, `NoZero`, viitelaskettu `freeze()`, `version()` ja `aborted()`.
 
 ## Seuraavaksi
-1. **WP-2:** halutessa riippumaton tarkistus kierrokselle 6 (ks. yllä); muuten valmis M3:een.
+1. **WP-2:** valmis M3:een. Oikealla moottoridatalla (M6) tarkistetaan omistajuuden marginaali ja xtalk-taso.
 2. Aja `pio test -e native` ja `pio run -e esp32dev`, ja korjaa GCC 8.4- ja Unity-erot.
 3. **M3:** `core/processor.h` + `snapshot.h` (Processor push/tick/snapshot, auto-zero, 2 s:n
    gain-kaappaus, aaltomuodon desimointi 62,5 Hz:iin, snapshot-JSON docs/firmware.md §5:n mukaan)
